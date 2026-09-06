@@ -7,6 +7,42 @@
 - 有標的通過全部進場條件就**發 Discord**
 - 一支**獨立的心跳守衛**，Guardian 掛掉時通知你
 
+---
+
+## 最省事的做法：用部署工具（推薦）
+
+`public/crypto-radar-deploy.scriptable.js`
+
+一支 Scriptable 腳本，用 Cloudflare API 直接建 KV、上傳 Worker、
+設排程、開網址。**完全不碰儀表板的程式編輯器**，也不用複製 Worker 程式碼
+（兩支 Worker 都已經內嵌在裡面）。
+
+1. Scriptable 新增一個 Script，貼上這份檔案
+2. 執行 → **① 設定 Cloudflare Token**
+
+   Token 在 Cloudflare 儀表板 → 頭像 → **My Profile** → **API Tokens**
+   → **Create Token** → **Create Custom Token**，權限加這兩項：
+
+   | 類型 | 項目 | 權限 |
+   | --- | --- | --- |
+   | Account | Workers Scripts | Edit |
+   | Account | Workers KV Storage | Edit |
+
+3. → **② 部署 Guardian**
+4. 想要監控的話 → **③ 部署心跳守衛**
+
+Bybit 憑證與 Discord Webhook 會自動從掃描器那支腳本共用的 Keychain 讀取，
+不用重打。管理 Token 沒設過會自動產一組 32 字元隨機字串。
+
+**一件要先知道的事**：這支腳本的 Cloudflare API 呼叫**沒有在開發環境實測過**，
+因為那個環境連不到 api.cloudflare.com。請求構造是照 Cloudflare 的 API 文件寫的，
+也有測試驗證構造與流程，但實際能不能通要以你執行的結果為準。
+任何一步失敗都會明確告訴你卡在哪一步、Cloudflare 原話怎麼說。
+
+如果這條路不通，下面還有三條備案。
+
+---
+
 ## 先說清楚：手機部署不保證順利
 
 Cloudflare 儀表板的程式編輯器用的是 Monaco，它在手機瀏覽器上本來就
@@ -16,7 +52,7 @@ Cloudflare 儀表板的程式編輯器用的是 Monaco，它在手機瀏覽器�
 上，不需要再碰 Cloudflare。所以如果手機卡住，借台電腦花十分鐘裝完
 是最省事的做法，不用硬撐。
 
-## 三條部署路線
+## 備案：三條手動路線
 
 | 路線 | 要不要電腦 | 可靠度 |
 | --- | --- | --- |

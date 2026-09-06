@@ -13,8 +13,11 @@
 `public/crypto-radar-watchdog.worker.js` — 獨立的心跳守衛，
 每 10 分鐘檢查 Guardian，異常與恢復都通知。
 
-兩支都是單一檔案，可以直接貼進 Cloudflare 的網頁編輯器，
-**全程在手機瀏覽器就能完成**。詳細步驟見 [DEPLOY.md](./DEPLOY.md)。
+`public/crypto-radar-deploy.scriptable.js` — Scriptable 部署工具，
+用 Cloudflare API 直接建 KV、上傳 Worker、設排程、開網址，
+不碰儀表板的程式編輯器。兩支 Worker 的程式碼都已內嵌。
+
+詳細步驟見 [DEPLOY.md](./DEPLOY.md)。
 
 ## iPhone 版（不需要電腦）
 
