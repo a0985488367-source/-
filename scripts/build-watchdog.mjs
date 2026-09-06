@@ -11,6 +11,7 @@ import { dirname, resolve } from 'node:path';
 import { ROOT, inlineModule } from './lib-inline.mjs';
 
 const outPath = resolve(ROOT, 'public/crypto-radar-watchdog.worker.js');
+const minPath = resolve(ROOT, 'public/crypto-radar-watchdog.worker.min.js');
 
 const core = inlineModule('app/watchdog-core.js');
 const discord = inlineModule('app/discord.js');
@@ -160,3 +161,14 @@ mkdirSync(dirname(outPath), { recursive: true });
 writeFileSync(outPath, out, 'utf8');
 console.log(`已產生 ${outPath}`);
 console.log(`大小 ${(Buffer.byteLength(out, 'utf8') / 1024).toFixed(1)} KB`);
+
+try {
+  const { execFileSync } = await import('node:child_process');
+  execFileSync('npx', [
+    'esbuild', outPath, '--minify', '--format=esm', '--target=es2022',
+    `--outfile=${minPath}`,
+  ], { cwd: ROOT, stdio: 'pipe' });
+  console.log(`已產生 ${minPath}`);
+} catch (err) {
+  console.log('略過壓縮版（esbuild 不可用）');
+}

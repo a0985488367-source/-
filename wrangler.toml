@@ -1,0 +1,25 @@
+# 預設設定檔 —— Guardian 主程式
+#
+# Cloudflare 的 Git 整合會自動找根目錄的 wrangler.toml，
+# 所以把 Guardian 放這裡，接上 GitHub 就能部署，完全不用手動貼程式碼。
+#
+# 守衛用 wrangler.watchdog.toml，部署指令要指定：
+#   npx wrangler deploy -c wrangler.watchdog.toml
+#
+# 機密不要寫在這個檔案裡。用 Cloudflare 儀表板的 Secrets，
+# 或 npx wrangler secret put <名稱>
+
+name = "crypto-radar-guardian"
+main = "public/crypto-radar-guardian.worker.js"
+compatibility_date = "2025-01-01"
+
+[[kv_namespaces]]
+binding = "GUARDIAN_KV"
+id = "在此填入你的 KV namespace ID"
+
+[triggers]
+crons = ["*/5 * * * *"]
+
+[vars]
+# 非機密設定。可填 live / demo / testnet
+BYBIT_ENV = "live"

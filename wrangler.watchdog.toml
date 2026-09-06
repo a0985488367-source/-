@@ -1,6 +1,8 @@
 # Discord 心跳守衛 —— 給用電腦以 wrangler 部署的人
 #
 #   npx wrangler deploy -c wrangler.watchdog.toml
+#
+# Guardian 用根目錄的 wrangler.toml。
 #   npx wrangler secret put GUARDIAN_URL    -c wrangler.watchdog.toml
 #   npx wrangler secret put DISCORD_WEBHOOK -c wrangler.watchdog.toml
 

@@ -7,8 +7,27 @@
 - 有標的通過全部進場條件就**發 Discord**
 - 一支**獨立的心跳守衛**，Guardian 掛掉時通知你
 
-兩支 Worker 都是單一檔案，直接貼進 Cloudflare 的網頁編輯器就行。
-不需要 wrangler、不需要 npm、不需要電腦。
+## 三條部署路線，挑一條
+
+| 路線 | 適合 | 要不要電腦 |
+| --- | --- | --- |
+| **A. 貼壓縮版** | 最快，278 行 | 不用 |
+| **B. 接 GitHub** | 完全不用貼程式碼 | 不用 |
+| **C. wrangler 指令** | 習慣用終端機 | 要 |
+
+**路線 A** 用 `public/crypto-radar-guardian.worker.min.js`。
+未壓縮版有 2296 行，在手機上全選很痛苦；壓縮版只有 278 行，
+行為完全一樣（有測試逐項比對兩個版本的輸出）。
+
+**路線 B** 在 Cloudflare 建 Worker 時選 **Connect to Git**，
+接上這個倉庫。根目錄已經有 `wrangler.toml`，接上就會自動部署，
+之後改程式只要 push 就會重新部署。
+守衛要另外接一次，部署指令設成
+`npx wrangler deploy -c wrangler.watchdog.toml`。
+
+**路線 C** 見本文最後一節。
+
+下面的步驟以路線 A 為主，路線 B 可以跳過「貼上程式」那步。
 
 ---
 
@@ -38,7 +57,10 @@ Cloudflare 儀表板 → **Storage & Databases** → **KV** → **Create a names
 ### 3. 貼上程式
 
 進 Worker → **Edit code** → 把編輯器內容全部刪掉 →
-貼上 `public/crypto-radar-guardian.worker.js` 的完整內容 → **Deploy**
+貼上 **`public/crypto-radar-guardian.worker.min.js`** 的完整內容 → **Deploy**
+
+壓縮版只有 278 行，手機上比較好操作。想看得懂內容的話用未壓縮的
+`crypto-radar-guardian.worker.js`（2296 行），兩者行為相同。
 
 ### 4. 綁定 KV
 
@@ -201,3 +223,46 @@ npm run build
 
 **不要手改 `public/` 底下的檔案**，它們是產生出來的。
 改完把新的內容重新貼進 Cloudflare 編輯器即可。
+
+
+---
+
+## 路線 C：用 wrangler 指令部署
+
+需要電腦與 Node。
+
+```bash
+npm install -g wrangler
+wrangler login
+
+# Guardian（用根目錄的 wrangler.toml）
+wrangler kv namespace create GUARDIAN_KV   # 把回傳的 id 填進 wrangler.toml
+wrangler secret put DISCORD_WEBHOOK
+wrangler secret put BYBIT_API_KEY
+wrangler secret put BYBIT_API_SECRET
+wrangler secret put ADMIN_TOKEN
+wrangler deploy
+
+# 守衛
+wrangler kv namespace create WATCHDOG_KV   # id 填進 wrangler.watchdog.toml
+wrangler secret put GUARDIAN_URL    -c wrangler.watchdog.toml
+wrangler secret put DISCORD_WEBHOOK -c wrangler.watchdog.toml
+wrangler deploy -c wrangler.watchdog.toml
+```
+
+機密用 `wrangler secret put` 設定，不要寫進 toml 檔。
+
+---
+
+## 部署卡住的話
+
+**編輯器貼不進去或當掉** → 改用壓縮版（278 行），或走路線 B 接 GitHub。
+
+**Deploy 按了沒反應** → 先看瀏覽器有沒有跳錯誤。常見的是 KV 綁定的
+變數名稱打錯，Worker 會回一個明確訊息告訴你缺哪個綁定。
+
+**找不到 Cron Triggers** → 在 Worker 的 **Settings** 分頁，
+不是在 KV 或 Variables 那一區。免費方案有這個功能。
+
+**Worker 網址開起來是空的** → cron 還沒跑過。等 5 分鐘，
+或在 Worker 頁面手動觸發一次。

@@ -9,11 +9,12 @@
  * 不要手改產生後的 .js。
  */
 
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { ROOT, engineVersion, inlineModule, readText } from './lib-inline.mjs';
 
 const outPath = resolve(ROOT, 'public/crypto-radar-guardian.worker.js');
+const minPath = resolve(ROOT, 'public/crypto-radar-guardian.worker.min.js');
 
 const parts = [
   'app/bybit-base.js',
@@ -128,3 +129,20 @@ mkdirSync(dirname(outPath), { recursive: true });
 writeFileSync(outPath, out, 'utf8');
 console.log(`已產生 ${outPath}`);
 console.log(`引擎版本 ${version}，大小 ${(Buffer.byteLength(out, 'utf8') / 1024).toFixed(1)} KB`);
+
+// 另外產一份壓縮版。Cloudflare 儀表板的編輯器要手動全選貼上，
+// 兩千多行在手機上很難操作，壓縮後只剩幾百行。
+// 行為必須與未壓縮版完全一致，由 tests/worker-minified.test.mjs 驗證。
+try {
+  const { execFileSync } = await import('node:child_process');
+  execFileSync('npx', [
+    'esbuild', outPath, '--minify', '--format=esm', '--target=es2022',
+    `--outfile=${minPath}`,
+  ], { cwd: ROOT, stdio: 'pipe' });
+  const minSize = readFileSync(minPath, 'utf8');
+  console.log(`已產生 ${minPath}`);
+  console.log(`壓縮後 ${(Buffer.byteLength(minSize, 'utf8') / 1024).toFixed(1)} KB，`
+    + `${minSize.split('\n').length} 行`);
+} catch (err) {
+  console.log('略過壓縮版（esbuild 不可用）');
+}
