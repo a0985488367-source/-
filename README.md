@@ -5,6 +5,17 @@
 
 同一套掃描引擎，兩種跑法。
 
+## Cloudflare Worker 版（24 小時，手機關機也跑）
+
+`public/crypto-radar-guardian.worker.js` — 每 5 分鐘自動掃描，
+提供網址、`/health`、`/api/status`、`/api/scan`，有候選就發 Discord。
+
+`public/crypto-radar-watchdog.worker.js` — 獨立的心跳守衛，
+每 10 分鐘檢查 Guardian，異常與恢復都通知。
+
+兩支都是單一檔案，可以直接貼進 Cloudflare 的網頁編輯器，
+**全程在手機瀏覽器就能完成**。詳細步驟見 [DEPLOY.md](./DEPLOY.md)。
+
 ## iPhone 版（不需要電腦）
 
 `public/crypto-radar-guardian.scriptable.js`
@@ -90,6 +101,9 @@ npx serve public
 | 數值格式化 | `app/format.js` |
 | Bybit 唯讀端點與簽章 | `app/bybit-private.js` |
 | Discord 通知 | `app/discord.js` |
+| Worker 掃描與通知 | `app/worker-core.js` |
+| Worker 端點與網頁 | `app/worker-routes.js` |
+| 心跳守衛判斷 | `app/watchdog-core.js` |
 
 改完必須重跑產生器：
 
@@ -110,7 +124,7 @@ npm run build   # 同時產生瀏覽器版與 iPhone 版
 ## 驗證
 
 ```bash
-npm test          # 196 項測試
+npm test          # 235 項測試
 npx tsc --noEmit  # TypeScript 嚴格模式
 npm run build
 ```
