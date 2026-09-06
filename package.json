@@ -3,10 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Crypto Radar Guardian Live 的可移植修補模組與測試。非獨立網站，需併入原專案。",
+  "description": "Crypto Radar Guardian：獨立版 Bybit 快噴掃描網頁，以及原專案的可移植修補模組。",
   "engines": { "node": ">=22.13" },
   "scripts": {
     "test": "node --experimental-strip-types --test tests/*.test.mjs",
+    "build": "node scripts/build-standalone-app.mjs",
     "typecheck": "tsc --noEmit"
   }
 }
