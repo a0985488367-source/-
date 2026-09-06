@@ -209,3 +209,23 @@ test('守衛壓縮版的排程與端點都正常', async () => {
     globalThis.fetch = original;
   }
 });
+
+test('壓縮版沒有超長單行', () => {
+  // Cloudflare 儀表板用的 Monaco 編輯器對超長行處理很差，
+  // 一萬多字元的單行可能讓它卡住或按 Deploy 沒反應。
+  for (const [name, path] of [['Guardian', MIN], ['守衛', WD_MIN]]) {
+    const longest = readFileSync(path, 'utf8')
+      .split('\n')
+      .reduce((max, line) => Math.max(max, line.length), 0);
+    assert.ok(longest <= 600, `${name} 壓縮版最長一行 ${longest} 字元，對編輯器不友善`);
+  }
+});
+
+test('未壓縮版也沒有超長單行', () => {
+  for (const [name, path] of [['Guardian', FULL], ['守衛', WD_FULL]]) {
+    const longest = readFileSync(path, 'utf8')
+      .split('\n')
+      .reduce((max, line) => Math.max(max, line.length), 0);
+    assert.ok(longest <= 600, `${name} 最長一行 ${longest} 字元`);
+  }
+});

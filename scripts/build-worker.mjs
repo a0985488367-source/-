@@ -137,6 +137,10 @@ try {
   const { execFileSync } = await import('node:child_process');
   execFileSync('npx', [
     'esbuild', outPath, '--minify', '--format=esm', '--target=es2022',
+    // 限制單行長度。壓縮後預設會產生一萬多字元的單行，
+    // Cloudflare 儀表板用的 Monaco 編輯器對超長行處理很差，
+    // 可能整個卡住或按了 Deploy 沒反應。
+    '--line-limit=400',
     `--outfile=${minPath}`,
   ], { cwd: ROOT, stdio: 'pipe' });
   const minSize = readFileSync(minPath, 'utf8');
