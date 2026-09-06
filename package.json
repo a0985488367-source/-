@@ -3,11 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Crypto Radar Guardian：獨立版 Bybit 快噴掃描網頁，以及原專案的可移植修補模組。",
-  "engines": { "node": ">=22.13" },
+  "description": "Crypto Radar Guardian：Bybit 早期快噴掃描（iPhone Scriptable 版與瀏覽器版），以及原專案的可移植修補模組。",
+  "engines": {
+    "node": ">=22.13"
+  },
   "scripts": {
     "test": "node --experimental-strip-types --test tests/*.test.mjs",
-    "build": "node scripts/build-standalone-app.mjs",
+    "build": "node scripts/build-standalone-app.mjs && node scripts/build-scriptable-app.mjs",
     "typecheck": "tsc --noEmit"
   }
 }

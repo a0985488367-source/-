@@ -1,178 +1,27 @@
-<!doctype html>
-<html lang="zh-Hant">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="color-scheme" content="dark">
-<meta name="robots" content="noindex, nofollow">
-<title>Crypto Radar Guardian</title>
-<style>
-:root {
-  color-scheme: dark;
-  --bg: #050d17;
-  --panel: #081321;
-  --panel-2: #0b1a2c;
-  --line: rgba(34, 211, 238, 0.16);
-  --line-soft: rgba(34, 211, 238, 0.08);
-  --text: #cfe6f2;
-  --muted: #6d8ca6;
-  --cyan: #22d3ee;
-  --green: #34d399;
-  --amber: #ffb020;
-  --red: #ff4d6d;
-  --violet: #a78bfa;
-}
-* { box-sizing: border-box; }
-html, body { margin: 0; background: var(--bg); }
-body {
-  font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC", "PingFang TC", sans-serif;
-  color: var(--text);
-  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
-  -webkit-text-size-adjust: 100%;
-}
-.wrap { max-width: 640px; margin: 0 auto; padding: 14px 12px 40px; }
+// Crypto Radar Guardian — iPhone 版 (Scriptable)
+// 引擎版本 10.0-standalone
+//
+// 這是什麼
+//   在 Bybit USDT 線性永續合約中，找出「已壓縮、量能溫和放大、未平倉量增加、
+//   且尚未突破前高」的早期候選。已經噴過的一律排除。
+//
+// 怎麼用
+//   1. 在 App Store 安裝免費的 Scriptable
+//   2. 打開 Scriptable，右上角 + 新增一個 Script
+//   3. 把這整份檔案的內容貼進去
+//   4. 按右下角的播放鍵執行
+//   不需要電腦，不需要伺服器。
+//
+// 安全性
+//   只讀取 Bybit 公開行情端點，不需要也不接受 API Key，
+//   不連接任何交易帳戶，永遠不會下單。
+//
+// 要改邏輯
+//   改 app/scan-engine.js，然後執行 node scripts/build-scriptable-app.mjs
+//   不要直接改這個檔案，它是產生出來的。
 
-header { position: sticky; top: 0; z-index: 20; background: linear-gradient(180deg, var(--bg) 72%, transparent); padding-top: 8px; }
-.title { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-h1 { font-size: 19px; margin: 0; letter-spacing: .02em; }
-.ver { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.srcbadge {
-  display: inline-flex; align-items: center; gap: 5px;
-  font-size: 11px; color: var(--cyan); border: 1px solid var(--line);
-  border-radius: 999px; padding: 2px 9px; background: rgba(34, 211, 238, .06);
-}
-.srcbadge b { font-weight: 600; }
-
-.bar { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
-button {
-  font: inherit; font-size: 14px; color: var(--text);
-  background: var(--panel-2); border: 1px solid var(--line);
-  border-radius: 10px; padding: 9px 14px; cursor: pointer;
-  min-height: 42px; -webkit-tap-highlight-color: transparent;
-}
-button:active { background: #10263c; }
-button[disabled] { opacity: .5; cursor: default; }
-button.primary { border-color: rgba(34, 211, 238, .45); color: #e6fbff; }
-.meta { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; margin-left: auto; text-align: right; }
-
-.note {
-  margin: 12px 0 0; padding: 10px 12px; border-radius: 10px;
-  background: var(--panel); border: 1px solid var(--line-soft);
-  font-size: 12.5px; color: var(--muted);
-}
-.note strong { color: var(--text); font-weight: 600; }
-
-.banner { margin-top: 12px; padding: 11px 13px; border-radius: 11px; background: var(--panel); border-left: 3px solid var(--amber); }
-.banner.err { border-left-color: var(--red); }
-.banner .bt { font-size: 13.5px; color: #ffe9c2; font-weight: 600; }
-.banner.err .bt { color: #ffd6de; }
-.banner .bd { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
-
-.progress { height: 3px; background: var(--panel-2); border-radius: 2px; overflow: hidden; margin-top: 12px; }
-.progress i { display: block; height: 100%; background: linear-gradient(90deg, var(--cyan), var(--violet)); width: 0; transition: width .25s ease; }
-
-h2 { font-size: 13px; color: var(--muted); font-weight: 600; letter-spacing: .06em; margin: 22px 0 10px; text-transform: uppercase; }
-
-.card {
-  background: var(--panel); border: 1px solid var(--line-soft);
-  border-radius: 13px; padding: 13px; margin-bottom: 11px;
-}
-.card.ready { border-color: rgba(52, 211, 153, .38); box-shadow: 0 0 0 1px rgba(52, 211, 153, .09), 0 6px 22px -14px rgba(52, 211, 153, .5); }
-.card.excluded { opacity: .72; }
-
-.chead { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
-.sym { font-size: 17px; font-weight: 650; letter-spacing: .01em; }
-.tag { font-size: 10.5px; padding: 2px 7px; border-radius: 5px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
-.tag.near { color: var(--green); border-color: rgba(52, 211, 153, .4); }
-.tag.build { color: var(--cyan); border-color: rgba(34, 211, 238, .35); }
-.tag.excl { color: var(--red); border-color: rgba(255, 77, 109, .35); }
-.tag.meme { color: var(--amber); border-color: rgba(255, 176, 32, .4); }
-.score { margin-left: auto; text-align: right; }
-.score b { font-size: 21px; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
-.score span { display: block; font-size: 10.5px; color: var(--muted); }
-
-.readiness { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
-.dots { display: flex; gap: 3px; }
-.dot { width: 7px; height: 7px; border-radius: 2px; background: rgba(255,255,255,.13); }
-.dot.on { background: var(--green); }
-.rtext { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
-
-.reasons { margin: 9px 0 0; padding: 9px 11px; border-radius: 9px; background: rgba(255, 77, 109, .06); border: 1px solid rgba(255, 77, 109, .18); }
-.reasons div { font-size: 12.5px; color: #ffc9d4; padding: 1.5px 0; }
-.reasons div::before { content: "✕ "; color: var(--red); }
-
-.entry { margin-top: 10px; padding: 10px 11px; border-radius: 9px; background: rgba(52, 211, 153, .06); border: 1px solid rgba(52, 211, 153, .2); }
-.erow { display: flex; justify-content: space-between; font-size: 13px; padding: 2.5px 0; font-variant-numeric: tabular-nums; }
-.erow span { color: var(--muted); }
-.erow b { font-weight: 600; }
-.erow.tp b { color: var(--green); }
-.erow.sl b { color: var(--red); }
-
-.grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 7px 12px; margin-top: 11px; }
-.cell { font-size: 12px; display: flex; justify-content: space-between; gap: 6px; font-variant-numeric: tabular-nums; }
-.cell span { color: var(--muted); }
-.cell b { font-weight: 600; }
-.pos { color: var(--green); }
-.neg { color: var(--red); }
-
-.foot { display: flex; align-items: center; gap: 10px; margin-top: 11px; padding-top: 10px; border-top: 1px solid var(--line-soft); }
-.foot a { color: var(--cyan); font-size: 12.5px; text-decoration: none; border-bottom: 1px solid rgba(34,211,238,.3); }
-.noauto { font-size: 11px; color: var(--muted); margin-left: auto; }
-
-.empty { padding: 26px 14px; text-align: center; color: var(--muted); font-size: 13.5px; background: var(--panel); border-radius: 12px; border: 1px dashed var(--line-soft); }
-
-.disc { margin-top: 26px; padding: 13px; border-radius: 11px; background: var(--panel); border: 1px solid var(--line-soft); font-size: 11.5px; line-height: 1.65; color: var(--muted); }
-.disc b { color: var(--text); display: block; margin-bottom: 5px; font-size: 12.5px; }
-.disc li { margin: 3px 0; }
-.disc ul { margin: 5px 0 0; padding-left: 17px; }
-
-@media (max-width: 380px) { .grid { grid-template-columns: 1fr; } h1 { font-size: 17px; } }
-</style>
-</head>
-<body>
-<div class="wrap">
-
-  <header>
-    <div class="title">
-      <h1>Crypto Radar Guardian</h1>
-      <span class="ver">v10.0-standalone</span>
-    </div>
-    <div style="margin-top:6px">
-      <span class="srcbadge">◈ 資料來源 <b>Bybit /v5/market</b></span>
-    </div>
-    <div class="bar">
-      <button id="refresh" class="primary">重新掃描</button>
-      <span id="meta" class="meta">尚未掃描</span>
-    </div>
-    <div class="progress"><i id="bar"></i></div>
-  </header>
-
-  <div class="note">
-    <strong>早期快噴掃描</strong>：在 Bybit USDT 線性永續中，尋找「已壓縮、量能溫和放大、未平倉量增加、且尚未突破前高」的標的。
-    已經噴過的一律排除。<span id="stat"></span>
-  </div>
-
-  <div id="list"></div>
-
-  <div class="disc">
-    <b>使用前請務必了解</b>
-    <ul>
-      <li>本頁只讀取 Bybit 公開行情端點，<strong>不連接任何帳戶、不需要也不接受 API Key</strong>，並且<strong>永遠不會下單</strong>。</li>
-      <li>完成度分數衡量的是「型態成熟程度」，<strong>不是勝率，也不是報酬預期</strong>。分數高不等於可以進場，必須十項進場條件全部通過。</li>
-      <li>Entry、SL、TP 為依 1.5R 與 2.5R 機械換算的參考值，不是投資建議。實際下單前請自行確認盤口深度與可承受風險。</li>
-      <li>迷因幣一律標記並套用固定 0.15% 防守倉，不因分數提高倉位。</li>
-      <li>加密貨幣永續合約風險極高，可能損失全部本金。本工具不對任何結果作出保證。</li>
-    </ul>
-  </div>
-</div>
-
-<script type="module">
 /* ============================================================
-   由產生器內嵌，請勿直接修改此檔
-   邏輯 app/scan-engine.js ｜ 畫面 app/render.js ｜ 樣式 app/theme.css
-   改完執行：node scripts/build-standalone-app.mjs
+   掃描引擎 —— 由 app/scan-engine.js 內嵌
    ============================================================ */
 /**
  * scan-engine — Crypto Radar Guardian 獨立版掃描引擎
@@ -760,6 +609,9 @@ function checkInvariants(c) {
   return v;
 }
 
+/* ============================================================
+   畫面 —— 由 app/render.js 內嵌
+   ============================================================ */
 /**
  * render — 純字串渲染，不碰 DOM
  *
@@ -920,118 +772,137 @@ const DISCLAIMER_HTML = `
     </ul>
   </div>`;
 
+/* ============================================================
+   樣式與免責 —— 由 app/theme.css 與 app/disclaimer.html 內嵌
+   ============================================================ */
+const CSS = ":root {\n  color-scheme: dark;\n  --bg: #050d17;\n  --panel: #081321;\n  --panel-2: #0b1a2c;\n  --line: rgba(34, 211, 238, 0.16);\n  --line-soft: rgba(34, 211, 238, 0.08);\n  --text: #cfe6f2;\n  --muted: #6d8ca6;\n  --cyan: #22d3ee;\n  --green: #34d399;\n  --amber: #ffb020;\n  --red: #ff4d6d;\n  --violet: #a78bfa;\n}\n* { box-sizing: border-box; }\nhtml, body { margin: 0; background: var(--bg); }\nbody {\n  font: 15px/1.55 -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"Noto Sans TC\", \"PingFang TC\", sans-serif;\n  color: var(--text);\n  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);\n  -webkit-text-size-adjust: 100%;\n}\n.wrap { max-width: 640px; margin: 0 auto; padding: 14px 12px 40px; }\n\nheader { position: sticky; top: 0; z-index: 20; background: linear-gradient(180deg, var(--bg) 72%, transparent); padding-top: 8px; }\n.title { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }\nh1 { font-size: 19px; margin: 0; letter-spacing: .02em; }\n.ver { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }\n.srcbadge {\n  display: inline-flex; align-items: center; gap: 5px;\n  font-size: 11px; color: var(--cyan); border: 1px solid var(--line);\n  border-radius: 999px; padding: 2px 9px; background: rgba(34, 211, 238, .06);\n}\n.srcbadge b { font-weight: 600; }\n\n.bar { display: flex; gap: 8px; align-items: center; margin-top: 10px; }\nbutton {\n  font: inherit; font-size: 14px; color: var(--text);\n  background: var(--panel-2); border: 1px solid var(--line);\n  border-radius: 10px; padding: 9px 14px; cursor: pointer;\n  min-height: 42px; -webkit-tap-highlight-color: transparent;\n}\nbutton:active { background: #10263c; }\nbutton[disabled] { opacity: .5; cursor: default; }\nbutton.primary { border-color: rgba(34, 211, 238, .45); color: #e6fbff; }\n.meta { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; margin-left: auto; text-align: right; }\n\n.note {\n  margin: 12px 0 0; padding: 10px 12px; border-radius: 10px;\n  background: var(--panel); border: 1px solid var(--line-soft);\n  font-size: 12.5px; color: var(--muted);\n}\n.note strong { color: var(--text); font-weight: 600; }\n\n.banner { margin-top: 12px; padding: 11px 13px; border-radius: 11px; background: var(--panel); border-left: 3px solid var(--amber); }\n.banner.err { border-left-color: var(--red); }\n.banner .bt { font-size: 13.5px; color: #ffe9c2; font-weight: 600; }\n.banner.err .bt { color: #ffd6de; }\n.banner .bd { font-size: 12.5px; color: var(--muted); margin-top: 3px; }\n\n.progress { height: 3px; background: var(--panel-2); border-radius: 2px; overflow: hidden; margin-top: 12px; }\n.progress i { display: block; height: 100%; background: linear-gradient(90deg, var(--cyan), var(--violet)); width: 0; transition: width .25s ease; }\n\nh2 { font-size: 13px; color: var(--muted); font-weight: 600; letter-spacing: .06em; margin: 22px 0 10px; text-transform: uppercase; }\n\n.card {\n  background: var(--panel); border: 1px solid var(--line-soft);\n  border-radius: 13px; padding: 13px; margin-bottom: 11px;\n}\n.card.ready { border-color: rgba(52, 211, 153, .38); box-shadow: 0 0 0 1px rgba(52, 211, 153, .09), 0 6px 22px -14px rgba(52, 211, 153, .5); }\n.card.excluded { opacity: .72; }\n\n.chead { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }\n.sym { font-size: 17px; font-weight: 650; letter-spacing: .01em; }\n.tag { font-size: 10.5px; padding: 2px 7px; border-radius: 5px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }\n.tag.near { color: var(--green); border-color: rgba(52, 211, 153, .4); }\n.tag.build { color: var(--cyan); border-color: rgba(34, 211, 238, .35); }\n.tag.excl { color: var(--red); border-color: rgba(255, 77, 109, .35); }\n.tag.meme { color: var(--amber); border-color: rgba(255, 176, 32, .4); }\n.score { margin-left: auto; text-align: right; }\n.score b { font-size: 21px; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }\n.score span { display: block; font-size: 10.5px; color: var(--muted); }\n\n.readiness { display: flex; align-items: center; gap: 8px; margin-top: 10px; }\n.dots { display: flex; gap: 3px; }\n.dot { width: 7px; height: 7px; border-radius: 2px; background: rgba(255,255,255,.13); }\n.dot.on { background: var(--green); }\n.rtext { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }\n\n.reasons { margin: 9px 0 0; padding: 9px 11px; border-radius: 9px; background: rgba(255, 77, 109, .06); border: 1px solid rgba(255, 77, 109, .18); }\n.reasons div { font-size: 12.5px; color: #ffc9d4; padding: 1.5px 0; }\n.reasons div::before { content: \"✕ \"; color: var(--red); }\n\n.entry { margin-top: 10px; padding: 10px 11px; border-radius: 9px; background: rgba(52, 211, 153, .06); border: 1px solid rgba(52, 211, 153, .2); }\n.erow { display: flex; justify-content: space-between; font-size: 13px; padding: 2.5px 0; font-variant-numeric: tabular-nums; }\n.erow span { color: var(--muted); }\n.erow b { font-weight: 600; }\n.erow.tp b { color: var(--green); }\n.erow.sl b { color: var(--red); }\n\n.grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 7px 12px; margin-top: 11px; }\n.cell { font-size: 12px; display: flex; justify-content: space-between; gap: 6px; font-variant-numeric: tabular-nums; }\n.cell span { color: var(--muted); }\n.cell b { font-weight: 600; }\n.pos { color: var(--green); }\n.neg { color: var(--red); }\n\n.foot { display: flex; align-items: center; gap: 10px; margin-top: 11px; padding-top: 10px; border-top: 1px solid var(--line-soft); }\n.foot a { color: var(--cyan); font-size: 12.5px; text-decoration: none; border-bottom: 1px solid rgba(34,211,238,.3); }\n.noauto { font-size: 11px; color: var(--muted); margin-left: auto; }\n\n.empty { padding: 26px 14px; text-align: center; color: var(--muted); font-size: 13.5px; background: var(--panel); border-radius: 12px; border: 1px dashed var(--line-soft); }\n\n.disc { margin-top: 26px; padding: 13px; border-radius: 11px; background: var(--panel); border: 1px solid var(--line-soft); font-size: 11.5px; line-height: 1.65; color: var(--muted); }\n.disc b { color: var(--text); display: block; margin-bottom: 5px; font-size: 12.5px; }\n.disc li { margin: 3px 0; }\n.disc ul { margin: 5px 0 0; padding-left: 17px; }\n\n@media (max-width: 380px) { .grid { grid-template-columns: 1fr; } h1 { font-size: 17px; } }";
+const DISCLAIMER = "\n  <div class=\"disc\">\n    <b>使用前請務必了解</b>\n    <ul>\n      <li>本頁只讀取 Bybit 公開行情端點，<strong>不連接任何帳戶、不需要也不接受 API Key</strong>，並且<strong>永遠不會下單</strong>。</li>\n      <li>完成度分數衡量的是「型態成熟程度」，<strong>不是勝率，也不是報酬預期</strong>。分數高不等於可以進場，必須十項進場條件全部通過。</li>\n      <li>Entry、SL、TP 為依 1.5R 與 2.5R 機械換算的參考值，不是投資建議。實際下單前請自行確認盤口深度與可承受風險。</li>\n      <li>迷因幣一律標記並套用固定 0.15% 防守倉，不因分數提高倉位。</li>\n      <li>加密貨幣永續合約風險極高，可能損失全部本金。本工具不對任何結果作出保證。</li>\n    </ul>\n  </div>";
 
-/* ---------------- Bybit 抓取（全部為公開端點，不需要 API Key） ---------------- */
+/* ============================================================
+   Scriptable 接線
+   ============================================================ */
+
+/* ================= Bybit 抓取（Scriptable 原生 Request，無跨來源限制） ================= */
 
 async function bybit(path, params) {
-  const url = new URL(BYBIT_BASE + path);
-  for (const [k, v] of Object.entries(params ?? {})) url.searchParams.set(k, String(v));
-  const res = await fetch(url, { headers: { accept: 'application/json' } });
-  if (!res.ok) throw new Error('HTTP ' + res.status);
-  const json = await res.json();
-  if (json.retCode !== 0) throw new Error('Bybit retCode ' + json.retCode + ': ' + json.retMsg);
+  let url = BYBIT_BASE + path;
+  const pairs = [];
+  for (const key of Object.keys(params || {})) {
+    pairs.push(encodeURIComponent(key) + '=' + encodeURIComponent(String(params[key])));
+  }
+  if (pairs.length) url += '?' + pairs.join('&');
+
+  const req = new Request(url);
+  req.method = 'GET';
+  req.timeoutInterval = 25;
+  req.headers = { accept: 'application/json' };
+
+  const json = await req.loadJSON();
+  if (!json || typeof json !== 'object') throw new Error('回應格式不正確');
+  if (json.retCode !== 0) throw new Error('Bybit retCode ' + json.retCode + '：' + json.retMsg);
   return json.result;
 }
 
 async function pool(items, size, worker) {
   const out = [];
   for (let i = 0; i < items.length; i += size) {
-    out.push(...await Promise.all(items.slice(i, i + size).map(worker)));
+    const batch = items.slice(i, i + size);
+    const done = await Promise.all(batch.map(worker));
+    for (const d of done) out.push(d);
   }
   return out;
 }
 
-const state = { candidates: [], failed: [], scannedAt: null, universeCount: 0, analyzedCount: 0, busy: false, error: null };
+/* ================= 掃描 ================= */
 
-async function scan() {
-  if (state.busy) return;
-  state.busy = true;
-  state.error = null;
-  render();
-  setProgress(0.05);
+async function runScan() {
+  const state = {
+    candidates: [], failed: [], scannedAt: null,
+    universeCount: 0, analyzedCount: 0, busy: false, error: null,
+  };
 
-  try {
-    const [instRes, tickRes] = await Promise.all([
-      bybit('/v5/market/instruments-info', { category: 'linear', limit: 1000 }),
-      bybit('/v5/market/tickers', { category: 'linear' }),
-    ]);
-    setProgress(0.2);
+  const instRes = await bybit('/v5/market/instruments-info', { category: 'linear', limit: 1000 });
+  const tickRes = await bybit('/v5/market/tickers', { category: 'linear' });
 
-    const rows = buildUniverse(instRes.list ?? [], tickRes.list ?? [], Date.now());
-    const passed = rows.filter(passesUniverseFilter);
-    state.universeCount = passed.length;
+  const rows = buildUniverse(instRes.list || [], tickRes.list || [], Date.now());
+  const passed = rows.filter(passesUniverseFilter);
+  state.universeCount = passed.length;
 
-    const shortlist = rankUniverse(passed);
-    state.analyzedCount = shortlist.length;
-    if (!shortlist.length) {
-      state.candidates = [];
-      state.failed = [];
-      state.scannedAt = Date.now();
-      return;
-    }
+  const shortlist = rankUniverse(passed);
+  state.analyzedCount = shortlist.length;
+  console.log('第一階段通過 ' + passed.length + ' 檔，詳細分析 ' + shortlist.length + ' 檔');
 
-    let done = 0;
-    const built = await pool(shortlist, 4, async (row) => {
+  if (shortlist.length) {
+    const built = await pool(shortlist, 3, async (row) => {
       try {
-        const [kl, oi, ob] = await Promise.all([
-          bybit('/v5/market/kline', { category: 'linear', symbol: row.symbol, interval: 15, limit: 40 }),
-          bybit('/v5/market/open-interest', { category: 'linear', symbol: row.symbol, intervalTime: '15min', limit: 5 }),
-          bybit('/v5/market/orderbook', { category: 'linear', symbol: row.symbol, limit: 50 }).catch(() => null),
-        ]);
+        const kl = await bybit('/v5/market/kline', { category: 'linear', symbol: row.symbol, interval: 15, limit: 40 });
+        const oi = await bybit('/v5/market/open-interest', { category: 'linear', symbol: row.symbol, intervalTime: '15min', limit: 5 });
+        let ob = null;
+        try {
+          ob = await bybit('/v5/market/orderbook', { category: 'linear', symbol: row.symbol, limit: 50 });
+        } catch (e) {
+          ob = null;
+        }
         return buildCandidate(row, parseKlines(kl.list), parseOpenInterest(oi.list), ob ? parseOrderbook(ob) : null);
       } catch (err) {
-        return { symbol: row.symbol, failed: true, error: String(err.message ?? err) };
-      } finally {
-        done += 1;
-        setProgress(0.2 + 0.8 * (done / shortlist.length));
+        console.log('抓取失敗 ' + row.symbol + '：' + err.message);
+        return { symbol: row.symbol, failed: true, error: String(err.message || err) };
       }
     });
 
     state.candidates = rankCandidates(built.filter((c) => !c.failed));
     state.failed = built.filter((c) => c.failed);
-    state.scannedAt = Date.now();
-  } catch (err) {
-    state.error = String(err && err.message ? err.message : err)
-      + '。若你是用檔案方式開啟，請改用 https 或本機伺服器開啟；瀏覽器可能擋下跨來源請求。';
-  } finally {
-    state.busy = false;
-    setProgress(1);
-    setTimeout(() => setProgress(0), 400);
-    render();
   }
+
+  state.scannedAt = Date.now();
+  return state;
 }
 
-/* ---------------- DOM 接線 ---------------- */
+/* ================= 產生畫面 ================= */
 
-const $ = (id) => document.getElementById(id);
-const setProgress = (v) => { $('bar').style.width = Math.round(v * 100) + '%'; };
+function pageHtml(state) {
+  const when = new Date(state.scannedAt).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' });
+  const readyCount = state.candidates.filter(function (c) { return c.entryReady; }).length;
 
-function render() {
-  $('meta').textContent = state.busy ? '掃描中…' : ('更新於 ' + ago(state.scannedAt));
-  $('refresh').disabled = state.busy;
-  $('refresh').textContent = state.busy ? '掃描中…' : '重新掃描';
-  $('stat').textContent = statText(state);
-  $('list').innerHTML = listHtml(state);
+  return '<!doctype html>'
+    + '<html lang="zh-Hant"><head>'
+    + '<meta charset="utf-8">'
+    + '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">'
+    + '<meta name="color-scheme" content="dark">'
+    + '<title>Crypto Radar Guardian</title>'
+    + '<style>' + CSS + '</style>'
+    + '</head><body><div class="wrap">'
+    + '<header>'
+    +   '<div class="title"><h1>Crypto Radar Guardian</h1>'
+    +   '<span class="ver">v' + ENGINE_VERSION + ' · iPhone</span></div>'
+    +   '<div style="margin-top:6px"><span class="srcbadge">◈ 資料來源 <b>Bybit /v5/market</b></span></div>'
+    +   '<div class="bar"><span class="meta" style="margin-left:0">掃描於 ' + when
+    +   '　·　符合進場條件 ' + readyCount + ' 檔</span></div>'
+    + '</header>'
+    + '<div class="note"><strong>早期快噴掃描</strong>：在 Bybit USDT 線性永續中，尋找「已壓縮、量能溫和放大、'
+    + '未平倉量增加、且尚未突破前高」的標的。已經噴過的一律排除。'
+    + statText(state)
+    + '<div style="margin-top:6px;color:var(--muted)">要更新資料，請回到 Scriptable 再執行一次。</div></div>'
+    + listHtml(state)
+    + DISCLAIMER
+    + '</div></body></html>';
 }
 
-// iOS Safari 會凍結背景分頁的計時器。切回前景時強制重抓，
-// 避免看到幾十分鐘前的資料卻以為是即時的。
-let lastScanAt = 0;
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && Date.now() - lastScanAt > 120000) {
-    lastScanAt = Date.now();
-    scan();
-  }
-});
+/* ================= 進入點 ================= */
 
-$('refresh').addEventListener('click', () => { lastScanAt = Date.now(); scan(); });
+try {
+  const state = await runScan();
+  const wv = new WebView();
+  await wv.loadHTML(pageHtml(state));
+  await wv.present(true);
+} catch (err) {
+  const a = new Alert();
+  a.title = '掃描失敗';
+  a.message = String((err && err.message) ? err.message : err)
+    + '\n\n請確認網路連線正常，稍後再試一次。';
+  a.addAction('好');
+  await a.present();
+}
 
-setInterval(() => { if (!state.busy) $('meta').textContent = '更新於 ' + ago(state.scannedAt); }, 15000);
-setInterval(() => { if (!document.hidden && !state.busy) { lastScanAt = Date.now(); scan(); } }, 300000);
+Script.complete();
 
-lastScanAt = Date.now();
-scan();
-
-</script>
-</body>
-</html>
