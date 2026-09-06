@@ -1,0 +1,12 @@
+{
+  "name": "crypto-radar-guardian-patch-modules",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Crypto Radar Guardian Live 的可移植修補模組與測試。非獨立網站，需併入原專案。",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "test": "node --experimental-strip-types --test tests/*.test.mjs",
+    "typecheck": "tsc --noEmit"
+  }
+}
