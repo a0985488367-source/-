@@ -22,6 +22,10 @@
 //
 // 連接 Bybit
 //   在 Scriptable 裡執行 → 選「連接 Bybit（唯讀）」。
+//   會先問你環境：正式站 / 模擬交易 Demo / 測試網 Testnet。
+//   API Key 是綁環境的，模擬與測試網各自發自己的 Key，
+//   拿去打正式站會得到 retCode 10003「API key is invalid」。
+//   如果連接失敗，第一個要檢查的就是環境有沒有選對。
 //   請在 Bybit 建立「只讀」權限的 API Key。
 //   本程式只呼叫查詢類端點，沒有任何下單、改單、撤單或提領的程式路徑，
 //   端點白名單在程式碼裡是硬性限制。
@@ -41,11 +45,103 @@
    共用常數與格式化 —— 由 app/bybit-base.js 與 app/format.js 內嵌
    ============================================================ */
 /**
- * Bybit API 基底位址。
- * 獨立成一個模組，讓公開行情與唯讀私有端點共用同一個常數，
- * 避免內嵌成單一作用域時重複宣告。
+ * Bybit API 位址與環境
+ *
+ * Bybit 有三套互不相通的環境，各自發自己的 API Key：
+ *   正式站    api.bybit.com
+ *   模擬交易  api-demo.bybit.com    （Demo Trading，共用正式站的行情）
+ *   測試網    api-testnet.bybit.com （獨立的行情與帳戶）
+ *
+ * 把模擬或測試網的 Key 拿去打正式站，Bybit 會回 retCode 10003
+ * 「API key is invalid」—— 這不是簽章錯，是那個 host 根本不認得這把 Key。
+ * 這是最常見的連接失敗原因，所以環境要讓使用者自己選。
  */
-const BYBIT_BASE = 'https://api.bybit.com';
+
+const BYBIT_ENVIRONMENTS = Object.freeze(['live', 'demo', 'testnet']);
+
+const ENV_LABEL = Object.freeze({
+  live: '正式站',
+  demo: '模擬交易 Demo',
+  testnet: '測試網 Testnet',
+});
+
+const PRIVATE_HOSTS = Object.freeze({
+  live: 'https://api.bybit.com',
+  demo: 'https://api-demo.bybit.com',
+  testnet: 'https://api-testnet.bybit.com',
+});
+
+const PUBLIC_HOSTS = Object.freeze({
+  // 模擬交易沒有自己的行情，直接用正式站的
+  live: 'https://api.bybit.com',
+  demo: 'https://api.bybit.com',
+  testnet: 'https://api-testnet.bybit.com',
+});
+
+/** 公開行情預設走正式站 */
+const BYBIT_BASE = PUBLIC_HOSTS.live;
+
+function normalizeEnv(env) {
+  return BYBIT_ENVIRONMENTS.includes(env) ? env : 'live';
+}
+
+function privateHostFor(env) {
+  return PRIVATE_HOSTS[normalizeEnv(env)];
+}
+
+function publicHostFor(env) {
+  return PUBLIC_HOSTS[normalizeEnv(env)];
+}
+
+/**
+ * 清掉貼上時常見的雜訊：前後空白、換行、不斷行空格、零寬字元、BOM。
+ *
+ * 在 iPhone 上貼 API Key 很容易夾帶這些看不見的字元，
+ * 而它們會讓 Key 比對失敗，錯誤訊息卻只說「invalid」，非常難查。
+ */
+function sanitizeCredential(value) {
+  // \s 涵蓋一般空白與換行；另外明確列出貼上時常見的不可見字元：
+  // U+00A0 不斷行空格、U+200B~U+200D 零寬字元、U+2060 word joiner、U+FEFF BOM
+  return String(value ?? '').replace(/[\s\u00A0\u200B-\u200D\u2060\uFEFF]/g, '');
+}
+
+/**
+ * 把 Bybit 的錯誤碼翻成看得懂、而且講得出下一步的說明。
+ *
+ * 只描述已知的對應關係，沒把握的就照實說不確定，不亂猜。
+ */
+function describeBybitError(retCode, retMsg, env) {
+  const code = Number(retCode);
+  const envName = ENV_LABEL[normalizeEnv(env)];
+  const raw = retMsg ? `（${retMsg}）` : '';
+
+  if (code === 10003) {
+    return `目前連的是「${envName}」，但這個環境不認得這把 API Key${raw}。\n\n`
+      + '最常見的原因是環境選錯：模擬交易與測試網各自發自己的 Key，不能拿去打正式站。\n'
+      + '請確認你的 Key 是在哪裡建立的，回設定選單改選對應的環境。\n'
+      + '若環境沒選錯，請檢查 Key 是否有多打或漏打字元、是否已被刪除或過期。';
+  }
+  if (code === 10004) {
+    return `簽章驗證失敗${raw}。請確認 API Secret 有沒有貼錯或貼不完整。`;
+  }
+  if (code === 10002) {
+    return `時間戳超出容許範圍${raw}。請到 iPhone 設定 → 一般 → 日期與時間，開啟「自動設定」。`;
+  }
+  if (code === 10005 || code === 10016) {
+    return `這把 Key 沒有讀取權限${raw}。請在 Bybit 給它「帳戶查詢」與「持倉查詢」的唯讀權限。`;
+  }
+  if (code === 10010) {
+    return `這把 Key 設了 IP 白名單，但目前的網路不在名單內${raw}。\n`
+      + '手機的 IP 會變動，建議改用不綁 IP 的唯讀 Key，或把目前 IP 加進白名單。';
+  }
+  if (code === 10018) {
+    return `請求頻率過高${raw}。請稍等一下再試。`;
+  }
+  if (code === 30086 || code === 3400026) {
+    return `帳戶類型不符${raw}。這個查詢需要統一帳戶（Unified Trading Account）。`;
+  }
+  return `Bybit retCode ${retCode}${raw}`;
+}
 
 /**
  * format — 共用數值格式化
@@ -359,7 +455,7 @@ function buildQueryString(params) {
  *
  * @returns {{url: string, headers: Object, queryString: string}}
  */
-function signGetRequest({ path, params, apiKey, apiSecret, timestamp, recvWindow }) {
+function signGetRequest({ path, params, apiKey, apiSecret, timestamp, recvWindow, env }) {
   const cleanPath = assertReadOnlyEndpoint(path);
 
   if (typeof apiKey !== 'string' || apiKey.length === 0) throw new Error('缺少 API Key');
@@ -370,15 +466,17 @@ function signGetRequest({ path, params, apiKey, apiSecret, timestamp, recvWindow
   const queryString = buildQueryString(params);
   const payload = ts + apiKey + recv + queryString;
   const sign = hmacSha256Hex(apiSecret, payload);
+  const host = env ? privateHostFor(env) : BYBIT_BASE;
 
   return {
-    url: BYBIT_BASE + cleanPath + (queryString ? `?${queryString}` : ''),
+    url: host + cleanPath + (queryString ? `?${queryString}` : ''),
     queryString,
     headers: {
       'X-BAPI-API-KEY': apiKey,
       'X-BAPI-TIMESTAMP': ts,
       'X-BAPI-RECV-WINDOW': recv,
       'X-BAPI-SIGN': sign,
+      'X-BAPI-SIGN-TYPE': '2',
       accept: 'application/json',
     },
   };
@@ -1301,6 +1399,9 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;',
 }[c]));
 
+/** 逸出後把換行轉成 <br>，給診斷訊息這種多行文字用 */
+const escMultiline = (s) => esc(s).replace(/\r?\n/g, '<br>');
+
 const STAGE_TEXT = {
   NEAR_BREAKOUT: '接近突破',
   BUILDING: '醞釀中',
@@ -1383,7 +1484,7 @@ function accountHtml(account) {
     return `<h2>Bybit 帳戶</h2>
       <div class="banner err">
         <div class="bt">無法讀取帳戶資料</div>
-        <div class="bd">${esc(account.error)}</div>
+        <div class="bd">${escMultiline(account.error)}</div>
       </div>`;
   }
 
@@ -1464,7 +1565,7 @@ function listHtml(state) {
   if (state.error) {
     html += `<div class="banner err">
       <div class="bt">無法取得 Bybit 資料</div>
-      <div class="bd">${esc(state.error)}</div>
+      <div class="bd">${escMultiline(state.error)}</div>
     </div>`;
   }
 
@@ -1531,6 +1632,7 @@ const KEY_API_KEY = 'crg.bybit.apiKey';
 const KEY_API_SECRET = 'crg.bybit.apiSecret';
 const KEY_WEBHOOK = 'crg.discord.webhook';
 const KEY_NOTIFY_STATE = 'crg.notify.state';
+const KEY_ENV = 'crg.bybit.env';
 
 function kcGet(key) {
   try {
@@ -1542,10 +1644,14 @@ function kcGet(key) {
 function kcSet(key, value) { Keychain.set(key, value); }
 function kcRemove(key) { try { if (Keychain.contains(key)) Keychain.remove(key); } catch (e) {} }
 
+function currentEnv() {
+  return normalizeEnv(kcGet(KEY_ENV));
+}
+
 function bybitCreds() {
-  const apiKey = kcGet(KEY_API_KEY);
-  const apiSecret = kcGet(KEY_API_SECRET);
-  return (apiKey && apiSecret) ? { apiKey, apiSecret } : null;
+  const apiKey = sanitizeCredential(kcGet(KEY_API_KEY));
+  const apiSecret = sanitizeCredential(kcGet(KEY_API_SECRET));
+  return (apiKey && apiSecret) ? { apiKey: apiKey, apiSecret: apiSecret } : null;
 }
 
 function loadNotifyState() {
@@ -1560,7 +1666,7 @@ function saveNotifyState(state) {
 /* ================= Bybit 公開行情 ================= */
 
 async function bybitPublic(path, params) {
-  let url = BYBIT_BASE + path;
+  let url = publicHostFor(currentEnv()) + path;
   const pairs = [];
   for (const key of Object.keys(params || {})) {
     pairs.push(encodeURIComponent(key) + '=' + encodeURIComponent(String(params[key])));
@@ -1574,7 +1680,7 @@ async function bybitPublic(path, params) {
 
   const json = await req.loadJSON();
   if (!json || typeof json !== 'object') throw new Error('回應格式不正確');
-  if (json.retCode !== 0) throw new Error('Bybit retCode ' + json.retCode + '：' + json.retMsg);
+  if (json.retCode !== 0) throw new Error(describeBybitError(json.retCode, json.retMsg, currentEnv()));
   return json.result;
 }
 
@@ -1588,6 +1694,7 @@ async function bybitSigned(path, params, creds) {
     apiKey: creds.apiKey,
     apiSecret: creds.apiSecret,
     timestamp: Date.now(),
+    env: currentEnv(),
   });
 
   const req = new Request(signed.url);
@@ -1597,7 +1704,7 @@ async function bybitSigned(path, params, creds) {
 
   const json = await req.loadJSON();
   if (!json || typeof json !== 'object') throw new Error('回應格式不正確');
-  if (json.retCode !== 0) throw new Error('Bybit retCode ' + json.retCode + '：' + json.retMsg);
+  if (json.retCode !== 0) throw new Error(describeBybitError(json.retCode, json.retMsg, currentEnv()));
   return json.result;
 }
 
@@ -1619,14 +1726,14 @@ async function fetchAccount() {
       wallet: parseWalletBalance(walletRes),
       positions: positions,
       todayPnl: realizedPnlSince(closed, Date.now() - 86400000),
-      keyMask: maskApiKey(creds.apiKey),
+      keyMask: maskApiKey(creds.apiKey) + ' · ' + ENV_LABEL[currentEnv()],
       error: null,
     };
   } catch (err) {
     const raw = String((err && err.message) ? err.message : err);
     // 保險：確保錯誤訊息不會夾帶憑證
     const safe = raw.split(creds.apiKey).join('[key]').split(creds.apiSecret).join('[secret]');
-    return { error: safe, keyMask: maskApiKey(creds.apiKey) };
+    return { error: safe, keyMask: maskApiKey(creds.apiKey) + ' · ' + ENV_LABEL[currentEnv()] };
   }
 }
 
@@ -1765,9 +1872,24 @@ async function presentScan() {
 
 /* ================= 設定 ================= */
 
-async function setupBybit() {
+async function chooseEnv() {
   const a = new Alert();
-  a.title = '連接 Bybit（唯讀）';
+  a.title = '選擇 Bybit 環境';
+  a.message = 'API Key 是綁環境的。模擬交易與測試網各自發自己的 Key，'
+    + '拿去打正式站會被拒絕（retCode 10003）。\n\n目前：' + ENV_LABEL[currentEnv()];
+  for (const env of BYBIT_ENVIRONMENTS) a.addAction(ENV_LABEL[env]);
+  a.addCancelAction('取消');
+  const idx = await a.presentSheet();
+  if (idx === -1) return false;
+  kcSet(KEY_ENV, BYBIT_ENVIRONMENTS[idx]);
+  return true;
+}
+
+async function setupBybit() {
+  if (!(await chooseEnv())) return;
+
+  const a = new Alert();
+  a.title = '連接 Bybit（' + ENV_LABEL[currentEnv()] + '，唯讀）';
   a.message = '請在 Bybit 建立一組「只讀」權限的 API Key。\n\n'
     + '本工具只呼叫查詢類端點，沒有任何下單、改單或提領的程式路徑。\n'
     + '憑證只會存在這支手機的 Keychain，不會上傳到任何地方。';
@@ -1778,8 +1900,8 @@ async function setupBybit() {
   const idx = await a.present();
   if (idx === -1) return;
 
-  const key = (a.textFieldValue(0) || '').trim();
-  const secret = (a.textFieldValue(1) || '').trim();
+  const key = sanitizeCredential(a.textFieldValue(0));
+  const secret = sanitizeCredential(a.textFieldValue(1));
   if (!key || !secret) {
     await notice('未儲存', 'API Key 與 Secret 都要填寫。');
     return;
@@ -1791,9 +1913,9 @@ async function setupBybit() {
   // 立刻驗證一次，讓使用者馬上知道有沒有打錯
   const account = await fetchAccount();
   if (account && account.error) {
-    await notice('已儲存，但讀取失敗', account.error + '\n\n請確認 Key 權限與系統時間是否正確。');
+    await notice('已儲存，但讀取失敗', account.error);
   } else {
-    await notice('連接成功', '已讀取到帳戶資料。憑證存在本機 Keychain。');
+    await notice('連接成功', '已讀取到 ' + ENV_LABEL[currentEnv()] + ' 的帳戶資料。\n憑證存在本機 Keychain。');
   }
 }
 
@@ -1839,6 +1961,7 @@ async function clearCredentials() {
   kcRemove(KEY_API_SECRET);
   kcRemove(KEY_WEBHOOK);
   kcRemove(KEY_NOTIFY_STATE);
+  kcRemove(KEY_ENV);
   await notice('已清除', '所有憑證都已從 Keychain 移除。');
 }
 
@@ -1850,6 +1973,20 @@ async function notice(title, message) {
   await a.present();
 }
 
+async function switchEnvOnly() {
+  if (!(await chooseEnv())) return;
+  if (!bybitCreds()) {
+    await notice('已切換', '目前環境：' + ENV_LABEL[currentEnv()] + '\n尚未設定這個環境的 API Key。');
+    return;
+  }
+  const account = await fetchAccount();
+  if (account && account.error) {
+    await notice('切換後讀取失敗', account.error);
+  } else {
+    await notice('切換成功', '已讀取到 ' + ENV_LABEL[currentEnv()] + ' 的帳戶資料。');
+  }
+}
+
 async function showMenu() {
   const creds = bybitCreds();
   const webhook = kcGet(KEY_WEBHOOK);
@@ -1857,9 +1994,11 @@ async function showMenu() {
   const a = new Alert();
   a.title = 'Crypto Radar Guardian';
   a.message = 'Bybit：' + (creds ? maskApiKey(creds.apiKey) + '（唯讀）' : '未連接')
+    + '\n環境：' + ENV_LABEL[currentEnv()]
     + '\nDiscord：' + (isValidWebhookUrl(webhook) ? maskWebhookUrl(webhook) : '未連接');
   a.addAction('開始掃描');
   a.addAction(creds ? '重新設定 Bybit' : '連接 Bybit（唯讀）');
+  a.addAction('只切換環境');
   a.addAction(isValidWebhookUrl(webhook) ? '重新設定 Discord' : '連接 Discord');
   a.addAction('測試 Discord 通知');
   a.addDestructiveAction('清除所有憑證');
@@ -1868,9 +2007,10 @@ async function showMenu() {
   const idx = await a.presentSheet();
   if (idx === 0) await presentScan();
   else if (idx === 1) { await setupBybit(); await showMenu(); }
-  else if (idx === 2) { await setupDiscord(); await showMenu(); }
-  else if (idx === 3) { await testDiscord(); await showMenu(); }
-  else if (idx === 4) { await clearCredentials(); await showMenu(); }
+  else if (idx === 2) { await switchEnvOnly(); await showMenu(); }
+  else if (idx === 3) { await setupDiscord(); await showMenu(); }
+  else if (idx === 4) { await testDiscord(); await showMenu(); }
+  else if (idx === 5) { await clearCredentials(); await showMenu(); }
 }
 
 /* ================= 進入點 ================= */

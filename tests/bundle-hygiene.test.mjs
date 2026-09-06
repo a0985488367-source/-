@@ -57,3 +57,12 @@ test('內嵌樣式沒有語法錯誤的簡寫屬性', () => {
     assert.deepEqual(bad, [], `${name} 有無效的簡寫宣告`);
   }
 });
+
+test('多行診斷訊息會轉成 HTML 換行', () => {
+  for (const [name, src] of [['瀏覽器版', WEB], ['iPhone 版', IOS]]) {
+    assert.match(src, /escMultiline/, `${name} 應有多行逸出函式`);
+  }
+  // 逸出必須先做，再換 <br>，否則會被自己逸出掉
+  const fn = /escMultiline = \(s\) => esc\(s\)\.replace\(\/\\r\?\\n\/g, '<br>'\)/;
+  assert.match(IOS, fn, '順序必須是先逸出再轉換行');
+});

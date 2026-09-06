@@ -16,7 +16,7 @@
  */
 
 import { hmacSha256Hex } from './hmac-sha256.js';
-import { BYBIT_BASE } from './bybit-base.js';
+import { BYBIT_BASE, privateHostFor } from './bybit-base.js';
 
 export const RECV_WINDOW = '5000';
 
@@ -89,7 +89,7 @@ export function buildQueryString(params) {
  *
  * @returns {{url: string, headers: Object, queryString: string}}
  */
-export function signGetRequest({ path, params, apiKey, apiSecret, timestamp, recvWindow }) {
+export function signGetRequest({ path, params, apiKey, apiSecret, timestamp, recvWindow, env }) {
   const cleanPath = assertReadOnlyEndpoint(path);
 
   if (typeof apiKey !== 'string' || apiKey.length === 0) throw new Error('缺少 API Key');
@@ -100,15 +100,17 @@ export function signGetRequest({ path, params, apiKey, apiSecret, timestamp, rec
   const queryString = buildQueryString(params);
   const payload = ts + apiKey + recv + queryString;
   const sign = hmacSha256Hex(apiSecret, payload);
+  const host = env ? privateHostFor(env) : BYBIT_BASE;
 
   return {
-    url: BYBIT_BASE + cleanPath + (queryString ? `?${queryString}` : ''),
+    url: host + cleanPath + (queryString ? `?${queryString}` : ''),
     queryString,
     headers: {
       'X-BAPI-API-KEY': apiKey,
       'X-BAPI-TIMESTAMP': ts,
       'X-BAPI-RECV-WINDOW': recv,
       'X-BAPI-SIGN': sign,
+      'X-BAPI-SIGN-TYPE': '2',
       accept: 'application/json',
     },
   };

@@ -16,6 +16,9 @@ export const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;',
 }[c]));
 
+/** 逸出後把換行轉成 <br>，給診斷訊息這種多行文字用 */
+export const escMultiline = (s) => esc(s).replace(/\r?\n/g, '<br>');
+
 const STAGE_TEXT = {
   NEAR_BREAKOUT: '接近突破',
   BUILDING: '醞釀中',
@@ -98,7 +101,7 @@ export function accountHtml(account) {
     return `<h2>Bybit 帳戶</h2>
       <div class="banner err">
         <div class="bt">無法讀取帳戶資料</div>
-        <div class="bd">${esc(account.error)}</div>
+        <div class="bd">${escMultiline(account.error)}</div>
       </div>`;
   }
 
@@ -179,7 +182,7 @@ export function listHtml(state) {
   if (state.error) {
     html += `<div class="banner err">
       <div class="bt">無法取得 Bybit 資料</div>
-      <div class="bd">${esc(state.error)}</div>
+      <div class="bd">${escMultiline(state.error)}</div>
     </div>`;
   }
 

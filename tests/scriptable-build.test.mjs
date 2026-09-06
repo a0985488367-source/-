@@ -300,3 +300,97 @@ test('產生器輸出是決定性的', () => {
   });
   assert.equal(readFileSync(PATH, 'utf8'), before);
 });
+
+/* ------------------------------------------------------------------ */
+/* 環境切換（對應 retCode 10003 的實際故障）                             */
+/* ------------------------------------------------------------------ */
+
+/** 讓模擬環境可以指定 Keychain 內容並攔截所有請求主機 */
+async function runWithEnv(env, { retCode = 0 } = {}) {
+  const hosts = [];
+  const errors = [];
+  let presentedHtml = null;
+  const store = new Map([
+    ['crg.bybit.apiKey', FAKE_KEY],
+    ['crg.bybit.apiSecret', FAKE_SECRET],
+  ]);
+  if (env) store.set('crg.bybit.env', env);
+
+  globalThis.Keychain = {
+    contains: (k) => store.has(k),
+    get: (k) => store.get(k),
+    set: (k, v) => store.set(k, v),
+    remove: (k) => store.delete(k),
+  };
+  globalThis.config = { runsInApp: false };
+  globalThis.Request = class {
+    constructor(url) { this.url = url; this.headers = {}; this.response = { statusCode: 200 }; }
+    async loadJSON() {
+      hosts.push(new URL(this.url).origin + new URL(this.url).pathname);
+      if (this.headers['X-BAPI-SIGN'] && retCode !== 0) {
+        return { retCode, retMsg: 'API key is invalid.', result: {} };
+      }
+      return { retCode: 0, retMsg: 'OK', result: publicFixture(this.url) };
+    }
+    async loadString() { return ''; }
+  };
+  globalThis.WebView = class {
+    async loadHTML(html) { presentedHtml = html; }
+    async present() { return true; }
+  };
+  globalThis.Alert = class {
+    constructor() { this.title = ''; this.message = ''; }
+    addAction() {} addDestructiveAction() {} addCancelAction() {}
+    addTextField() {} addSecureTextField() {}
+    textFieldValue() { return ''; }
+    async present() { errors.push(this.title + '｜' + this.message); return -1; }
+    async presentSheet() { return -1; }
+  };
+  globalThis.Script = { complete() {} };
+  const realLog = console.log;
+  console.log = () => {};
+  try {
+    await import(PATH + '?t=' + Date.now() + Math.random());
+  } finally {
+    console.log = realLog;
+  }
+  return { hosts, html: presentedHtml, errors };
+}
+
+test('未設定環境時，私有端點打正式站', async () => {
+  const { hosts } = await runWithEnv(null);
+  const signed = hosts.filter((h) => !h.includes('/v5/market/'));
+  assert.ok(signed.length > 0);
+  for (const h of signed) assert.ok(h.startsWith('https://api.bybit.com/'), h);
+});
+
+test('選模擬交易時，私有端點改打 api-demo，行情仍走正式站', async () => {
+  const { hosts } = await runWithEnv('demo');
+  const signed = hosts.filter((h) => !h.includes('/v5/market/'));
+  const market = hosts.filter((h) => h.includes('/v5/market/'));
+  assert.ok(signed.length > 0);
+  for (const h of signed) assert.ok(h.startsWith('https://api-demo.bybit.com/'), h);
+  for (const h of market) assert.ok(h.startsWith('https://api.bybit.com/'), `Demo 應共用正式站行情：${h}`);
+});
+
+test('選測試網時，行情與私有端點都改打 api-testnet', async () => {
+  const { hosts } = await runWithEnv('testnet');
+  for (const h of hosts) assert.ok(h.startsWith('https://api-testnet.bybit.com/'), h);
+});
+
+test('retCode 10003 會在畫面上說清楚環境可能選錯', async () => {
+  const { html } = await runWithEnv('live', { retCode: 10003 });
+  assert.match(html, /無法讀取帳戶資料/);
+  assert.match(html, /環境選錯/);
+  assert.match(html, /模擬交易與測試網各自發自己的 Key/);
+  assert.ok(!html.includes(FAKE_SECRET));
+});
+
+test('簽章帶上 X-BAPI-SIGN-TYPE', () => {
+  assert.match(source, /'X-BAPI-SIGN-TYPE': '2'/);
+});
+
+test('憑證讀出時會先清掉不可見字元', () => {
+  assert.match(source, /sanitizeCredential\(kcGet\(KEY_API_KEY\)\)/);
+  assert.match(source, /sanitizeCredential\(kcGet\(KEY_API_SECRET\)\)/);
+});

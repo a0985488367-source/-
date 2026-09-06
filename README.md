@@ -25,7 +25,17 @@
 
 ### 連接 Bybit（唯讀）
 
-在 Scriptable 裡執行 → 選「連接 Bybit（唯讀）」。
+在 Scriptable 裡執行 → 選「連接 Bybit（唯讀）」，**先選環境**：
+
+| 環境 | 私有端點 | 行情 |
+| --- | --- | --- |
+| 正式站 | `api.bybit.com` | `api.bybit.com` |
+| 模擬交易 Demo | `api-demo.bybit.com` | `api.bybit.com` |
+| 測試網 Testnet | `api-testnet.bybit.com` | `api-testnet.bybit.com` |
+
+**API Key 綁環境。** 模擬交易與測試網各自發自己的 Key，拿去打正式站會得到
+`retCode 10003 API key is invalid`。連接失敗時第一個要檢查的就是環境。
+程式會把這個錯誤碼翻成中文並指出該檢查什麼。
 
 請在 Bybit 建立**只讀權限**的 API Key。程式端另有三道限制：
 
@@ -100,7 +110,7 @@ npm run build   # 同時產生瀏覽器版與 iPhone 版
 ## 驗證
 
 ```bash
-npm test          # 180 項測試
+npm test          # 196 項測試
 npx tsc --noEmit  # TypeScript 嚴格模式
 npm run build
 ```
