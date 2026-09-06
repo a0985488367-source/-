@@ -13,7 +13,7 @@
 import { listHtml, statText, DISCLAIMER_HTML } from './render.js';
 import { PROVIDER, ENGINE_VERSION } from './scan-engine.js';
 import { normalizeEnv, ENV_LABEL } from './bybit-base.js';
-import { CRON_MINUTES, KV_KEYS, WORKER_VERSION, loadAccount, loadHeartbeat, loadState } from './worker-core.js';
+import { CRON_MINUTES, WORKER_VERSION, fetchAccount, loadHeartbeat, loadState, makeBybitClient } from './worker-core.js';
 
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' };
 const HTML_HEADERS = { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' };
@@ -112,7 +112,10 @@ export async function handleRequest({ request, env, kv, now = Date.now() }) {
 
   if (path === '/') {
     const state = await loadState(kv);
-    const account = isAuthorized(url, env) ? await loadAccount(kv) : null;
+    // 帳戶資料不存 KV。帶對 Token 的人才即時去 Bybit 查一次。
+    const account = isAuthorized(url, env)
+      ? await fetchAccount(makeBybitClient(env), env)
+      : null;
     return new Response(pageHtml(state, account, heartbeat, health, env, now), { headers: HTML_HEADERS });
   }
 

@@ -24,6 +24,8 @@ import {
   parseKlines,
   parseOpenInterest,
   parseOrderbook,
+  assessDepth,
+  maxTolerablePositionUsd,
   passesUniverseFilter,
   rankUniverse,
   splitByGroup,
@@ -51,8 +53,6 @@ export const KV_KEYS = Object.freeze({
   latest: 'state:latest',
   heartbeat: 'state:heartbeat',
   notify: 'state:notify',
-  /** 帳戶資料另外存，讀取需要管理 Token */
-  account: 'state:account',
 });
 
 /* ------------------------------------------------------------------ */
@@ -163,13 +163,10 @@ export async function runScan(client, now = Date.now()) {
   for (const item of needsDepth) {
     try {
       const ob = await client.publicGet('/v5/market/orderbook', { category: 'linear', symbol: item.row.symbol, limit: 50 });
-      const kl = item.candidate;
-      // 只補深度資訊，不重算閘門
-      const depth = parseOrderbook(ob);
-      const rebuilt = buildCandidate(item.row, [], [], depth);
-      item.candidate.depthUsd = rebuilt.depthUsd;
-      item.candidate.maxPositionUsd = rebuilt.maxPositionUsd;
-      void kl;
+      // 只補深度資訊，閘門結果不重算
+      const depth = assessDepth(parseOrderbook(ob));
+      item.candidate.depthUsd = depth.thinnerSideUsd;
+      item.candidate.maxPositionUsd = maxTolerablePositionUsd(depth.thinnerSideUsd);
     } catch {
       // 深度抓不到就維持沒有深度資訊，不影響閘門結果
     }
@@ -269,7 +266,11 @@ export async function notify(state, env, kv, poster, now = Date.now()) {
     }
   }
 
-  await kv.put(KV_KEYS.notify, JSON.stringify(picked.state));
+  // 只有真的送出通知、或清掉了過期紀錄時才寫回，
+  // 免費方案的 KV 每日寫入額度有限，不值得每輪都寫一次沒變的狀態。
+  const nextJson = JSON.stringify(picked.state);
+  if (nextJson !== JSON.stringify(prev)) await kv.put(KV_KEYS.notify, nextJson);
+
   return { sent, error: lastError, skipped: null };
 }
 
@@ -284,11 +285,10 @@ export async function notify(state, env, kv, poster, now = Date.now()) {
  * 帳戶只在本次執行的記憶體裡用來發保護單警示。
  */
 export async function saveState(kv, state, now = Date.now()) {
+  // 帳戶資料刻意不落地。要看帳戶的人帶 Token 時才即時去 Bybit 查，
+  // 這樣既不會有帳戶資料存在 KV 裡，也省下每天約 288 次 KV 寫入。
   const publicState = { ...state, account: null };
   await kv.put(KV_KEYS.latest, JSON.stringify(publicState));
-  if (state.account) {
-    await kv.put(KV_KEYS.account, JSON.stringify({ ...state.account, savedAt: now }));
-  }
   await kv.put(KV_KEYS.heartbeat, JSON.stringify({
     at: now,
     version: WORKER_VERSION,
@@ -301,15 +301,6 @@ export async function saveState(kv, state, now = Date.now()) {
 export async function loadState(kv) {
   try {
     const raw = await kv.get(KV_KEYS.latest);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-}
-
-export async function loadAccount(kv) {
-  try {
-    const raw = await kv.get(KV_KEYS.account);
     return raw ? JSON.parse(raw) : null;
   } catch {
     return null;

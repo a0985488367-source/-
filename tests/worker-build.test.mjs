@@ -241,7 +241,7 @@ test('設定憑證後會讀帳戶，且簽章標頭齊全', async () => {
   }
 });
 
-test('帳戶資料存在獨立的 KV key，不會混進公開狀態', async () => {
+test('帳戶資料完全不落地，KV 裡找不到餘額或持倉', async () => {
   const net = installFetch();
   try {
     const kv = makeKv();
@@ -249,10 +249,80 @@ test('帳戶資料存在獨立的 KV key，不會混進公開狀態', async () =
     await worker.scheduled({}, makeEnv({
       GUARDIAN_KV: kv, BYBIT_API_KEY: SECRET_KEY, BYBIT_API_SECRET: SECRET_SECRET,
     }), {});
-    const latest = kv.store.get('state:latest');
-    assert.ok(!latest.includes('totalEquity'), '公開狀態不得含餘額');
-    assert.equal(JSON.parse(latest).account, null);
-    assert.ok(kv.store.get('state:account'), '帳戶資料應另存');
+    const everything = [...kv.store.values()].join('\n');
+    assert.ok(!everything.includes('totalEquity'), 'KV 不得含餘額');
+    assert.ok(!everything.includes('avgPrice'), 'KV 不得含持倉');
+    assert.equal(JSON.parse(kv.store.get('state:latest')).account, null);
+    assert.ok(!kv.store.has('state:account'), '不應再有帳戶專用的 KV key');
+  } finally {
+    net.restore();
+  }
+});
+
+test('每輪排程的 KV 寫入次數壓在免費額度內', async () => {
+  const net = installFetch();
+  try {
+    const kv = makeKv();
+    const writes = [];
+    const original = kv.put.bind(kv);
+    kv.put = async (k, v) => { writes.push(k); return original(k, v); };
+
+    const worker = await loadWorker();
+    const env = makeEnv({
+      GUARDIAN_KV: kv, BYBIT_API_KEY: SECRET_KEY, BYBIT_API_SECRET: SECRET_SECRET, DISCORD_WEBHOOK: HOOK,
+    });
+
+    await worker.scheduled({}, env, {});
+    const firstRun = writes.length;
+    writes.length = 0;
+
+    await worker.scheduled({}, env, {});
+    const steadyRun = writes.length;
+
+    // 每 5 分鐘一輪，一天 288 輪。免費方案每日 KV 寫入 1000 筆。
+    assert.ok(steadyRun * 288 < 1000,
+      `穩定狀態每輪寫 ${steadyRun} 次，一天 ${steadyRun * 288} 次，超過免費額度 1000`);
+    assert.ok(firstRun <= 3, `首輪寫 ${firstRun} 次`);
+    assert.ok(!writes.includes('state:notify'),
+      '通知狀態沒變就不該重寫');
+  } finally {
+    net.restore();
+  }
+});
+
+test('帶 Token 時即時查帳戶，不從 KV 讀', async () => {
+  const net = installFetch();
+  try {
+    const kv = makeKv();
+    const worker = await loadWorker();
+    const env = makeEnv({ BYBIT_API_KEY: SECRET_KEY, BYBIT_API_SECRET: SECRET_SECRET, ADMIN_TOKEN: TOKEN });
+    await worker.scheduled({}, { ...env, GUARDIAN_KV: kv }, {});
+
+    const before = net.calls.length;
+    const html = await (await get(worker, env, kv, '/?token=' + TOKEN)).text();
+    const after = net.calls.length;
+
+    assert.match(html, /Bybit 帳戶 · 唯讀/);
+    assert.equal(after - before, 3, '應即時發出三個唯讀查詢');
+    for (const c of net.calls.slice(before)) {
+      assert.ok(c.headers['X-BAPI-SIGN'], '應為簽章請求');
+    }
+  } finally {
+    net.restore();
+  }
+});
+
+test('沒有 Token 時不會為了頁面去查帳戶', async () => {
+  const net = installFetch();
+  try {
+    const kv = makeKv();
+    const worker = await loadWorker();
+    const env = makeEnv({ BYBIT_API_KEY: SECRET_KEY, BYBIT_API_SECRET: SECRET_SECRET, ADMIN_TOKEN: TOKEN });
+    await worker.scheduled({}, { ...env, GUARDIAN_KV: kv }, {});
+
+    const before = net.calls.length;
+    await get(worker, env, kv, '/');
+    assert.equal(net.calls.length, before, '未授權的頁面請求不該打 Bybit');
   } finally {
     net.restore();
   }

@@ -1,0 +1,17 @@
+# Discord 心跳守衛 —— 給用電腦以 wrangler 部署的人
+#
+#   npx wrangler deploy -c wrangler.watchdog.toml
+#   npx wrangler secret put GUARDIAN_URL    -c wrangler.watchdog.toml
+#   npx wrangler secret put DISCORD_WEBHOOK -c wrangler.watchdog.toml
+
+name = "crypto-radar-watchdog"
+main = "public/crypto-radar-watchdog.worker.js"
+compatibility_date = "2025-01-01"
+
+[[kv_namespaces]]
+binding = "WATCHDOG_KV"
+id = "在此填入你的 KV namespace ID"
+
+[triggers]
+# 刻意與 Guardian 錯開，避免同時執行時看到半完成的狀態
+crons = ["4,14,24,34,44,54 * * * *"]
