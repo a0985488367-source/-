@@ -8,38 +8,13 @@
  * 抓資料在各自的宿主環境做（瀏覽器用 fetch，Scriptable 用 Request）。
  */
 
+import { ago, fmoney, fpct, fusd, fx, priceDigits, sgn } from './format.js';
+
+export { ago, fpct, fusd, fx, priceDigits, sgn };
+
 export const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;',
 }[c]));
-
-export function priceDigits(p) {
-  if (!Number.isFinite(p)) return 4;
-  if (p >= 1000) return 1;
-  if (p >= 10) return 3;
-  if (p >= 1) return 4;
-  if (p >= 0.01) return 5;
-  return 7;
-}
-
-export const fx = (v, d) => (Number.isFinite(v) ? v.toFixed(d ?? 4) : '—');
-export const fpct = (v) => (Number.isFinite(v) ? (v >= 0 ? '+' : '') + v.toFixed(2) + '%' : '—');
-
-export function fusd(v) {
-  if (!Number.isFinite(v) || v <= 0) return '—';
-  if (v >= 1e9) return (v / 1e9).toFixed(2) + 'B';
-  if (v >= 1e6) return (v / 1e6).toFixed(2) + 'M';
-  if (v >= 1e3) return (v / 1e3).toFixed(1) + 'K';
-  return v.toFixed(0);
-}
-
-export const sgn = (v) => (Number.isFinite(v) ? (v >= 0 ? 'pos' : 'neg') : '');
-
-export function ago(ts, now) {
-  if (!ts) return '尚未掃描';
-  const s = Math.max(0, Math.round(((now ?? Date.now()) - ts) / 1000));
-  if (s < 60) return s + ' 秒前';
-  return Math.round(s / 60) + ' 分鐘前';
-}
 
 const STAGE_TEXT = {
   NEAR_BREAKOUT: '接近突破',
@@ -108,6 +83,95 @@ export function cardHtml(c) {
   </div>`;
 }
 
+/* ------------------------------------------------------------------ */
+/* 帳戶面板（唯讀）                                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 帳戶摘要與持倉。
+ * 全部來自 Bybit 唯讀端點，本工具不會下單也不會改單。
+ */
+export function accountHtml(account) {
+  if (!account) return '';
+
+  if (account.error) {
+    return `<h2>Bybit 帳戶</h2>
+      <div class="banner err">
+        <div class="bt">無法讀取帳戶資料</div>
+        <div class="bd">${esc(account.error)}</div>
+      </div>`;
+  }
+
+  const w = account.wallet;
+  const positions = account.positions ?? [];
+  const today = account.todayPnl;
+
+  const walletBlock = w ? `
+    <div class="grid">
+      <div class="cell"><span>總權益</span><b>${fmoney(w.totalEquityUsd)} USDT</b></div>
+      <div class="cell"><span>可用</span><b>${fmoney(w.totalAvailableUsd)} USDT</b></div>
+      <div class="cell"><span>未實現</span><b class="${sgn(w.unrealizedPnlUsd)}">${fmoney(w.unrealizedPnlUsd)}</b></div>
+      <div class="cell"><span>今日已實現</span><b class="${sgn(today?.total)}">${fmoney(today?.total)}</b></div>
+    </div>` : '';
+
+  const posBlocks = positions.length
+    ? positions.map((p) => {
+        const prot = p.protection ?? { level: 'danger', text: '未知' };
+        const d = priceDigits(p.entryPrice);
+        return `
+        <div class="card ${prot.level === 'ok' ? '' : 'excluded'}">
+          <div class="chead">
+            <span class="sym">${esc(p.symbol)}</span>
+            <span class="tag ${p.side === 'long' ? 'near' : 'excl'}">${p.side === 'long' ? '▲ 多' : '▼ 空'}</span>
+            <span class="tag ${prot.level === 'ok' ? 'build' : 'meme'}">${esc(prot.text)}</span>
+            <span class="score"><b class="${sgn(p.unrealizedPnl)}">${fmoney(p.unrealizedPnl)}</b><span>未實現</span></span>
+          </div>
+          <div class="grid">
+            <div class="cell"><span>進場</span><b>${fx(p.entryPrice, d)}</b></div>
+            <div class="cell"><span>標記價</span><b>${fx(p.markPrice, d)}</b></div>
+            <div class="cell"><span>數量</span><b>${fx(p.size, 4)}</b></div>
+            <div class="cell"><span>槓桿</span><b>${fx(p.leverage, 0)}x</b></div>
+            <div class="cell"><span>TP</span><b>${p.takeProfit > 0 ? fx(p.takeProfit, d) : '未設定'}</b></div>
+            <div class="cell"><span>SL</span><b>${p.stopLoss > 0 ? fx(p.stopLoss, d) : '未設定'}</b></div>
+          </div>
+        </div>`;
+      }).join('')
+    : '<div class="empty">目前沒有持倉。</div>';
+
+  return `<h2>Bybit 帳戶 · 唯讀</h2>
+    <div class="card">
+      <div class="chead">
+        <span class="sym">帳戶摘要</span>
+        <span class="tag build">${esc(account.keyMask ?? '已連接')}</span>
+        <span class="noauto" style="margin-left:auto">唯讀 · 不會下單</span>
+      </div>
+      ${walletBlock}
+    </div>
+    ${posBlocks}`;
+}
+
+/* ------------------------------------------------------------------ */
+/* 候選分區                                                             */
+/* ------------------------------------------------------------------ */
+
+function sectionHtml(title, subtitle, candidates, emptyText) {
+  if (!candidates.length) {
+    return `<h2>${title}</h2><div class="empty">${emptyText}</div>`;
+  }
+  const ready = candidates.filter((c) => c.entryReady);
+  const watch = candidates.filter((c) => !c.entryReady);
+
+  let html = `<h2>${title} · ${candidates.length} 檔</h2>`;
+  if (subtitle) html += `<div class="note" style="margin:0 0 10px">${subtitle}</div>`;
+  if (ready.length) {
+    html += `<div class="subhead">符合全部進場條件 · ${ready.length} 檔</div>` + ready.map(cardHtml).join('');
+  }
+  if (watch.length) {
+    html += `<div class="subhead">觀察中 · ${watch.length} 檔</div>` + watch.map(cardHtml).join('');
+  }
+  return html;
+}
+
 /** 候選清單，含錯誤與空狀態 */
 export function listHtml(state) {
   let html = '';
@@ -126,16 +190,24 @@ export function listHtml(state) {
     </div>`;
   }
 
-  const candidates = state.candidates ?? [];
-  const ready = candidates.filter((c) => c.entryReady);
-  const watch = candidates.filter((c) => !c.entryReady);
+  html += accountHtml(state.account);
 
-  if (!candidates.length && !state.busy && state.scannedAt) {
-    html += '<div class="empty">目前沒有符合條件的早期候選。<br>這是正常結果 —— 多數時間市場都不在壓縮待突破的狀態。</div>';
+  const groups = state.groups ?? { main: [], meme: [] };
+
+  if (!state.busy && state.scannedAt) {
+    html += sectionHtml(
+      '主幣',
+      '固定觀察清單，不論是否符合快噴型態都會顯示目前狀態。',
+      groups.main,
+      '主幣資料尚未取得。',
+    );
+    html += sectionHtml(
+      '迷因幣／高風險',
+      '一律套用固定 0.15% 防守倉，不因分數提高倉位。判斷不出來的標的也歸在這一區。',
+      groups.meme,
+      '目前沒有符合條件的候選。多數時間市場都不在壓縮待突破的狀態。',
+    );
   }
-
-  if (ready.length) html += '<h2>條件式 Entry · ' + ready.length + ' 檔</h2>' + ready.map(cardHtml).join('');
-  if (watch.length) html += '<h2>觀察中 · ' + watch.length + ' 檔</h2>' + watch.map(cardHtml).join('');
 
   return html;
 }

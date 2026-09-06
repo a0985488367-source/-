@@ -129,6 +129,12 @@ h2 { font-size: 13px; color: var(--muted); font-weight: 600; letter-spacing: .06
 .disc ul { margin: 5px 0 0; padding-left: 17px; }
 
 @media (max-width: 380px) { .grid { grid-template-columns: 1fr; } h1 { font-size: 17px; } }
+
+.subhead {
+  font-size: 12px; color: var(--muted); margin: 14px 0 8px;
+  display: flex; align-items: center; gap: 8px;
+}
+.subhead::after { content: ""; flex: 1; height: 1px; background: var(--line-soft); }
 </style>
 </head>
 <body>
@@ -151,7 +157,8 @@ h2 { font-size: 13px; color: var(--muted); font-weight: 600; letter-spacing: .06
 
   <div class="note">
     <strong>早期快噴掃描</strong>：在 Bybit USDT 線性永續中，尋找「已壓縮、量能溫和放大、未平倉量增加、且尚未突破前高」的標的。
-    已經噴過的一律排除。<span id="stat"></span>
+    已經噴過的一律排除。主幣與迷因幣分開顯示。<span id="stat"></span>
+    <div style="margin-top:6px">帳戶連接與 Discord 通知請用 iPhone 版（憑證存在裝置 Keychain，瀏覽器版刻意不支援）。</div>
   </div>
 
   <div id="list"></div>
@@ -175,6 +182,54 @@ h2 { font-size: 13px; color: var(--muted); font-weight: 600; letter-spacing: .06
    改完執行：node scripts/build-standalone-app.mjs
    ============================================================ */
 /**
+ * Bybit API 基底位址。
+ * 獨立成一個模組，讓公開行情與唯讀私有端點共用同一個常數，
+ * 避免內嵌成單一作用域時重複宣告。
+ */
+const BYBIT_BASE = 'https://api.bybit.com';
+
+/**
+ * format — 共用數值格式化
+ *
+ * 畫面（render.js）與通知（discord.js）都要把同一批數字寫成字串。
+ * 抽在這裡，兩邊格式一致，也避免內嵌成單一作用域時重複宣告。
+ */
+
+/** 依價格量級決定小數位數，避免低價幣顯示成 0.0000 */
+function priceDigits(p) {
+  if (!Number.isFinite(p)) return 4;
+  if (p >= 1000) return 1;
+  if (p >= 10) return 3;
+  if (p >= 1) return 4;
+  if (p >= 0.01) return 5;
+  return 7;
+}
+
+const fx = (v, d) => (Number.isFinite(v) ? v.toFixed(d ?? 4) : '—');
+
+const fpct = (v) => (Number.isFinite(v) ? (v >= 0 ? '+' : '') + v.toFixed(2) + '%' : '—');
+
+const fmoney = (v) => (Number.isFinite(v) ? (v >= 0 ? '' : '-') + Math.abs(v).toFixed(2) : '—');
+
+function fusd(v) {
+  if (!Number.isFinite(v) || v <= 0) return '—';
+  if (v >= 1e9) return (v / 1e9).toFixed(2) + 'B';
+  if (v >= 1e6) return (v / 1e6).toFixed(2) + 'M';
+  if (v >= 1e3) return (v / 1e3).toFixed(1) + 'K';
+  return v.toFixed(0);
+}
+
+/** CSS class 用的正負號 */
+const sgn = (v) => (Number.isFinite(v) ? (v >= 0 ? 'pos' : 'neg') : '');
+
+function ago(ts, now) {
+  if (!ts) return '尚未掃描';
+  const s = Math.max(0, Math.round(((now ?? Date.now()) - ts) / 1000));
+  if (s < 60) return s + ' 秒前';
+  return Math.round(s / 60) + ' 分鐘前';
+}
+
+/**
  * scan-engine — Crypto Radar Guardian 獨立版掃描引擎
  *
  * 純邏輯，不碰 DOM，可在瀏覽器與 node 測試中共用。
@@ -191,7 +246,8 @@ h2 { font-size: 13px; color: var(--muted); font-weight: 600; letter-spacing: .06
  * 本引擎只做研究與觀察，不下單、不連接帳戶、不處理任何金鑰。
  */
 
-const BYBIT_BASE = 'https://api.bybit.com';
+
+{ BYBIT_BASE };
 const PROVIDER = 'Bybit Pre-Breakout';
 const ENGINE_VERSION = '10.0-standalone';
 
@@ -253,6 +309,26 @@ const MAJOR_BASES = Object.freeze([
 ]);
 
 const MEME_FIXED_RISK_PERCENT = 0.15;
+
+/**
+ * 主幣固定觀察清單。
+ *
+ * 這幾檔不論有沒有擠進第一階段排名都會被分析，
+ * 因為使用者要的是「隨時看得到主幣狀態」，而不是等它剛好符合快噴型態。
+ */
+const MAIN_WATCHLIST = Object.freeze(['BTCUSDT', 'ETHUSDT', 'SOLUSDT']);
+
+/**
+ * 分組：主幣 或 迷因幣／高風險。
+ *
+ * 主幣 = 在觀察清單內，或被判定為主流標的。
+ * 其餘一律歸到迷因幣／高風險（含判斷不出來而 fail-safe 的標的）。
+ */
+function coinGroup(symbol, isMeme, watchlist) {
+  const list = watchlist ?? MAIN_WATCHLIST;
+  if (list.includes(String(symbol).toUpperCase())) return 'main';
+  return isMeme ? 'meme' : 'main';
+}
 
 const STABLECOINS = new Set(['USDC', 'USDT', 'DAI', 'TUSD', 'FDUSD', 'USDE', 'PYUSD', 'BUSD', 'USDD']);
 
@@ -395,6 +471,29 @@ function rankUniverse(rows) {
     const score = (r) => r.rangePosition24h * 0.7 + Math.min(1, Math.log10(Math.max(r.turnover24hUsd, 1)) / 9) * 0.3;
     return score(b) - score(a);
   }).slice(0, UNIVERSE.maxDetailedAnalysis);
+}
+
+/**
+ * 決定要詳細分析哪些標的。
+ *
+ * 主幣觀察清單一律納入（即使沒通過第一階段門檻，使用者仍要看到它的狀態）。
+ * 其餘標的走正常的第一階段篩選與排名，最多取 UNIVERSE.maxDetailedAnalysis 檔。
+ */
+function selectTargets(rows, watchlist) {
+  const list = (watchlist ?? MAIN_WATCHLIST).map((s) => s.toUpperCase());
+  const bySymbol = new Map();
+  for (const r of rows ?? []) bySymbol.set(String(r.symbol).toUpperCase(), r);
+
+  const main = [];
+  for (const symbol of list) {
+    const row = bySymbol.get(symbol);
+    if (row) main.push(row);
+  }
+
+  const rest = (rows ?? []).filter((r) => !list.includes(String(r.symbol).toUpperCase()));
+  const scan = rankUniverse(rest.filter(passesUniverseFilter));
+
+  return { main, scan, all: [...main, ...scan] };
 }
 
 /* ------------------------------------------------------------------ */
@@ -733,6 +832,7 @@ function buildCandidate(row, klines, oiSeries, orderbook) {
     maxPositionUsd,
     suggestedRiskPercent: meme.isMeme ? MEME_FIXED_RISK_PERCENT : null,
     riskLabel: riskLabel(meme),
+    group: coinGroup(row.symbol, meme.isMeme),
     bybitUrl: bybitContractUrl(row.symbol),
   };
 }
@@ -761,6 +861,22 @@ function checkInvariants(c) {
 }
 
 /**
+ * 依分組拆開候選，各組內部都是「可進場的排前面，其餘依分數」。
+ * 主幣不套用 MAX_DISPLAYED 上限：觀察清單有幾檔就顯示幾檔。
+ */
+function splitByGroup(candidates) {
+  const sortFn = (a, b) => {
+    if (a.entryReady !== b.entryReady) return a.entryReady ? -1 : 1;
+    return b.score - a.score;
+  };
+  const list = candidates ?? [];
+  return {
+    main: list.filter((c) => c.group === 'main').sort(sortFn),
+    meme: list.filter((c) => c.group === 'meme').sort(sortFn).slice(0, MAX_DISPLAYED),
+  };
+}
+
+/**
  * render — 純字串渲染，不碰 DOM
  *
  * 網頁版與 iPhone Scriptable 版共用同一份卡片標記，
@@ -770,38 +886,12 @@ function checkInvariants(c) {
  * 抓資料在各自的宿主環境做（瀏覽器用 fetch，Scriptable 用 Request）。
  */
 
+
+{ ago, fpct, fusd, fx, priceDigits, sgn };
+
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;',
 }[c]));
-
-function priceDigits(p) {
-  if (!Number.isFinite(p)) return 4;
-  if (p >= 1000) return 1;
-  if (p >= 10) return 3;
-  if (p >= 1) return 4;
-  if (p >= 0.01) return 5;
-  return 7;
-}
-
-const fx = (v, d) => (Number.isFinite(v) ? v.toFixed(d ?? 4) : '—');
-const fpct = (v) => (Number.isFinite(v) ? (v >= 0 ? '+' : '') + v.toFixed(2) + '%' : '—');
-
-function fusd(v) {
-  if (!Number.isFinite(v) || v <= 0) return '—';
-  if (v >= 1e9) return (v / 1e9).toFixed(2) + 'B';
-  if (v >= 1e6) return (v / 1e6).toFixed(2) + 'M';
-  if (v >= 1e3) return (v / 1e3).toFixed(1) + 'K';
-  return v.toFixed(0);
-}
-
-const sgn = (v) => (Number.isFinite(v) ? (v >= 0 ? 'pos' : 'neg') : '');
-
-function ago(ts, now) {
-  if (!ts) return '尚未掃描';
-  const s = Math.max(0, Math.round(((now ?? Date.now()) - ts) / 1000));
-  if (s < 60) return s + ' 秒前';
-  return Math.round(s / 60) + ' 分鐘前';
-}
 
 const STAGE_TEXT = {
   NEAR_BREAKOUT: '接近突破',
@@ -870,6 +960,95 @@ function cardHtml(c) {
   </div>`;
 }
 
+/* ------------------------------------------------------------------ */
+/* 帳戶面板（唯讀）                                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 帳戶摘要與持倉。
+ * 全部來自 Bybit 唯讀端點，本工具不會下單也不會改單。
+ */
+function accountHtml(account) {
+  if (!account) return '';
+
+  if (account.error) {
+    return `<h2>Bybit 帳戶</h2>
+      <div class="banner err">
+        <div class="bt">無法讀取帳戶資料</div>
+        <div class="bd">${esc(account.error)}</div>
+      </div>`;
+  }
+
+  const w = account.wallet;
+  const positions = account.positions ?? [];
+  const today = account.todayPnl;
+
+  const walletBlock = w ? `
+    <div class="grid">
+      <div class="cell"><span>總權益</span><b>${fmoney(w.totalEquityUsd)} USDT</b></div>
+      <div class="cell"><span>可用</span><b>${fmoney(w.totalAvailableUsd)} USDT</b></div>
+      <div class="cell"><span>未實現</span><b class="${sgn(w.unrealizedPnlUsd)}">${fmoney(w.unrealizedPnlUsd)}</b></div>
+      <div class="cell"><span>今日已實現</span><b class="${sgn(today?.total)}">${fmoney(today?.total)}</b></div>
+    </div>` : '';
+
+  const posBlocks = positions.length
+    ? positions.map((p) => {
+        const prot = p.protection ?? { level: 'danger', text: '未知' };
+        const d = priceDigits(p.entryPrice);
+        return `
+        <div class="card ${prot.level === 'ok' ? '' : 'excluded'}">
+          <div class="chead">
+            <span class="sym">${esc(p.symbol)}</span>
+            <span class="tag ${p.side === 'long' ? 'near' : 'excl'}">${p.side === 'long' ? '▲ 多' : '▼ 空'}</span>
+            <span class="tag ${prot.level === 'ok' ? 'build' : 'meme'}">${esc(prot.text)}</span>
+            <span class="score"><b class="${sgn(p.unrealizedPnl)}">${fmoney(p.unrealizedPnl)}</b><span>未實現</span></span>
+          </div>
+          <div class="grid">
+            <div class="cell"><span>進場</span><b>${fx(p.entryPrice, d)}</b></div>
+            <div class="cell"><span>標記價</span><b>${fx(p.markPrice, d)}</b></div>
+            <div class="cell"><span>數量</span><b>${fx(p.size, 4)}</b></div>
+            <div class="cell"><span>槓桿</span><b>${fx(p.leverage, 0)}x</b></div>
+            <div class="cell"><span>TP</span><b>${p.takeProfit > 0 ? fx(p.takeProfit, d) : '未設定'}</b></div>
+            <div class="cell"><span>SL</span><b>${p.stopLoss > 0 ? fx(p.stopLoss, d) : '未設定'}</b></div>
+          </div>
+        </div>`;
+      }).join('')
+    : '<div class="empty">目前沒有持倉。</div>';
+
+  return `<h2>Bybit 帳戶 · 唯讀</h2>
+    <div class="card">
+      <div class="chead">
+        <span class="sym">帳戶摘要</span>
+        <span class="tag build">${esc(account.keyMask ?? '已連接')}</span>
+        <span class="noauto" style="margin-left:auto">唯讀 · 不會下單</span>
+      </div>
+      ${walletBlock}
+    </div>
+    ${posBlocks}`;
+}
+
+/* ------------------------------------------------------------------ */
+/* 候選分區                                                             */
+/* ------------------------------------------------------------------ */
+
+function sectionHtml(title, subtitle, candidates, emptyText) {
+  if (!candidates.length) {
+    return `<h2>${title}</h2><div class="empty">${emptyText}</div>`;
+  }
+  const ready = candidates.filter((c) => c.entryReady);
+  const watch = candidates.filter((c) => !c.entryReady);
+
+  let html = `<h2>${title} · ${candidates.length} 檔</h2>`;
+  if (subtitle) html += `<div class="note" style="margin:0 0 10px">${subtitle}</div>`;
+  if (ready.length) {
+    html += `<div class="subhead">符合全部進場條件 · ${ready.length} 檔</div>` + ready.map(cardHtml).join('');
+  }
+  if (watch.length) {
+    html += `<div class="subhead">觀察中 · ${watch.length} 檔</div>` + watch.map(cardHtml).join('');
+  }
+  return html;
+}
+
 /** 候選清單，含錯誤與空狀態 */
 function listHtml(state) {
   let html = '';
@@ -888,16 +1067,24 @@ function listHtml(state) {
     </div>`;
   }
 
-  const candidates = state.candidates ?? [];
-  const ready = candidates.filter((c) => c.entryReady);
-  const watch = candidates.filter((c) => !c.entryReady);
+  html += accountHtml(state.account);
 
-  if (!candidates.length && !state.busy && state.scannedAt) {
-    html += '<div class="empty">目前沒有符合條件的早期候選。<br>這是正常結果 —— 多數時間市場都不在壓縮待突破的狀態。</div>';
+  const groups = state.groups ?? { main: [], meme: [] };
+
+  if (!state.busy && state.scannedAt) {
+    html += sectionHtml(
+      '主幣',
+      '固定觀察清單，不論是否符合快噴型態都會顯示目前狀態。',
+      groups.main,
+      '主幣資料尚未取得。',
+    );
+    html += sectionHtml(
+      '迷因幣／高風險',
+      '一律套用固定 0.15% 防守倉，不因分數提高倉位。判斷不出來的標的也歸在這一區。',
+      groups.meme,
+      '目前沒有符合條件的候選。多數時間市場都不在壓縮待突破的狀態。',
+    );
   }
-
-  if (ready.length) html += '<h2>條件式 Entry · ' + ready.length + ' 檔</h2>' + ready.map(cardHtml).join('');
-  if (watch.length) html += '<h2>觀察中 · ' + watch.length + ' 檔</h2>' + watch.map(cardHtml).join('');
 
   return html;
 }
@@ -941,7 +1128,8 @@ async function pool(items, size, worker) {
   return out;
 }
 
-const state = { candidates: [], failed: [], scannedAt: null, universeCount: 0, analyzedCount: 0, busy: false, error: null };
+const state = { candidates: [], groups: { main: [], meme: [] }, failed: [], scannedAt: null,
+  universeCount: 0, analyzedCount: 0, busy: false, error: null, account: null };
 
 async function scan() {
   if (state.busy) return;
@@ -958,13 +1146,14 @@ async function scan() {
     setProgress(0.2);
 
     const rows = buildUniverse(instRes.list ?? [], tickRes.list ?? [], Date.now());
-    const passed = rows.filter(passesUniverseFilter);
-    state.universeCount = passed.length;
+    state.universeCount = rows.filter(passesUniverseFilter).length;
 
-    const shortlist = rankUniverse(passed);
+    const targets = selectTargets(rows);
+    const shortlist = targets.all;
     state.analyzedCount = shortlist.length;
     if (!shortlist.length) {
       state.candidates = [];
+      state.groups = { main: [], meme: [] };
       state.failed = [];
       state.scannedAt = Date.now();
       return;
@@ -987,7 +1176,8 @@ async function scan() {
       }
     });
 
-    state.candidates = rankCandidates(built.filter((c) => !c.failed));
+    state.candidates = built.filter((c) => !c.failed);
+    state.groups = splitByGroup(state.candidates);
     state.failed = built.filter((c) => c.failed);
     state.scannedAt = Date.now();
   } catch (err) {

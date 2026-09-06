@@ -15,7 +15,9 @@
  * 本引擎只做研究與觀察，不下單、不連接帳戶、不處理任何金鑰。
  */
 
-export const BYBIT_BASE = 'https://api.bybit.com';
+import { BYBIT_BASE } from './bybit-base.js';
+
+export { BYBIT_BASE };
 export const PROVIDER = 'Bybit Pre-Breakout';
 export const ENGINE_VERSION = '10.0-standalone';
 
@@ -77,6 +79,26 @@ export const MAJOR_BASES = Object.freeze([
 ]);
 
 export const MEME_FIXED_RISK_PERCENT = 0.15;
+
+/**
+ * 主幣固定觀察清單。
+ *
+ * 這幾檔不論有沒有擠進第一階段排名都會被分析，
+ * 因為使用者要的是「隨時看得到主幣狀態」，而不是等它剛好符合快噴型態。
+ */
+export const MAIN_WATCHLIST = Object.freeze(['BTCUSDT', 'ETHUSDT', 'SOLUSDT']);
+
+/**
+ * 分組：主幣 或 迷因幣／高風險。
+ *
+ * 主幣 = 在觀察清單內，或被判定為主流標的。
+ * 其餘一律歸到迷因幣／高風險（含判斷不出來而 fail-safe 的標的）。
+ */
+export function coinGroup(symbol, isMeme, watchlist) {
+  const list = watchlist ?? MAIN_WATCHLIST;
+  if (list.includes(String(symbol).toUpperCase())) return 'main';
+  return isMeme ? 'meme' : 'main';
+}
 
 const STABLECOINS = new Set(['USDC', 'USDT', 'DAI', 'TUSD', 'FDUSD', 'USDE', 'PYUSD', 'BUSD', 'USDD']);
 
@@ -219,6 +241,29 @@ export function rankUniverse(rows) {
     const score = (r) => r.rangePosition24h * 0.7 + Math.min(1, Math.log10(Math.max(r.turnover24hUsd, 1)) / 9) * 0.3;
     return score(b) - score(a);
   }).slice(0, UNIVERSE.maxDetailedAnalysis);
+}
+
+/**
+ * 決定要詳細分析哪些標的。
+ *
+ * 主幣觀察清單一律納入（即使沒通過第一階段門檻，使用者仍要看到它的狀態）。
+ * 其餘標的走正常的第一階段篩選與排名，最多取 UNIVERSE.maxDetailedAnalysis 檔。
+ */
+export function selectTargets(rows, watchlist) {
+  const list = (watchlist ?? MAIN_WATCHLIST).map((s) => s.toUpperCase());
+  const bySymbol = new Map();
+  for (const r of rows ?? []) bySymbol.set(String(r.symbol).toUpperCase(), r);
+
+  const main = [];
+  for (const symbol of list) {
+    const row = bySymbol.get(symbol);
+    if (row) main.push(row);
+  }
+
+  const rest = (rows ?? []).filter((r) => !list.includes(String(r.symbol).toUpperCase()));
+  const scan = rankUniverse(rest.filter(passesUniverseFilter));
+
+  return { main, scan, all: [...main, ...scan] };
 }
 
 /* ------------------------------------------------------------------ */
@@ -557,6 +602,7 @@ export function buildCandidate(row, klines, oiSeries, orderbook) {
     maxPositionUsd,
     suggestedRiskPercent: meme.isMeme ? MEME_FIXED_RISK_PERCENT : null,
     riskLabel: riskLabel(meme),
+    group: coinGroup(row.symbol, meme.isMeme),
     bybitUrl: bybitContractUrl(row.symbol),
   };
 }
@@ -582,4 +628,20 @@ export function checkInvariants(c) {
   if (c.stage === 'EXCLUDED' && c.entryReady) v.push('已排除卻標記為可進場');
   if (!/^https:\/\/www\.bybit\.com\//.test(c.bybitUrl)) v.push('連結未指向 Bybit');
   return v;
+}
+
+/**
+ * 依分組拆開候選，各組內部都是「可進場的排前面，其餘依分數」。
+ * 主幣不套用 MAX_DISPLAYED 上限：觀察清單有幾檔就顯示幾檔。
+ */
+export function splitByGroup(candidates) {
+  const sortFn = (a, b) => {
+    if (a.entryReady !== b.entryReady) return a.entryReady ? -1 : 1;
+    return b.score - a.score;
+  };
+  const list = candidates ?? [];
+  return {
+    main: list.filter((c) => c.group === 'main').sort(sortFn),
+    meme: list.filter((c) => c.group === 'meme').sort(sortFn).slice(0, MAX_DISPLAYED),
+  };
 }

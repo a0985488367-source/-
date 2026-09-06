@@ -12,6 +12,8 @@ import { ROOT, engineVersion, inlineModule, readText } from './lib-inline.mjs';
 
 const outPath = resolve(ROOT, 'public/crypto-radar-guardian.html');
 
+const base = inlineModule('app/bybit-base.js');
+const format = inlineModule('app/format.js');
 const engine = inlineModule('app/scan-engine.js');
 const render = inlineModule('app/render.js');
 const css = readText('app/theme.css');
@@ -38,7 +40,8 @@ async function pool(items, size, worker) {
   return out;
 }
 
-const state = { candidates: [], failed: [], scannedAt: null, universeCount: 0, analyzedCount: 0, busy: false, error: null };
+const state = { candidates: [], groups: { main: [], meme: [] }, failed: [], scannedAt: null,
+  universeCount: 0, analyzedCount: 0, busy: false, error: null, account: null };
 
 async function scan() {
   if (state.busy) return;
@@ -55,13 +58,14 @@ async function scan() {
     setProgress(0.2);
 
     const rows = buildUniverse(instRes.list ?? [], tickRes.list ?? [], Date.now());
-    const passed = rows.filter(passesUniverseFilter);
-    state.universeCount = passed.length;
+    state.universeCount = rows.filter(passesUniverseFilter).length;
 
-    const shortlist = rankUniverse(passed);
+    const targets = selectTargets(rows);
+    const shortlist = targets.all;
     state.analyzedCount = shortlist.length;
     if (!shortlist.length) {
       state.candidates = [];
+      state.groups = { main: [], meme: [] };
       state.failed = [];
       state.scannedAt = Date.now();
       return;
@@ -84,7 +88,8 @@ async function scan() {
       }
     });
 
-    state.candidates = rankCandidates(built.filter((c) => !c.failed));
+    state.candidates = built.filter((c) => !c.failed);
+    state.groups = splitByGroup(state.candidates);
     state.failed = built.filter((c) => c.failed);
     state.scannedAt = Date.now();
   } catch (err) {
@@ -164,7 +169,8 @@ ${css}
 
   <div class="note">
     <strong>早期快噴掃描</strong>：在 Bybit USDT 線性永續中，尋找「已壓縮、量能溫和放大、未平倉量增加、且尚未突破前高」的標的。
-    已經噴過的一律排除。<span id="stat"></span>
+    已經噴過的一律排除。主幣與迷因幣分開顯示。<span id="stat"></span>
+    <div style="margin-top:6px">帳戶連接與 Discord 通知請用 iPhone 版（憑證存在裝置 Keychain，瀏覽器版刻意不支援）。</div>
   </div>
 
   <div id="list"></div>
@@ -177,6 +183,10 @@ ${readText('app/disclaimer.html')}
    邏輯 app/scan-engine.js ｜ 畫面 app/render.js ｜ 樣式 app/theme.css
    改完執行：node scripts/build-standalone-app.mjs
    ============================================================ */
+${base}
+
+${format}
+
 ${engine}
 
 ${render}
