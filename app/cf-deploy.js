@@ -192,6 +192,12 @@ export function buildMetadata({ mainModule, kvBindingName, kvNamespaceId, secret
   };
 }
 
+/** 列出帳號上已經存在的 Worker 名稱 */
+export async function listScripts(client, accountId) {
+  const result = await client.call('讀取現有 Worker', 'GET', `/accounts/${accountId}/workers/scripts`);
+  return (Array.isArray(result) ? result : []).map((s) => s.id).filter(Boolean);
+}
+
 /** 上傳 Worker。multipart 的組裝由宿主環境負責，這裡只給它需要的材料。 */
 export async function uploadScript(client, accountId, scriptName, { metadata, script, mainModule, buildMultipart }) {
   const body = buildMultipart({
@@ -247,7 +253,7 @@ export function workerUrl(scriptName, subdomain) {
  */
 export async function deployWorker({
   client, accountId, scriptName, script, mainModule = 'worker.js',
-  kvBindingName, kvTitle, secrets, vars, crons, buildMultipart, onProgress,
+  kvBindingName, kvTitle, secrets, vars, crons, buildMultipart, onProgress, confirmReplace,
 }) {
   const say = onProgress ?? (() => {});
   const steps = [];
@@ -264,10 +270,27 @@ export async function deployWorker({
     steps.push(kv.created ? `已建立 KV「${kvTitle}」` : `沿用既有 KV「${kvTitle}」`);
   }
 
+  // 上傳是整份取代：程式碼、KV 綁定、Secrets 全部以這次為準，
+  // 沒帶到的就消失。所以覆蓋既有的 Worker 前一定要問過。
+  say('檢查是否已存在同名 Worker…');
+  const existing = await listScripts(client, accountId);
+  const willReplace = existing.includes(scriptName);
+  if (willReplace) {
+    const approved = confirmReplace
+      ? await confirmReplace({ scriptName, otherScripts: existing.filter((n) => n !== scriptName) })
+      : false;
+    if (!approved) {
+      throw new CloudflareError('上傳 Worker', `帳號上已經有名為「${scriptName}」的 Worker，未取得覆蓋確認，已中止。`);
+    }
+  }
+
   say('上傳 Worker…');
   const metadata = buildMetadata({ mainModule, kvBindingName, kvNamespaceId, secrets, vars });
   await uploadScript(client, accountId, scriptName, { metadata, script, mainModule, buildMultipart });
-  steps.push(`已上傳 ${scriptName}（${Math.round(script.length / 1024)} KB）`);
+  steps.push(`${willReplace ? '已覆蓋' : '已建立'} ${scriptName}（${Math.round(script.length / 1024)} KB）`);
+  if (existing.length && !willReplace) {
+    steps.push(`帳號上其他 ${existing.length} 支 Worker 未受影響`);
+  }
 
   if (crons && crons.length) {
     say('設定排程…');

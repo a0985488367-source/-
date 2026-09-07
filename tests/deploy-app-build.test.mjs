@@ -17,7 +17,7 @@ const ok = (result) => ({ success: true, result, errors: [] });
  * 模擬 Scriptable 環境並驅動選單。
  * sheetAnswers 依序回應 presentSheet，alertAnswers 依序回應 present。
  */
-async function run({ sheetAnswers = [], alertAnswers = [], textValues = [], store = new Map(), failAt = null } = {}) {
+async function run({ sheetAnswers = [], alertAnswers = [], textValues = [], store = new Map(), failAt = null, existingScripts = [] } = {}) {
   const cfCalls = [];
   const multipartParts = [];
   const alerts = [];
@@ -63,6 +63,7 @@ async function run({ sheetAnswers = [], alertAnswers = [], textValues = [], stor
 
       if (path === '/user/tokens/verify') return ok({ status: 'active' });
       if (path === '/accounts') return ok([{ id: 'acct123', name: '我的帳號' }]);
+      if (path.endsWith('/workers/scripts') && this.method === 'GET') return ok(existingScripts.map((id) => ({ id })));
       if (path.endsWith('/storage/kv/namespaces') && this.method === 'GET') return ok([]);
       if (path.endsWith('/storage/kv/namespaces') && this.method === 'POST') return ok({ id: 'kv-1' });
       if (/\/workers\/scripts\/[^/]+$/.test(path)) return ok({ id: 'script' });
@@ -161,6 +162,7 @@ test('部署 Guardian 會走完建 KV、上傳、排程、開網址', async () =
     'GET /user/tokens/verify',
     'GET /accounts/acct123/storage/kv/namespaces',
     'POST /accounts/acct123/storage/kv/namespaces',
+    'GET /accounts/acct123/workers/scripts',
     'PUT /accounts/acct123/workers/scripts/crypto-radar-guardian',
     'PUT /accounts/acct123/workers/scripts/crypto-radar-guardian/schedules',
     'POST /accounts/acct123/workers/scripts/crypto-radar-guardian/subdomain',
@@ -300,4 +302,35 @@ test('產生器輸出是決定性的', () => {
     cwd: new URL('..', import.meta.url).pathname, stdio: 'pipe',
   });
   assert.equal(readFileSync(PATH, 'utf8'), before);
+});
+
+test('帳號上有別的 Worker 時不會被動到，也不會多問', async () => {
+  const store = new Map([['crg.cf.token', CF_TOKEN], ['crg.cf.account', 'acct123']]);
+  const { cfCalls, alerts } = await run({
+    sheetAnswers: [1, -1], alertAnswers: [0, 0], store,
+    existingScripts: ['crypto-radar-guardian-24x7'],
+  });
+  assert.ok(cfCalls.some((c) => c.path.endsWith('/workers/scripts/crypto-radar-guardian')),
+    '應該有上傳');
+  assert.ok(!alerts.some((a) => a.title === '這個名字已經有 Worker 了'), '不同名不該問');
+  const done = alerts.find((a) => a.title === '部署完成');
+  assert.match(done.message, /其他 1 支 Worker 未受影響/);
+});
+
+test('同名時會跳出覆蓋警告，取消就不上傳', async () => {
+  const store = new Map([['crg.cf.token', CF_TOKEN], ['crg.cf.account', 'acct123']]);
+  const { cfCalls, alerts } = await run({
+    // 第一個 alertAnswers 是部署確認，第二個是覆蓋確認（回 -1 代表取消）
+    sheetAnswers: [1, -1], alertAnswers: [0, -1, 0], store,
+    existingScripts: ['crypto-radar-guardian'],
+  });
+  const warn = alerts.find((a) => a.title === '這個名字已經有 Worker 了');
+  assert.ok(warn, '應跳出覆蓋警告');
+  assert.match(warn.message, /整份取代/);
+  assert.match(warn.message, /部位會失去保護/);
+  assert.ok(
+    !cfCalls.some((c) => c.method === 'PUT' && c.path.endsWith('/workers/scripts/crypto-radar-guardian')),
+    '取消後不得上傳',
+  );
+  assert.ok(alerts.some((a) => a.title === '部署失敗'));
 });

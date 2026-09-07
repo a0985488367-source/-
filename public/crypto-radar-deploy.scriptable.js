@@ -227,6 +227,12 @@ function buildMetadata({ mainModule, kvBindingName, kvNamespaceId, secrets, vars
   };
 }
 
+/** 列出帳號上已經存在的 Worker 名稱 */
+async function listScripts(client, accountId) {
+  const result = await client.call('讀取現有 Worker', 'GET', `/accounts/${accountId}/workers/scripts`);
+  return (Array.isArray(result) ? result : []).map((s) => s.id).filter(Boolean);
+}
+
 /** 上傳 Worker。multipart 的組裝由宿主環境負責，這裡只給它需要的材料。 */
 async function uploadScript(client, accountId, scriptName, { metadata, script, mainModule, buildMultipart }) {
   const body = buildMultipart({
@@ -282,7 +288,7 @@ function workerUrl(scriptName, subdomain) {
  */
 async function deployWorker({
   client, accountId, scriptName, script, mainModule = 'worker.js',
-  kvBindingName, kvTitle, secrets, vars, crons, buildMultipart, onProgress,
+  kvBindingName, kvTitle, secrets, vars, crons, buildMultipart, onProgress, confirmReplace,
 }) {
   const say = onProgress ?? (() => {});
   const steps = [];
@@ -299,10 +305,27 @@ async function deployWorker({
     steps.push(kv.created ? `已建立 KV「${kvTitle}」` : `沿用既有 KV「${kvTitle}」`);
   }
 
+  // 上傳是整份取代：程式碼、KV 綁定、Secrets 全部以這次為準，
+  // 沒帶到的就消失。所以覆蓋既有的 Worker 前一定要問過。
+  say('檢查是否已存在同名 Worker…');
+  const existing = await listScripts(client, accountId);
+  const willReplace = existing.includes(scriptName);
+  if (willReplace) {
+    const approved = confirmReplace
+      ? await confirmReplace({ scriptName, otherScripts: existing.filter((n) => n !== scriptName) })
+      : false;
+    if (!approved) {
+      throw new CloudflareError('上傳 Worker', `帳號上已經有名為「${scriptName}」的 Worker，未取得覆蓋確認，已中止。`);
+    }
+  }
+
   say('上傳 Worker…');
   const metadata = buildMetadata({ mainModule, kvBindingName, kvNamespaceId, secrets, vars });
   await uploadScript(client, accountId, scriptName, { metadata, script, mainModule, buildMultipart });
-  steps.push(`已上傳 ${scriptName}（${Math.round(script.length / 1024)} KB）`);
+  steps.push(`${willReplace ? '已覆蓋' : '已建立'} ${scriptName}（${Math.round(script.length / 1024)} KB）`);
+  if (existing.length && !willReplace) {
+    steps.push(`帳號上其他 ${existing.length} 支 Worker 未受影響`);
+  }
 
   if (crons && crons.length) {
     say('設定排程…');
@@ -527,6 +550,7 @@ async function deployGuardian() {
       crons: ['*/5 * * * *'],
       buildMultipart,
       onProgress: function (msg) { console.log(msg); },
+      confirmReplace: confirmReplaceWorker,
     });
 
     if (result.url) kcSet(KEY_GUARDIAN_URL, result.url);
@@ -566,11 +590,36 @@ async function deployWatchdog() {
       crons: ['4,14,24,34,44,54 * * * *'],
       buildMultipart,
       onProgress: function (msg) { console.log(msg); },
+      confirmReplace: confirmReplaceWorker,
     });
     await notice('部署完成', result.steps.join('\n'));
   } catch (err) {
     await notice('部署失敗', describeStepError(err));
   }
+}
+
+/**
+ * 覆蓋既有 Worker 前的確認。
+ *
+ * Cloudflare 的上傳是整份取代，舊的程式碼與綁定會直接被換掉。
+ * 如果那支 Worker 正在管理交易部位，覆蓋會讓部位失去保護，
+ * 所以這裡一定要人點過才繼續。
+ */
+async function confirmReplaceWorker(info) {
+  const others = info.otherScripts && info.otherScripts.length
+    ? '\n\n帳號上其他 Worker（不會被動到）：\n'
+      + info.otherScripts.map(function (n) { return '· ' + n; }).join('\n')
+    : '';
+
+  const a = new Alert();
+  a.title = '這個名字已經有 Worker 了';
+  a.message = '「' + info.scriptName + '」已經存在。\n\n'
+    + '繼續的話會整份取代：原本的程式碼、KV 綁定、Secrets 都會換成這次上傳的內容。\n\n'
+    + '如果那支正在管理交易部位，覆蓋後那些部位會失去保護。'
+    + others;
+  a.addDestructiveAction('確定覆蓋');
+  a.addCancelAction('取消');
+  return (await a.present()) === 0;
 }
 
 function randomToken() {

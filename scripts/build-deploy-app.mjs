@@ -224,6 +224,7 @@ async function deployGuardian() {
       crons: ['*/5 * * * *'],
       buildMultipart,
       onProgress: function (msg) { console.log(msg); },
+      confirmReplace: confirmReplaceWorker,
     });
 
     if (result.url) kcSet(KEY_GUARDIAN_URL, result.url);
@@ -263,11 +264,36 @@ async function deployWatchdog() {
       crons: ['4,14,24,34,44,54 * * * *'],
       buildMultipart,
       onProgress: function (msg) { console.log(msg); },
+      confirmReplace: confirmReplaceWorker,
     });
     await notice('部署完成', result.steps.join('\n'));
   } catch (err) {
     await notice('部署失敗', describeStepError(err));
   }
+}
+
+/**
+ * 覆蓋既有 Worker 前的確認。
+ *
+ * Cloudflare 的上傳是整份取代，舊的程式碼與綁定會直接被換掉。
+ * 如果那支 Worker 正在管理交易部位，覆蓋會讓部位失去保護，
+ * 所以這裡一定要人點過才繼續。
+ */
+async function confirmReplaceWorker(info) {
+  const others = info.otherScripts && info.otherScripts.length
+    ? '\n\n帳號上其他 Worker（不會被動到）：\n'
+      + info.otherScripts.map(function (n) { return '· ' + n; }).join('\n')
+    : '';
+
+  const a = new Alert();
+  a.title = '這個名字已經有 Worker 了';
+  a.message = '「' + info.scriptName + '」已經存在。\n\n'
+    + '繼續的話會整份取代：原本的程式碼、KV 綁定、Secrets 都會換成這次上傳的內容。\n\n'
+    + '如果那支正在管理交易部位，覆蓋後那些部位會失去保護。'
+    + others;
+  a.addDestructiveAction('確定覆蓋');
+  a.addCancelAction('取消');
+  return (await a.present()) === 0;
 }
 
 function randomToken() {

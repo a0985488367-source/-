@@ -11,6 +11,7 @@ import {
   explainCfError,
   hintForCfError,
   listAccounts,
+  listScripts,
   makeClient,
   setSchedules,
   verifyToken,
@@ -42,6 +43,7 @@ const fail = (code, message) => ({ success: false, result: null, errors: [{ code
 
 const HAPPY_ROUTES = {
   'GET /user/tokens/verify': ok({ status: 'active' }),
+  'GET /accounts/acct123/workers/scripts': ok([]),
   'GET /accounts': ok([{ id: ACCOUNT, name: '我的帳號' }]),
   'GET /accounts/acct123/storage/kv/namespaces': ok([]),
   'POST /accounts/acct123/storage/kv/namespaces': ok({ id: 'kv-new-id', title: 'crypto-radar-guardian' }),
@@ -146,6 +148,7 @@ test('完整部署會依序走完每一步', async () => {
     'GET /user/tokens/verify',
     'GET /accounts/acct123/storage/kv/namespaces',
     'POST /accounts/acct123/storage/kv/namespaces',
+    'GET /accounts/acct123/workers/scripts',
     'PUT /accounts/acct123/workers/scripts/crypto-radar-guardian',
     'PUT /accounts/acct123/workers/scripts/crypto-radar-guardian/schedules',
     'POST /accounts/acct123/workers/scripts/crypto-radar-guardian/subdomain',
@@ -266,4 +269,89 @@ test('讀不到子網域時仍然完成部署，只是沒有網址', async () =>
 test('網址組法正確', () => {
   assert.equal(workerUrl('a', 'b'), 'https://a.b.workers.dev');
   assert.equal(workerUrl('a', null), null);
+});
+
+/* ------------------------------------------------------------------ */
+/* 覆蓋既有 Worker 的保險                                                */
+/* ------------------------------------------------------------------ */
+
+const deployArgs = (extra = {}) => ({
+  accountId: ACCOUNT, scriptName: 'crypto-radar-guardian', script: 'export default {};',
+  kvBindingName: 'GUARDIAN_KV', kvTitle: 'crypto-radar-guardian',
+  secrets: {}, crons: [], buildMultipart, ...extra,
+});
+
+test('列出帳號上既有的 Worker', async () => {
+  const cf = mockCf({
+    'GET /accounts/acct123/workers/scripts': ok([
+      { id: 'crypto-radar-guardian-24x7' }, { id: '別的' }, {},
+    ]),
+  });
+  const names = await listScripts(makeClient(TOKEN, cf.doFetch), ACCOUNT);
+  assert.deepEqual(names, ['crypto-radar-guardian-24x7', '別的']);
+});
+
+test('名字沒被佔用時直接部署，不會多問', async () => {
+  const cf = mockCf({
+    ...HAPPY_ROUTES,
+    'GET /accounts/acct123/workers/scripts': ok([{ id: 'crypto-radar-guardian-24x7' }]),
+  });
+  let asked = false;
+  const result = await deployWorker(deployArgs({
+    client: makeClient(TOKEN, cf.doFetch),
+    confirmReplace: async () => { asked = true; return true; },
+  }));
+  assert.equal(asked, false, '不同名就不該問');
+  assert.ok(result.steps.some((s) => s.includes('已建立')));
+  assert.ok(result.steps.some((s) => s.includes('其他 1 支 Worker 未受影響')));
+});
+
+test('名字已存在且使用者取消時，絕不上傳', async () => {
+  const cf = mockCf({
+    ...HAPPY_ROUTES,
+    'GET /accounts/acct123/workers/scripts': ok([{ id: 'crypto-radar-guardian' }]),
+  });
+  await assert.rejects(
+    () => deployWorker(deployArgs({
+      client: makeClient(TOKEN, cf.doFetch),
+      confirmReplace: async () => false,
+    })),
+    /未取得覆蓋確認/,
+  );
+  assert.ok(
+    !cf.calls.some((c) => c.key === 'PUT /accounts/acct123/workers/scripts/crypto-radar-guardian'),
+    '取消後不得發出上傳請求',
+  );
+});
+
+test('沒有提供確認函式時，等同拒絕覆蓋', async () => {
+  const cf = mockCf({
+    ...HAPPY_ROUTES,
+    'GET /accounts/acct123/workers/scripts': ok([{ id: 'crypto-radar-guardian' }]),
+  });
+  await assert.rejects(
+    () => deployWorker(deployArgs({ client: makeClient(TOKEN, cf.doFetch) })),
+    /未取得覆蓋確認/,
+  );
+});
+
+test('確認覆蓋後才上傳，並如實說是覆蓋不是新建', async () => {
+  const cf = mockCf({
+    ...HAPPY_ROUTES,
+    'GET /accounts/acct123/workers/scripts': ok([
+      { id: 'crypto-radar-guardian' }, { id: 'crypto-radar-guardian-24x7' },
+    ]),
+  });
+  let shown = null;
+  const result = await deployWorker(deployArgs({
+    client: makeClient(TOKEN, cf.doFetch),
+    confirmReplace: async (info) => { shown = info; return true; },
+  }));
+  assert.equal(shown.scriptName, 'crypto-radar-guardian');
+  assert.deepEqual(shown.otherScripts, ['crypto-radar-guardian-24x7'],
+    '要讓使用者看到其他不受影響的 Worker');
+  // 只看上傳那一步的措辭，KV 那一步的「已建立」不算
+  const uploadStep = result.steps.find((s) => s.includes('crypto-radar-guardian（'));
+  assert.ok(uploadStep, `找不到上傳步驟，實得 ${JSON.stringify(result.steps)}`);
+  assert.match(uploadStep, /^已覆蓋/, '覆蓋既有 Worker 時要如實說是覆蓋');
 });
