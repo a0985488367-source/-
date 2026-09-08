@@ -18,7 +18,7 @@ const ok = (result) => ({ success: true, result, errors: [] });
  * 模擬 Scriptable 環境並驅動選單。
  * sheetAnswers 依序回應 presentSheet，alertAnswers 依序回應 present。
  */
-async function run({ sheetAnswers = [], alertAnswers = [], textValues = [], store = new Map(), failAt = null, existingScripts = [], rawResponse = null } = {}) {
+async function run({ sheetAnswers = [], alertAnswers = [], textValues = [], store = new Map(), failAt = null, existingScripts = [], rawResponse = null, schedulesByScript = {} } = {}) {
   const cfCalls = [];
   const multipartParts = [];
   const alerts = [];
@@ -77,6 +77,10 @@ async function run({ sheetAnswers = [], alertAnswers = [], textValues = [], stor
       if (path === '/user/tokens/verify') return ok({ status: 'active' });
       if (path === '/accounts') return ok([{ id: 'acct123', name: '我的帳號' }]);
       if (path.endsWith('/workers/scripts') && this.method === 'GET') return ok(existingScripts.map((id) => ({ id })));
+      if (path.endsWith('/schedules') && this.method === 'GET') {
+        const name = path.split('/workers/scripts/')[1].replace('/schedules', '');
+        return ok({ schedules: (schedulesByScript[decodeURIComponent(name)] ?? []).map((cron) => ({ cron })) });
+      }
       if (path.endsWith('/storage/kv/namespaces') && this.method === 'GET') return ok([]);
       if (path.endsWith('/storage/kv/namespaces') && this.method === 'POST') return ok({ id: 'kv-1' });
       if (/\/workers\/scripts\/[^/]+$/.test(path)) return ok({ id: 'script' });
@@ -309,18 +313,20 @@ test('部署守衛帶入 Guardian 網址與錯開的排程', async () => {
   assert.equal(byName.WATCHDOG_KV.type, 'kv_namespace');
 });
 
+// 選單順序：0 設定Token / 1 部署Guardian / 2 部署守衛 /
+//           3 只設定排程 / 4 查看Cron用量 / 5 查看狀態 / 6 開啟網頁 / 7 清除
 test('開啟網頁會帶上管理 Token', async () => {
   const store = new Map([
     ['crg.cf.guardianUrl', 'https://g.example.workers.dev'],
     ['crg.admin.token', 'tok12345'],
   ]);
-  const { opened } = await run({ sheetAnswers: [4], store });
+  const { opened } = await run({ sheetAnswers: [6], store });
   assert.equal(opened[0], 'https://g.example.workers.dev?token=tok12345');
 });
 
 test('查看狀態會讀 /api/status 並顯示關鍵欄位', async () => {
   const store = new Map([['crg.cf.guardianUrl', 'https://g.example.workers.dev']]);
-  const { alerts } = await run({ sheetAnswers: [3, -1], alertAnswers: [0], store });
+  const { alerts } = await run({ sheetAnswers: [5, -1], alertAnswers: [0], store });
   const status = alerts.find((a) => a.title === '目前狀態');
   assert.ok(status);
   assert.match(status.message, /Crypto Radar Guardian 10\.0/);
@@ -400,4 +406,76 @@ test('同名時會跳出覆蓋警告，取消就不上傳', async () => {
     '取消後不得上傳',
   );
   assert.ok(alerts.some((a) => a.title === '部署失敗'));
+});
+
+test('cron 額度滿時，回報成「已部署但排程沒設成」而不是部署失敗', async () => {
+  const store = new Map([['crg.cf.token', CF_TOKEN], ['crg.cf.account', 'acct123']]);
+  const { alerts, store: after } = await run({
+    sheetAnswers: [1, -1], alertAnswers: [0, 0], store,
+    failAt: (path, method) => (method === 'PUT' && path.endsWith('/schedules')
+      ? { code: 10072, message: 'This account has reached the Workers Free limit of 5 cron triggers per account.' }
+      : null),
+  });
+
+  assert.ok(!alerts.some((a) => a.title === '部署失敗'), '不該報成部署失敗');
+  const partial = alerts.find((a) => a.title === '已部署，但排程沒設成');
+  assert.ok(partial, '應如實說是部分完成');
+  assert.match(partial.message, /Worker 本身已經部署好了/);
+  assert.match(partial.message, /5 個 cron 觸發器/);
+  assert.match(partial.message, /查看 Cron 用量/, '要指出下一步');
+  assert.ok(after.get('crg.cf.guardianUrl'), '網址仍應存起來');
+});
+
+test('查看 Cron 用量會逐支列出並算總數', async () => {
+  const store = new Map([['crg.cf.token', CF_TOKEN], ['crg.cf.account', 'acct123']]);
+  const { alerts } = await run({
+    sheetAnswers: [4, -1], alertAnswers: [0], store,
+    existingScripts: ['crypto-radar-guardian-24x7', 'old-worker'],
+    schedulesByScript: {
+      'crypto-radar-guardian-24x7': ['*/5 * * * *', '4,14,24,34,44,54 * * * *'],
+      'old-worker': ['0 0 * * *'],
+    },
+  });
+  const usage = alerts.find((a) => a.title && a.title.startsWith('Cron 用量'));
+  assert.ok(usage, '應顯示用量');
+  assert.match(usage.title, /3 \/ 5/);
+  assert.match(usage.message, /crypto-radar-guardian-24x7/);
+  assert.match(usage.message, /還有 2 個可用/);
+});
+
+test('cron 用滿時，用量畫面會講出解法', async () => {
+  const store = new Map([['crg.cf.token', CF_TOKEN], ['crg.cf.account', 'acct123']]);
+  const { alerts } = await run({
+    sheetAnswers: [4, -1], alertAnswers: [0], store,
+    existingScripts: ['a', 'b'],
+    schedulesByScript: { a: ['1 * * * *', '2 * * * *', '3 * * * *'], b: ['4 * * * *', '5 * * * *'] },
+  });
+  const usage = alerts.find((a) => a.title && a.title.startsWith('Cron 用量'));
+  assert.match(usage.title, /5 \/ 5/);
+  assert.match(usage.message, /已經用滿/);
+  assert.match(usage.message, /Trigger Events/, '要說去哪裡刪');
+});
+
+test('只設定排程不會重新上傳 Worker', async () => {
+  const store = new Map([['crg.cf.token', CF_TOKEN], ['crg.cf.account', 'acct123']]);
+  const { cfCalls, alerts } = await run({
+    sheetAnswers: [3, 0, -1], alertAnswers: [0], store,
+  });
+  assert.ok(!cfCalls.some((c) => c.parts), '不該有 multipart 上傳');
+  const sched = cfCalls.find((c) => c.method === 'PUT' && c.path.endsWith('/schedules'));
+  assert.ok(sched, '應設定排程');
+  assert.deepEqual(JSON.parse(sched.body), [{ cron: '*/5 * * * *' }]);
+  assert.ok(alerts.some((a) => a.title === '排程已設定'));
+});
+
+test('只設定排程時若額度仍滿，說明要先釋出', async () => {
+  const store = new Map([['crg.cf.token', CF_TOKEN], ['crg.cf.account', 'acct123']]);
+  const { alerts } = await run({
+    sheetAnswers: [3, 0, -1], alertAnswers: [0], store,
+    failAt: (path, method) => (method === 'PUT' && path.endsWith('/schedules')
+      ? { code: 10072, message: '5 cron triggers per account' } : null),
+  });
+  const failure = alerts.find((a) => a.title === '額度仍然不足');
+  assert.ok(failure);
+  assert.match(failure.message, /查看 Cron 用量/);
 });

@@ -283,9 +283,13 @@ async function deployGuardian() {
 
     if (result.url) kcSet(KEY_GUARDIAN_URL, result.url);
 
-    await notice('部署完成', result.steps.join('\n')
-      + '\n\n第一次掃描要等排程觸發，最多 5 分鐘。'
-      + (result.url ? '\n\n看帳戶請在網址後面加：\n?token=' + adminToken : ''));
+    if (result.scheduleError) {
+      await reportScheduleFailure(result, 'crypto-radar-guardian');
+    } else {
+      await notice('部署完成', result.steps.join('\n')
+        + '\n\n第一次掃描要等排程觸發，最多 5 分鐘。'
+        + (result.url ? '\n\n看帳戶請在網址後面加：\n?token=' + adminToken : ''));
+    }
   } catch (err) {
     await notice('部署失敗', describeStepError(err));
   }
@@ -320,7 +324,8 @@ async function deployWatchdog() {
       onProgress: function (msg) { console.log(msg); },
       confirmReplace: confirmReplaceWorker,
     });
-    await notice('部署完成', result.steps.join('\n'));
+    if (result.scheduleError) await reportScheduleFailure(result, 'crypto-radar-watchdog');
+    else await notice('部署完成', result.steps.join('\n'));
   } catch (err) {
     await notice('部署失敗', describeStepError(err));
   }
@@ -348,6 +353,99 @@ async function confirmReplaceWorker(info) {
   a.addDestructiveAction('確定覆蓋');
   a.addCancelAction('取消');
   return (await a.present()) === 0;
+}
+
+/**
+ * 排程沒設成功時的說明。
+ *
+ * 這時 Worker 已經部署好了，少的只是自動觸發，所以不能寫成「部署失敗」。
+ * 撞到免費方案的 cron 上限是最常見的原因，直接把解法講出來。
+ */
+async function reportScheduleFailure(result, scriptName) {
+  const err = result.scheduleError;
+  const base = result.steps.join('\n')
+    + '\n\nWorker 本身已經部署好了，網頁打得開。\n少的是自動觸發，所以還不會自己掃描。\n\n';
+
+  if (isCronLimitError(err)) {
+    await notice('已部署，但排程沒設成',
+      base
+      + '原因：免費方案每個帳號只有 5 個 cron 觸發器，已經用完。\n\n'
+      + '兩條路：\n'
+      + '· 選「查看 Cron 用量」看是誰佔著，把不用的刪掉，再選「只設定排程」\n'
+      + '· 或升級 Workers Paid（每月 5 美元），上限變 1000');
+  } else {
+    await notice('已部署，但排程沒設成', base + '原因：\n' + describeStepError(err));
+  }
+}
+
+/**
+ * 只補設排程，不重新上傳。
+ * 給「Worker 已經在了，但當初排程沒設成」的情況用。
+ */
+async function setCronOnly() {
+  const token = kcGet(KEY_CF_TOKEN);
+  const accountId = kcGet(KEY_CF_ACCOUNT);
+  if (!token || !accountId) { await notice('尚未設定', '請先設定 Cloudflare API Token。'); return; }
+
+  const a = new Alert();
+  a.title = '只設定排程';
+  a.message = '要幫哪一支補設排程？Worker 本身不會重新上傳。';
+  a.addAction('Guardian（每 5 分鐘）');
+  a.addAction('守衛（每 10 分鐘）');
+  a.addCancelAction('取消');
+  const idx = await a.presentSheet();
+  if (idx === -1) return;
+
+  const target = idx === 0
+    ? { name: 'crypto-radar-guardian', crons: ['*/5 * * * *'] }
+    : { name: 'crypto-radar-watchdog', crons: ['4,14,24,34,44,54 * * * *'] };
+
+  try {
+    const client = makeClient(token, scriptableFetch);
+    await setSchedules(client, accountId, target.name, target.crons);
+    await notice('排程已設定', target.name + '\n' + target.crons.join('、')
+      + '\n\n第一次觸發最多要等一個排程週期。');
+  } catch (err) {
+    if (isCronLimitError(err)) {
+      await notice('額度仍然不足',
+        '免費方案的 5 個 cron 觸發器還是滿的。\n\n'
+        + '請先用「查看 Cron 用量」找出可以釋出的，刪掉之後再試一次。');
+    } else {
+      await notice('設定失敗', describeStepError(err));
+    }
+  }
+}
+
+/**
+ * 盤點帳號上的 cron 用量。
+ * 免費方案上限是 5 個，用滿了新的就設不上去。
+ */
+async function showCronUsage() {
+  const token = kcGet(KEY_CF_TOKEN);
+  const accountId = kcGet(KEY_CF_ACCOUNT);
+  if (!token || !accountId) { await notice('尚未設定', '請先設定 Cloudflare API Token。'); return; }
+
+  try {
+    const client = makeClient(token, scriptableFetch);
+    const audit = await auditCrons(client, accountId);
+
+    const lines = audit.rows.map(function (r) {
+      if (r.crons === null) return '· ' + r.script + '：讀不到';
+      if (!r.crons.length) return '· ' + r.script + '：無';
+      return '· ' + r.script + '：' + r.crons.length + ' 個\n    ' + r.crons.join('\n    ');
+    });
+
+    await notice('Cron 用量 ' + audit.total + ' / ' + audit.limitFree,
+      lines.join('\n')
+      + '\n\n免費方案每個帳號上限 ' + audit.limitFree + ' 個。'
+      + (audit.total >= audit.limitFree
+        ? '\n已經用滿。要新增就得先刪掉不用的，或升級付費方案。'
+        : '\n還有 ' + (audit.limitFree - audit.total) + ' 個可用。')
+      + '\n\n要刪除排程請到 Cloudflare 儀表板，'
+      + '進該支 Worker 的 Settings → Trigger Events。');
+  } catch (err) {
+    await notice('讀取失敗', describeStepError(err));
+  }
 }
 
 function randomToken() {
@@ -409,6 +507,8 @@ async function menu() {
   a.addAction(token ? '重新設定 Cloudflare Token' : '① 設定 Cloudflare Token');
   a.addAction('② 部署 Guardian');
   a.addAction('③ 部署心跳守衛（選配）');
+  a.addAction('只設定排程');
+  a.addAction('查看 Cron 用量');
   a.addAction('查看目前狀態');
   a.addAction('開啟網頁');
   a.addDestructiveAction('清除 Cloudflare 設定');
@@ -418,9 +518,11 @@ async function menu() {
   if (idx === 0) { await setupToken(); await menu(); }
   else if (idx === 1) { await deployGuardian(); await menu(); }
   else if (idx === 2) { await deployWatchdog(); await menu(); }
-  else if (idx === 3) { await checkStatus(); await menu(); }
-  else if (idx === 4) { await openSite(); }
-  else if (idx === 5) { await clearAll(); await menu(); }
+  else if (idx === 3) { await setCronOnly(); await menu(); }
+  else if (idx === 4) { await showCronUsage(); await menu(); }
+  else if (idx === 5) { await checkStatus(); await menu(); }
+  else if (idx === 6) { await openSite(); }
+  else if (idx === 7) { await clearAll(); await menu(); }
 }
 
 try {

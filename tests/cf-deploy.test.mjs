@@ -4,12 +4,14 @@ import {
   CF_API,
   CloudflareError,
   REQUIRED_TOKEN_PERMISSIONS,
+  auditCrons,
   buildMetadata,
   deployWorker,
   describeCfErrors,
   ensureKvNamespace,
   explainCfError,
   hintForCfError,
+  isCronLimitError,
   listAccounts,
   listScripts,
   makeClient,
@@ -192,7 +194,8 @@ test('任何一步失敗都會指出是哪一步', async () => {
   const cases = [
     ['讀取 KV', { ...HAPPY_ROUTES, 'GET /accounts/acct123/storage/kv/namespaces': fail(10001, '沒權限') }],
     ['上傳 Worker', { ...HAPPY_ROUTES, 'PUT /accounts/acct123/workers/scripts/crypto-radar-guardian': fail(10021, '指令碼錯誤') }],
-    ['設定排程', { ...HAPPY_ROUTES, 'PUT /accounts/acct123/workers/scripts/crypto-radar-guardian/schedules': fail(10022, 'cron 錯') }],
+    // 設定排程刻意不列在這裡：它失敗時 Worker 已經上傳好了，
+    // 不該中斷整個流程。改由後面的專屬測試涵蓋。
   ];
   for (const [expectedStep, routes] of cases) {
     const cf = mockCf(routes);
@@ -359,4 +362,79 @@ test('確認覆蓋後才上傳，並如實說是覆蓋不是新建', async () =>
   const uploadStep = result.steps.find((s) => s.includes('crypto-radar-guardian（'));
   assert.ok(uploadStep, `找不到上傳步驟，實得 ${JSON.stringify(result.steps)}`);
   assert.match(uploadStep, /^已覆蓋/, '覆蓋既有 Worker 時要如實說是覆蓋');
+});
+
+/* ------------------------------------------------------------------ */
+/* cron 額度                                                            */
+/* ------------------------------------------------------------------ */
+
+test('排程失敗不會讓整個部署被判定失敗', async () => {
+  const cf = mockCf({
+    ...HAPPY_ROUTES,
+    'PUT /accounts/acct123/workers/scripts/crypto-radar-guardian/schedules':
+      fail(10072, 'This account has reached the Workers Free limit of 5 cron triggers per account.'),
+  });
+  const result = await deployWorker(deployArgs({
+    client: makeClient(TOKEN, cf.doFetch), crons: ['*/5 * * * *'],
+  }));
+
+  // Worker 已經上傳好了，網址也開了，不能報成失敗
+  assert.ok(result.scheduleError, '應記錄排程錯誤');
+  assert.equal(result.url, 'https://crypto-radar-guardian.my-account.workers.dev');
+  assert.ok(result.steps.some((s) => s.includes('已建立 crypto-radar-guardian')));
+  assert.ok(result.steps.some((s) => s === '排程未設定'));
+  assert.ok(cf.calls.some((c) => c.key.includes('/subdomain')), '排程失敗後仍要繼續開網址');
+});
+
+test('認得出撞到免費方案 cron 上限', async () => {
+  const cf = mockCf({
+    ...HAPPY_ROUTES,
+    'PUT /accounts/acct123/workers/scripts/crypto-radar-guardian/schedules':
+      fail(10072, 'This account has reached the Workers Free limit of 5 cron triggers per account.'),
+  });
+  const result = await deployWorker(deployArgs({
+    client: makeClient(TOKEN, cf.doFetch), crons: ['*/5 * * * *'],
+  }));
+  assert.equal(isCronLimitError(result.scheduleError), true);
+  assert.equal(isCronLimitError(new Error('別的錯')), false);
+  assert.equal(isCronLimitError(null), false);
+});
+
+test('排程以外的失敗仍然照舊中斷', async () => {
+  const cf = mockCf({
+    ...HAPPY_ROUTES,
+    'PUT /accounts/acct123/workers/scripts/crypto-radar-guardian': fail(10021, '程式有問題'),
+  });
+  await assert.rejects(
+    () => deployWorker(deployArgs({ client: makeClient(TOKEN, cf.doFetch), crons: ['*/5 * * * *'] })),
+    (err) => err.step === '上傳 Worker',
+  );
+});
+
+test('盤點 cron 用量，涵蓋讀不到排程的 Worker', async () => {
+  const cf = mockCf({
+    'GET /accounts/acct123/workers/scripts': ok([
+      { id: 'crypto-radar-guardian-24x7' }, { id: 'other-worker' }, { id: 'broken' },
+    ]),
+    'GET /accounts/acct123/workers/scripts/crypto-radar-guardian-24x7/schedules':
+      ok({ schedules: [{ cron: '*/5 * * * *' }, { cron: '0 * * * *' }] }),
+    'GET /accounts/acct123/workers/scripts/other-worker/schedules':
+      ok({ schedules: [{ cron: '0 0 * * *' }] }),
+    'GET /accounts/acct123/workers/scripts/broken/schedules': fail(10000, '沒權限'),
+  });
+  const audit = await auditCrons(makeClient(TOKEN, cf.doFetch), ACCOUNT);
+
+  assert.equal(audit.total, 3, '讀不到的不計入總數');
+  assert.equal(audit.limitFree, 5);
+  assert.deepEqual(audit.rows.find((r) => r.script === 'crypto-radar-guardian-24x7').crons,
+    ['*/5 * * * *', '0 * * * *']);
+  assert.equal(audit.rows.find((r) => r.script === 'broken').crons, null,
+    '讀不到要標成 null，不是空陣列');
+});
+
+test('沒有任何 Worker 時盤點也不會炸', async () => {
+  const cf = mockCf({ 'GET /accounts/acct123/workers/scripts': ok([]) });
+  const audit = await auditCrons(makeClient(TOKEN, cf.doFetch), ACCOUNT);
+  assert.equal(audit.total, 0);
+  assert.deepEqual(audit.rows, []);
 });

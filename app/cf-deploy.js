@@ -273,6 +273,44 @@ export async function setSchedules(client, accountId, scriptName, crons) {
   );
 }
 
+/** 讀取某支 Worker 目前的 cron 排程 */
+export async function getSchedules(client, accountId, scriptName) {
+  const result = await client.call(
+    '讀取排程', 'GET',
+    `/accounts/${accountId}/workers/scripts/${encodeURIComponent(scriptName)}/schedules`,
+  );
+  return (result?.schedules ?? []).map((s) => s.cron).filter(Boolean);
+}
+
+/**
+ * 盤點整個帳號的 cron 用量。
+ *
+ * 免費方案每個帳號只有 5 個 cron 觸發器。用滿之後再設就會被拒，
+ * 所以要能一眼看出是誰佔著。讀不到某支的排程就跳過，
+ * 不讓單一支失敗擋掉整份盤點。
+ */
+export async function auditCrons(client, accountId) {
+  const scripts = await listScripts(client, accountId);
+  const rows = [];
+  let total = 0;
+  for (const name of scripts) {
+    try {
+      const crons = await getSchedules(client, accountId, name);
+      rows.push({ script: name, crons });
+      total += crons.length;
+    } catch {
+      rows.push({ script: name, crons: null });
+    }
+  }
+  return { rows, total, limitFree: 5 };
+}
+
+/** 判斷錯誤是不是撞到免費方案的 cron 上限 */
+export function isCronLimitError(err) {
+  if (!err) return false;
+  return Number(err.code) === 10072 || /cron triggers per account/i.test(String(err.message ?? ''));
+}
+
 /** 開啟 workers.dev 網址 */
 export async function enableSubdomain(client, accountId, scriptName) {
   return client.call(
@@ -343,10 +381,18 @@ export async function deployWorker({
     steps.push(`帳號上其他 ${existing.length} 支 Worker 未受影響`);
   }
 
+  // 排程失敗不該讓整個部署算失敗：Worker 這時已經上傳好了，
+  // 少的只是自動觸發。把它記成警告，讓呼叫端據實呈現。
+  let scheduleError = null;
   if (crons && crons.length) {
     say('設定排程…');
-    await setSchedules(client, accountId, scriptName, crons);
-    steps.push(`排程 ${crons.join('、')}`);
+    try {
+      await setSchedules(client, accountId, scriptName, crons);
+      steps.push(`排程 ${crons.join('、')}`);
+    } catch (err) {
+      scheduleError = err;
+      steps.push('排程未設定');
+    }
   }
 
   say('開啟網址…');
@@ -355,5 +401,5 @@ export async function deployWorker({
   const url = workerUrl(scriptName, subdomain);
   steps.push(url ? `網址 ${url}` : '網址已開啟，但讀不到子網域名稱');
 
-  return { url, steps, bindingCount: metadata.bindings.length };
+  return { url, steps, bindingCount: metadata.bindings.length, scheduleError };
 }
