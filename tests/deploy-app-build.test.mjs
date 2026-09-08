@@ -6,7 +6,8 @@ import { readFileSync } from 'node:fs';
 const PATH = new URL('../public/crypto-radar-deploy.scriptable.js', import.meta.url).pathname;
 const source = readFileSync(PATH, 'utf8');
 
-const CF_TOKEN = 'cf-token-abcdef1234567890';
+// 擬真長度：Cloudflare 的 API Token 是 40 個字元
+const CF_TOKEN = 'cfTOKEN0123456789abcdefghijklmnopqrs-_XY';
 const HOOK = 'https://discord.com/api/webhooks/123456789012345678/abcDEF-ghi_JKL123';
 const BYBIT_KEY = 'bybitkey1234567890';
 const BYBIT_SECRET = 'bybitsecret1234567890';
@@ -17,7 +18,7 @@ const ok = (result) => ({ success: true, result, errors: [] });
  * 模擬 Scriptable 環境並驅動選單。
  * sheetAnswers 依序回應 presentSheet，alertAnswers 依序回應 present。
  */
-async function run({ sheetAnswers = [], alertAnswers = [], textValues = [], store = new Map(), failAt = null, existingScripts = [] } = {}) {
+async function run({ sheetAnswers = [], alertAnswers = [], textValues = [], store = new Map(), failAt = null, existingScripts = [], rawResponse = null } = {}) {
   const cfCalls = [];
   const multipartParts = [];
   const alerts = [];
@@ -52,7 +53,19 @@ async function run({ sheetAnswers = [], alertAnswers = [], textValues = [], stor
       this._parts = this._parts ?? {};
       this._parts.__file = { data: data.__data, mime, name, filename };
     }
+    async loadString() {
+      if (rawResponse !== null) {
+        const u = new URL(this.url);
+        cfCalls.push({ method: this.method, path: u.pathname.replace('/client/v4', ''), headers: this.headers });
+        this.response = { statusCode: 502 };
+        return rawResponse;
+      }
+      return JSON.stringify(await this._respond());
+    }
     async loadJSON() {
+      return this._respond();
+    }
+    async _respond() {
       const u = new URL(this.url);
       const path = u.pathname.replace('/client/v4', '');
       cfCalls.push({ method: this.method, path, headers: this.headers, body: this.body, parts: this._parts });
@@ -132,16 +145,71 @@ test('未設定時選單顯示未設定，不會誤導', async () => {
   assert.match(alerts[0].message, /Guardian：未部署/);
 });
 
-test('設定 Token 會驗證並選定帳號', async () => {
+test('設定 Token 會用真正需要的權限驗證，不碰 /user/ 端點', async () => {
   const store = new Map();
   const { cfCalls, store: after } = await run({
     sheetAnswers: [0, -1], alertAnswers: [0, 0], textValues: [CF_TOKEN], store,
   });
-  assert.equal(cfCalls[0].path, '/user/tokens/verify');
+  const paths = cfCalls.map((c) => c.path);
+  assert.ok(!paths.includes('/user/tokens/verify'),
+    '不該依賴 /user/ 端點，帳號層級 Token 未必有權限');
+  assert.ok(paths.includes('/accounts/acct123/workers/scripts'),
+    '應該用列出 Worker 來驗證權限');
   assert.equal(cfCalls[0].headers.Authorization, `Bearer ${CF_TOKEN}`);
-  assert.equal(cfCalls[1].path, '/accounts');
   assert.equal(after.get('crg.cf.token'), CF_TOKEN);
   assert.equal(after.get('crg.cf.account'), 'acct123');
+});
+
+test('Token 夾帶隱形字元時會先清乾淨再用', async () => {
+  const store = new Map();
+  const dirty = ' ' + CF_TOKEN.slice(0, 10) + '\u200B' + CF_TOKEN.slice(10) + '\n';
+  const { cfCalls, store: after } = await run({
+    sheetAnswers: [0, -1], alertAnswers: [0, 0], textValues: [dirty], store,
+  });
+  assert.equal(after.get('crg.cf.token'), CF_TOKEN, '存進去的必須是清乾淨的');
+  assert.equal(cfCalls[0].headers.Authorization, `Bearer ${CF_TOKEN}`);
+});
+
+test('Token 明顯複製錯時，連請求都不發', async () => {
+  for (const bad of ['太短', 'abc def 這是說明文字不是 token', 'x'.repeat(200)]) {
+    const { cfCalls, alerts } = await run({
+      sheetAnswers: [0, -1], alertAnswers: [0, 0], textValues: [bad], store: new Map(),
+    });
+    assert.equal(cfCalls.length, 0, `"${bad.slice(0, 12)}" 不該發出請求`);
+    assert.ok(alerts.some((a) => a.title === 'Token 看起來不對'));
+  }
+});
+
+test('列不出帳號時退回手動輸入 Account ID，不當成 Token 失效', async () => {
+  const store = new Map();
+  const { cfCalls, alerts, store: after } = await run({
+    sheetAnswers: [0, -1], alertAnswers: [0, 0, 0],
+    textValues: [CF_TOKEN, 'abcdef0123456789abcdef0123456789'], store,
+    failAt: (path) => (path === '/accounts' ? { code: 9109, message: 'not entitled' } : null),
+  });
+  assert.equal(after.get('crg.cf.account'), 'abcdef0123456789abcdef0123456789');
+  assert.ok(alerts.some((a) => a.title === '連接成功'), '仍應成功');
+  assert.ok(cfCalls.some((c) => c.path === '/accounts/abcdef0123456789abcdef0123456789/workers/scripts'));
+});
+
+test('手動輸入的 Account ID 格式不對會擋下', async () => {
+  const { alerts, store: after } = await run({
+    sheetAnswers: [0, -1], alertAnswers: [0, 0, 0],
+    textValues: [CF_TOKEN, '這不是ID'], store: new Map(),
+    failAt: (path) => (path === '/accounts' ? { code: 9109, message: 'not entitled' } : null),
+  });
+  assert.ok(alerts.some((a) => a.title === '格式不對'));
+  assert.equal(after.get('crg.cf.account'), undefined);
+});
+
+test('回應不是 JSON 時，錯誤訊息帶出狀態碼與原始內容', async () => {
+  const store = new Map([['crg.cf.token', CF_TOKEN], ['crg.cf.account', 'acct123']]);
+  const { alerts } = await run({
+    sheetAnswers: [1, -1], alertAnswers: [0, 0], store, rawResponse: '<html>502 Bad Gateway</html>',
+  });
+  const failure = alerts.find((a) => a.title === '部署失敗');
+  assert.ok(failure, '應顯示失敗');
+  assert.match(failure.message, /502 Bad Gateway/, '要帶出原始回應');
 });
 
 test('部署 Guardian 會走完建 KV、上傳、排程、開網址', async () => {
@@ -159,7 +227,6 @@ test('部署 Guardian 會走完建 KV、上傳、排程、開網址', async () =
 
   const paths = cfCalls.map((c) => `${c.method} ${c.path}`);
   assert.deepEqual(paths, [
-    'GET /user/tokens/verify',
     'GET /accounts/acct123/storage/kv/namespaces',
     'POST /accounts/acct123/storage/kv/namespaces',
     'GET /accounts/acct123/workers/scripts',
@@ -274,17 +341,17 @@ test('上傳失敗時明確指出卡在哪一步，並轉述 Cloudflare 的說�
   assert.match(failure.message, /CPU limit/, '要轉述 Cloudflare 的原始說法');
 });
 
-test('Token 權限不足時，錯誤訊息會講出要加哪些權限', async () => {
-  const store = new Map();
+test('權限不足時，錯誤訊息會講出要加哪些權限', async () => {
   const { alerts } = await run({
-    sheetAnswers: [0, -1], alertAnswers: [0, 0], textValues: [CF_TOKEN], store,
-    failAt: (path) => (path === '/user/tokens/verify'
+    sheetAnswers: [0, -1], alertAnswers: [0, 0], textValues: [CF_TOKEN], store: new Map(),
+    failAt: (path) => (path.endsWith('/workers/scripts')
       ? { code: 10000, message: 'Invalid API Token' } : null),
   });
-  const failure = alerts.find((a) => a.title === 'Token 驗證失敗');
+  const failure = alerts.find((a) => a.title === '權限確認失敗');
   assert.ok(failure);
   assert.match(failure.message, /Workers Scripts/);
   assert.match(failure.message, /Workers KV Storage/);
+  assert.match(failure.message, /Invalid API Token/, '原始訊息要保留');
 });
 
 test('Cloudflare Token 不會出現在任何顯示訊息裡', async () => {
@@ -293,7 +360,7 @@ test('Cloudflare Token 不會出現在任何顯示訊息裡', async () => {
   for (const a of alerts) {
     assert.ok(!a.message.includes(CF_TOKEN), '選單不得顯示完整 Token');
   }
-  assert.match(alerts[0].message, /cf-t••••7890/, '應顯示遮罩');
+  assert.match(alerts[0].message, /cfTO••••-_XY/, '應顯示遮罩');
 });
 
 test('產生器輸出是決定性的', () => {

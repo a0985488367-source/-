@@ -80,19 +80,30 @@ async function scriptableFetch(url, init) {
     if (init.body !== undefined) req.body = init.body;
   }
 
+  // 一律先拿原始字串再自己解析。直接用 loadJSON 的話，
+  // 解析失敗時就再也拿不到回應內容，錯誤訊息只能寫「未知錯誤」。
+  let raw = '';
+  try {
+    raw = await req.loadString();
+  } catch (e) {
+    raw = '';
+  }
+  const status = (req.response && req.response.statusCode) || 0;
+
   let parsed = null;
   try {
-    parsed = await req.loadJSON();
+    parsed = JSON.parse(raw);
   } catch (e) {
     parsed = null;
   }
-  const status = (req.response && req.response.statusCode) || 0;
+
   return {
     status,
     async json() {
       if (parsed !== null) return parsed;
-      throw new Error('HTTP ' + status + '：回應不是 JSON');
+      throw new Error('回應不是 JSON');
     },
+    async text() { return raw; },
   };
 }
 
@@ -140,36 +151,79 @@ async function setupToken() {
     + REQUIRED_TOKEN_PERMISSIONS.map(function (p) { return '· ' + p; }).join('\n')
     + '\n\nToken 只存在這支手機的 Keychain。';
 
-  const token = await askText('Cloudflare API Token', guide, 'Token', '', true);
-  if (token === null) return false;
-  if (!token) { await notice('未儲存', 'Token 不能是空的。'); return false; }
+  const rawToken = await askText('Cloudflare API Token', guide, 'Token', '', true);
+  if (rawToken === null) return false;
 
-  kcSet(KEY_CF_TOKEN, token);
+  // 貼上很容易帶到隱形字元，先清乾淨再看格式對不對，
+  // 免得白跑一趟 API 才得到一句沒幫助的「invalid」
+  const token = sanitizeToken(rawToken);
+  const shape = inspectTokenShape(token);
+  if (!shape.ok) {
+    await notice('Token 看起來不對', shape.reason + '\n\n請重新複製一次完整的 Token。');
+    return false;
+  }
 
-  // 存完立刻驗證，順便選帳號
+  const accountId = await resolveAccountId(token);
+  if (!accountId) return false;
+
+  // 用真正需要的權限去驗證，而不是用 /user/ 底下的端點。
+  // 帳號層級的 Token 未必能呼叫那些，拿來驗會誤判成 Token 無效。
   try {
     const client = makeClient(token, scriptableFetch);
-    await verifyToken(client);
-    const accounts = await listAccounts(client);
-
-    let accountId = accounts[0].id;
-    if (accounts.length > 1) {
-      const a = new Alert();
-      a.title = '選擇 Cloudflare 帳號';
-      a.message = '這個 Token 看得到多個帳號。';
-      for (const acc of accounts) a.addAction(acc.name);
-      a.addCancelAction('取消');
-      const idx = await a.presentSheet();
-      if (idx === -1) return false;
-      accountId = accounts[idx].id;
-    }
+    const scripts = await verifyAccountAccess(client, accountId);
+    kcSet(KEY_CF_TOKEN, token);
     kcSet(KEY_CF_ACCOUNT, accountId);
-    await notice('Token 有效', '已選定帳號：'
-      + (accounts.find(function (x) { return x.id === accountId; }) || {}).name);
+    await notice('連接成功',
+      '權限確認完成。\n\n這個帳號目前有 ' + scripts.length + ' 支 Worker'
+      + (scripts.length ? '：\n' + scripts.map(function (n) { return '· ' + n; }).join('\n') : '。')
+      + '\n\n接下來可以選「② 部署 Guardian」。');
     return true;
   } catch (err) {
-    await notice('Token 驗證失敗', describeStepError(err));
+    await notice('權限確認失敗', describeStepError(err)
+      + '\n\n請確認 Token 有這兩項權限：\n'
+      + REQUIRED_TOKEN_PERMISSIONS.map(function (p) { return '· ' + p; }).join('\n')
+      + '\n\n也請確認 Account ID 沒有貼錯。');
     return false;
+  }
+}
+
+/**
+ * 取得 Account ID。
+ *
+ * 先試著自動抓，抓不到就讓使用者自己貼。
+ * 列出帳號需要的權限和部署需要的權限不一樣，
+ * 抓不到不代表 Token 有問題，所以不能因此中斷。
+ */
+async function resolveAccountId(token) {
+  const saved = kcGet(KEY_CF_ACCOUNT);
+
+  try {
+    const client = makeClient(token, scriptableFetch);
+    const accounts = await listAccounts(client);
+    if (accounts.length === 1) return accounts[0].id;
+
+    const a = new Alert();
+    a.title = '選擇 Cloudflare 帳號';
+    a.message = '這個 Token 看得到多個帳號。';
+    for (const acc of accounts) a.addAction(acc.name);
+    a.addCancelAction('取消');
+    const idx = await a.presentSheet();
+    if (idx === -1) return null;
+    return accounts[idx].id;
+  } catch (e) {
+    // 自動抓不到就手動輸入，這是很常見的情況，不是錯誤
+    const hint = '這個 Token 沒有列出帳號的權限（很正常，部署用不到）。\n\n'
+      + '請手動填 Account ID。它在 Cloudflare 儀表板網址裡：\n'
+      + 'dash.cloudflare.com/<這一段就是>/workers\n\n'
+      + '帳號首頁右下角也看得到，是一串 32 位的英數字。';
+    const id = await askText('Account ID', hint, 'Account ID', saved || '', false);
+    if (id === null) return null;
+    const clean = sanitizeToken(id);
+    if (!/^[0-9a-f]{32}$/i.test(clean)) {
+      await notice('格式不對', 'Account ID 應該是 32 位的英數字。\n\n你輸入的是 ' + clean.length + ' 個字元。');
+      return null;
+    }
+    return clean;
   }
 }
 

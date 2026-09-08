@@ -54,6 +54,36 @@ const REQUIRED_TOKEN_PERMISSIONS = Object.freeze([
   'Account → Workers KV Storage → Edit',
 ]);
 
+/**
+ * 清掉貼上時常夾帶的隱形字元。
+ * 在 iPhone 上複製 Token 很容易帶到不斷行空格或零寬字元，
+ * 而它們會讓認證失敗，錯誤訊息卻只說 invalid，非常難查。
+ */
+function sanitizeToken(value) {
+  return String(value ?? '').replace(/[\s\u00A0\u200B-\u200D\u2060\uFEFF]/g, '');
+}
+
+/**
+ * Token 格式的粗略檢查。
+ *
+ * 目的是在還沒發出請求前，先擋掉明顯複製錯的情況（例如整段說明文字
+ * 都被貼進來）。只回報看起來哪裡不對，不保證格式對就一定能用。
+ */
+function inspectTokenShape(token) {
+  const t = sanitizeToken(token);
+  if (!t) return { ok: false, reason: 'Token 是空的。' };
+  if (/[^A-Za-z0-9_-]/.test(t)) {
+    return { ok: false, reason: 'Token 含有不該出現的字元，可能複製到多餘的文字。Cloudflare 的 Token 只會有英數字、底線與連字號。' };
+  }
+  if (t.length < 30) {
+    return { ok: false, reason: `Token 只有 ${t.length} 個字元，看起來太短，可能沒複製完整。` };
+  }
+  if (t.length > 80) {
+    return { ok: false, reason: `Token 有 ${t.length} 個字元，看起來太長，可能複製到多餘內容。` };
+  }
+  return { ok: true, reason: null };
+}
+
 class CloudflareError extends Error {
   constructor(step, message, code) {
     super(message);
@@ -120,10 +150,9 @@ function hintForCfError(code, message) {
  * @param {(url:string, init:object)=>Promise<{status:number, json:()=>Promise<any>, text:()=>Promise<string>}>} doFetch
  */
 function makeClient(token, doFetch) {
-  if (typeof token !== 'string' || token.trim().length === 0) {
-    throw new Error('缺少 Cloudflare API Token');
-  }
-  const auth = { Authorization: `Bearer ${token.trim()}` };
+  const clean = sanitizeToken(token);
+  if (!clean) throw new Error('缺少 Cloudflare API Token');
+  const auth = { Authorization: `Bearer ${clean}` };
 
   async function call(step, method, path, { json, headers, body } = {}) {
     const init = {
@@ -138,26 +167,33 @@ function makeClient(token, doFetch) {
       res = await doFetch(CF_API + path, init);
     } catch (err) {
       // 網路層錯誤不該把 Token 帶出去
-      const raw = String(err?.message ?? err).split(token).join('[token]');
+      const raw = String(err?.message ?? err).split(clean).join('[token]');
       throw new CloudflareError(step, `連線失敗：${raw}`);
     }
 
     let parsed = null;
+    let rawText = null;
     try {
       parsed = await res.json();
     } catch {
       parsed = null;
+      // JSON 解析失敗時，原始內容才是有用的線索，不能只回「未知錯誤」
+      try { rawText = await res.text(); } catch { rawText = null; }
     }
 
     if (!parsed || parsed.success !== true) {
+      if (!parsed) {
+        const snippet = rawText ? `\n\n回應內容：${String(rawText).slice(0, 300)}` : '';
+        throw new CloudflareError(step, `HTTP ${res.status}：回應不是預期的 JSON${snippet}`, null);
+      }
       const detail = describeCfErrors(parsed);
-      const code = parsed?.errors?.[0]?.code ?? null;
-      throw new CloudflareError(step, explainCfError(code, detail), code);
+      const code = parsed.errors?.[0]?.code ?? null;
+      throw new CloudflareError(step, `${explainCfError(code, detail)}\n\n(HTTP ${res.status})`, code);
     }
     return parsed.result;
   }
 
-  return { call, token: token.trim() };
+  return { call, token: clean };
 }
 
 /* ------------------------------------------------------------------ */
@@ -170,6 +206,22 @@ async function verifyToken(client) {
     throw new CloudflareError('驗證 Token', `Token 狀態為 ${result.status}，不是 active`);
   }
   return result;
+}
+
+/**
+ * 用我們真正需要的權限去驗證，而不是用 /user/tokens/verify。
+ *
+ * 帳號層級的 Token 只給了 Workers Scripts 與 Workers KV 兩項權限時，
+ * /user/ 底下的端點與列出帳號都未必有權限，拿它們當驗證會誤判成
+ * 「Token 無效」，但那把 Token 其實部署得動。
+ * 所以直接打列出 Worker 的端點：能過就代表權限夠。
+ */
+async function verifyAccountAccess(client, accountId) {
+  const scripts = await client.call(
+    '確認權限', 'GET',
+    `/accounts/${accountId}/workers/scripts`,
+  );
+  return (Array.isArray(scripts) ? scripts : []).map((s) => s.id).filter(Boolean);
 }
 
 async function listAccounts(client) {
@@ -293,10 +345,9 @@ async function deployWorker({
   const say = onProgress ?? (() => {});
   const steps = [];
 
-  say('驗證 Token…');
-  await verifyToken(client);
-  steps.push('Token 有效');
-
+  // 刻意不呼叫 /user/tokens/verify。帳號層級的 Token 未必有 /user/ 的權限，
+  // 拿它當前置檢查會讓一把其實部署得動的 Token 被判成無效。
+  // 後面列出 Worker 那一步用的正是我們真正需要的權限，等於同時完成驗證。
   let kvNamespaceId = null;
   if (kvBindingName && kvTitle) {
     say('準備 KV 儲存空間…');
@@ -406,19 +457,30 @@ async function scriptableFetch(url, init) {
     if (init.body !== undefined) req.body = init.body;
   }
 
+  // 一律先拿原始字串再自己解析。直接用 loadJSON 的話，
+  // 解析失敗時就再也拿不到回應內容，錯誤訊息只能寫「未知錯誤」。
+  let raw = '';
+  try {
+    raw = await req.loadString();
+  } catch (e) {
+    raw = '';
+  }
+  const status = (req.response && req.response.statusCode) || 0;
+
   let parsed = null;
   try {
-    parsed = await req.loadJSON();
+    parsed = JSON.parse(raw);
   } catch (e) {
     parsed = null;
   }
-  const status = (req.response && req.response.statusCode) || 0;
+
   return {
     status,
     async json() {
       if (parsed !== null) return parsed;
-      throw new Error('HTTP ' + status + '：回應不是 JSON');
+      throw new Error('回應不是 JSON');
     },
+    async text() { return raw; },
   };
 }
 
@@ -466,36 +528,79 @@ async function setupToken() {
     + REQUIRED_TOKEN_PERMISSIONS.map(function (p) { return '· ' + p; }).join('\n')
     + '\n\nToken 只存在這支手機的 Keychain。';
 
-  const token = await askText('Cloudflare API Token', guide, 'Token', '', true);
-  if (token === null) return false;
-  if (!token) { await notice('未儲存', 'Token 不能是空的。'); return false; }
+  const rawToken = await askText('Cloudflare API Token', guide, 'Token', '', true);
+  if (rawToken === null) return false;
 
-  kcSet(KEY_CF_TOKEN, token);
+  // 貼上很容易帶到隱形字元，先清乾淨再看格式對不對，
+  // 免得白跑一趟 API 才得到一句沒幫助的「invalid」
+  const token = sanitizeToken(rawToken);
+  const shape = inspectTokenShape(token);
+  if (!shape.ok) {
+    await notice('Token 看起來不對', shape.reason + '\n\n請重新複製一次完整的 Token。');
+    return false;
+  }
 
-  // 存完立刻驗證，順便選帳號
+  const accountId = await resolveAccountId(token);
+  if (!accountId) return false;
+
+  // 用真正需要的權限去驗證，而不是用 /user/ 底下的端點。
+  // 帳號層級的 Token 未必能呼叫那些，拿來驗會誤判成 Token 無效。
   try {
     const client = makeClient(token, scriptableFetch);
-    await verifyToken(client);
-    const accounts = await listAccounts(client);
-
-    let accountId = accounts[0].id;
-    if (accounts.length > 1) {
-      const a = new Alert();
-      a.title = '選擇 Cloudflare 帳號';
-      a.message = '這個 Token 看得到多個帳號。';
-      for (const acc of accounts) a.addAction(acc.name);
-      a.addCancelAction('取消');
-      const idx = await a.presentSheet();
-      if (idx === -1) return false;
-      accountId = accounts[idx].id;
-    }
+    const scripts = await verifyAccountAccess(client, accountId);
+    kcSet(KEY_CF_TOKEN, token);
     kcSet(KEY_CF_ACCOUNT, accountId);
-    await notice('Token 有效', '已選定帳號：'
-      + (accounts.find(function (x) { return x.id === accountId; }) || {}).name);
+    await notice('連接成功',
+      '權限確認完成。\n\n這個帳號目前有 ' + scripts.length + ' 支 Worker'
+      + (scripts.length ? '：\n' + scripts.map(function (n) { return '· ' + n; }).join('\n') : '。')
+      + '\n\n接下來可以選「② 部署 Guardian」。');
     return true;
   } catch (err) {
-    await notice('Token 驗證失敗', describeStepError(err));
+    await notice('權限確認失敗', describeStepError(err)
+      + '\n\n請確認 Token 有這兩項權限：\n'
+      + REQUIRED_TOKEN_PERMISSIONS.map(function (p) { return '· ' + p; }).join('\n')
+      + '\n\n也請確認 Account ID 沒有貼錯。');
     return false;
+  }
+}
+
+/**
+ * 取得 Account ID。
+ *
+ * 先試著自動抓，抓不到就讓使用者自己貼。
+ * 列出帳號需要的權限和部署需要的權限不一樣，
+ * 抓不到不代表 Token 有問題，所以不能因此中斷。
+ */
+async function resolveAccountId(token) {
+  const saved = kcGet(KEY_CF_ACCOUNT);
+
+  try {
+    const client = makeClient(token, scriptableFetch);
+    const accounts = await listAccounts(client);
+    if (accounts.length === 1) return accounts[0].id;
+
+    const a = new Alert();
+    a.title = '選擇 Cloudflare 帳號';
+    a.message = '這個 Token 看得到多個帳號。';
+    for (const acc of accounts) a.addAction(acc.name);
+    a.addCancelAction('取消');
+    const idx = await a.presentSheet();
+    if (idx === -1) return null;
+    return accounts[idx].id;
+  } catch (e) {
+    // 自動抓不到就手動輸入，這是很常見的情況，不是錯誤
+    const hint = '這個 Token 沒有列出帳號的權限（很正常，部署用不到）。\n\n'
+      + '請手動填 Account ID。它在 Cloudflare 儀表板網址裡：\n'
+      + 'dash.cloudflare.com/<這一段就是>/workers\n\n'
+      + '帳號首頁右下角也看得到，是一串 32 位的英數字。';
+    const id = await askText('Account ID', hint, 'Account ID', saved || '', false);
+    if (id === null) return null;
+    const clean = sanitizeToken(id);
+    if (!/^[0-9a-f]{32}$/i.test(clean)) {
+      await notice('格式不對', 'Account ID 應該是 32 位的英數字。\n\n你輸入的是 ' + clean.length + ' 個字元。');
+      return null;
+    }
+    return clean;
   }
 }
 

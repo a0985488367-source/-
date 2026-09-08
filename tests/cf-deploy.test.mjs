@@ -55,6 +55,12 @@ const HAPPY_ROUTES = {
 
 const buildMultipart = (parts) => ({ headers: {}, body: { __multipart: parts } });
 
+const deployArgs = (extra = {}) => ({
+  accountId: ACCOUNT, scriptName: 'crypto-radar-guardian', script: 'export default {};',
+  kvBindingName: 'GUARDIAN_KV', kvTitle: 'crypto-radar-guardian',
+  secrets: {}, crons: [], buildMultipart, confirmReplace: async () => true, ...extra,
+});
+
 /* ------------------------------------------------------------------ */
 
 test('缺少 Token 時直接拒絕建立客戶端', () => {
@@ -145,7 +151,6 @@ test('完整部署會依序走完每一步', async () => {
   });
 
   assert.deepEqual(cf.calls.map((c) => c.key), [
-    'GET /user/tokens/verify',
     'GET /accounts/acct123/storage/kv/namespaces',
     'POST /accounts/acct123/storage/kv/namespaces',
     'GET /accounts/acct123/workers/scripts',
@@ -176,9 +181,15 @@ test('上傳用 multipart，程式碼與 metadata 分開兩份', async () => {
   assert.ok(Array.isArray(meta.bindings));
 });
 
+test('部署流程不依賴 /user/ 端點', async () => {
+  // 帳號層級的 Token 未必有 /user/ 權限，拿它當前置檢查會誤判
+  const cf = mockCf(HAPPY_ROUTES);
+  await deployWorker(deployArgs({ client: makeClient(TOKEN, cf.doFetch), confirmReplace: async () => true }));
+  assert.ok(!cf.calls.some((c) => c.key.includes('/user/')), '不該呼叫 /user/ 底下的端點');
+});
+
 test('任何一步失敗都會指出是哪一步', async () => {
   const cases = [
-    ['驗證 Token', { 'GET /user/tokens/verify': fail(10000, 'Invalid API Token') }],
     ['讀取 KV', { ...HAPPY_ROUTES, 'GET /accounts/acct123/storage/kv/namespaces': fail(10001, '沒權限') }],
     ['上傳 Worker', { ...HAPPY_ROUTES, 'PUT /accounts/acct123/workers/scripts/crypto-radar-guardian': fail(10021, '指令碼錯誤') }],
     ['設定排程', { ...HAPPY_ROUTES, 'PUT /accounts/acct123/workers/scripts/crypto-radar-guardian/schedules': fail(10022, 'cron 錯') }],
@@ -275,12 +286,6 @@ test('網址組法正確', () => {
 /* 覆蓋既有 Worker 的保險                                                */
 /* ------------------------------------------------------------------ */
 
-const deployArgs = (extra = {}) => ({
-  accountId: ACCOUNT, scriptName: 'crypto-radar-guardian', script: 'export default {};',
-  kvBindingName: 'GUARDIAN_KV', kvTitle: 'crypto-radar-guardian',
-  secrets: {}, crons: [], buildMultipart, ...extra,
-});
-
 test('列出帳號上既有的 Worker', async () => {
   const cf = mockCf({
     'GET /accounts/acct123/workers/scripts': ok([
@@ -330,7 +335,7 @@ test('沒有提供確認函式時，等同拒絕覆蓋', async () => {
     'GET /accounts/acct123/workers/scripts': ok([{ id: 'crypto-radar-guardian' }]),
   });
   await assert.rejects(
-    () => deployWorker(deployArgs({ client: makeClient(TOKEN, cf.doFetch) })),
+    () => deployWorker(deployArgs({ client: makeClient(TOKEN, cf.doFetch), confirmReplace: undefined })),
     /未取得覆蓋確認/,
   );
 });

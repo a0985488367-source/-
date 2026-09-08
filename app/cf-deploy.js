@@ -19,6 +19,36 @@ export const REQUIRED_TOKEN_PERMISSIONS = Object.freeze([
   'Account → Workers KV Storage → Edit',
 ]);
 
+/**
+ * 清掉貼上時常夾帶的隱形字元。
+ * 在 iPhone 上複製 Token 很容易帶到不斷行空格或零寬字元，
+ * 而它們會讓認證失敗，錯誤訊息卻只說 invalid，非常難查。
+ */
+export function sanitizeToken(value) {
+  return String(value ?? '').replace(/[\s\u00A0\u200B-\u200D\u2060\uFEFF]/g, '');
+}
+
+/**
+ * Token 格式的粗略檢查。
+ *
+ * 目的是在還沒發出請求前，先擋掉明顯複製錯的情況（例如整段說明文字
+ * 都被貼進來）。只回報看起來哪裡不對，不保證格式對就一定能用。
+ */
+export function inspectTokenShape(token) {
+  const t = sanitizeToken(token);
+  if (!t) return { ok: false, reason: 'Token 是空的。' };
+  if (/[^A-Za-z0-9_-]/.test(t)) {
+    return { ok: false, reason: 'Token 含有不該出現的字元，可能複製到多餘的文字。Cloudflare 的 Token 只會有英數字、底線與連字號。' };
+  }
+  if (t.length < 30) {
+    return { ok: false, reason: `Token 只有 ${t.length} 個字元，看起來太短，可能沒複製完整。` };
+  }
+  if (t.length > 80) {
+    return { ok: false, reason: `Token 有 ${t.length} 個字元，看起來太長，可能複製到多餘內容。` };
+  }
+  return { ok: true, reason: null };
+}
+
 export class CloudflareError extends Error {
   constructor(step, message, code) {
     super(message);
@@ -85,10 +115,9 @@ export function hintForCfError(code, message) {
  * @param {(url:string, init:object)=>Promise<{status:number, json:()=>Promise<any>, text:()=>Promise<string>}>} doFetch
  */
 export function makeClient(token, doFetch) {
-  if (typeof token !== 'string' || token.trim().length === 0) {
-    throw new Error('缺少 Cloudflare API Token');
-  }
-  const auth = { Authorization: `Bearer ${token.trim()}` };
+  const clean = sanitizeToken(token);
+  if (!clean) throw new Error('缺少 Cloudflare API Token');
+  const auth = { Authorization: `Bearer ${clean}` };
 
   async function call(step, method, path, { json, headers, body } = {}) {
     const init = {
@@ -103,26 +132,33 @@ export function makeClient(token, doFetch) {
       res = await doFetch(CF_API + path, init);
     } catch (err) {
       // 網路層錯誤不該把 Token 帶出去
-      const raw = String(err?.message ?? err).split(token).join('[token]');
+      const raw = String(err?.message ?? err).split(clean).join('[token]');
       throw new CloudflareError(step, `連線失敗：${raw}`);
     }
 
     let parsed = null;
+    let rawText = null;
     try {
       parsed = await res.json();
     } catch {
       parsed = null;
+      // JSON 解析失敗時，原始內容才是有用的線索，不能只回「未知錯誤」
+      try { rawText = await res.text(); } catch { rawText = null; }
     }
 
     if (!parsed || parsed.success !== true) {
+      if (!parsed) {
+        const snippet = rawText ? `\n\n回應內容：${String(rawText).slice(0, 300)}` : '';
+        throw new CloudflareError(step, `HTTP ${res.status}：回應不是預期的 JSON${snippet}`, null);
+      }
       const detail = describeCfErrors(parsed);
-      const code = parsed?.errors?.[0]?.code ?? null;
-      throw new CloudflareError(step, explainCfError(code, detail), code);
+      const code = parsed.errors?.[0]?.code ?? null;
+      throw new CloudflareError(step, `${explainCfError(code, detail)}\n\n(HTTP ${res.status})`, code);
     }
     return parsed.result;
   }
 
-  return { call, token: token.trim() };
+  return { call, token: clean };
 }
 
 /* ------------------------------------------------------------------ */
@@ -135,6 +171,22 @@ export async function verifyToken(client) {
     throw new CloudflareError('驗證 Token', `Token 狀態為 ${result.status}，不是 active`);
   }
   return result;
+}
+
+/**
+ * 用我們真正需要的權限去驗證，而不是用 /user/tokens/verify。
+ *
+ * 帳號層級的 Token 只給了 Workers Scripts 與 Workers KV 兩項權限時，
+ * /user/ 底下的端點與列出帳號都未必有權限，拿它們當驗證會誤判成
+ * 「Token 無效」，但那把 Token 其實部署得動。
+ * 所以直接打列出 Worker 的端點：能過就代表權限夠。
+ */
+export async function verifyAccountAccess(client, accountId) {
+  const scripts = await client.call(
+    '確認權限', 'GET',
+    `/accounts/${accountId}/workers/scripts`,
+  );
+  return (Array.isArray(scripts) ? scripts : []).map((s) => s.id).filter(Boolean);
 }
 
 export async function listAccounts(client) {
@@ -258,10 +310,9 @@ export async function deployWorker({
   const say = onProgress ?? (() => {});
   const steps = [];
 
-  say('驗證 Token…');
-  await verifyToken(client);
-  steps.push('Token 有效');
-
+  // 刻意不呼叫 /user/tokens/verify。帳號層級的 Token 未必有 /user/ 的權限，
+  // 拿它當前置檢查會讓一把其實部署得動的 Token 被判成無效。
+  // 後面列出 Worker 那一步用的正是我們真正需要的權限，等於同時完成驗證。
   let kvNamespaceId = null;
   if (kvBindingName && kvTitle) {
     say('準備 KV 儲存空間…');
