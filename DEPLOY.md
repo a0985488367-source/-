@@ -9,33 +9,54 @@
 
 ---
 
-## 最省事的做法：用部署工具（推薦）
+## 最省事的做法：一鍵安裝
 
 `public/crypto-radar-deploy.scriptable.js`
 
-一支 Scriptable 腳本，用 Cloudflare API 直接建 KV、上傳 Worker、
-設排程、開網址。**完全不碰儀表板的程式編輯器**，也不用複製 Worker 程式碼
-（兩支 Worker 都已經內嵌在裡面）。
+一支 Scriptable 腳本，用 Cloudflare API 把整件事做完：建 KV、上傳
+Worker、設排程、開網址、驗證。**完全不碰儀表板的程式編輯器**，
+也不用複製 Worker 程式碼（兩支 Worker 都已內嵌）。
 
 1. Scriptable 新增一個 Script，貼上這份檔案
-2. 執行 → **① 設定 Cloudflare Token**
+2. 執行 → **★ 一鍵安裝**
 
-   Token 在 Cloudflare 儀表板 → 頭像 → **My Profile** → **API Tokens**
-   → **Create Token** → **Create Custom Token**，權限加這兩項：
+中間只會停下來問你兩件事：
 
-   | 類型 | 項目 | 權限 |
-   | --- | --- | --- |
-   | Account | Workers Scripts | Edit |
-   | Account | Workers KV Storage | Edit |
+**一、Cloudflare API Token**
 
-3. → **② 部署 Guardian**
-4. 想要監控的話 → **③ 部署心跳守衛**
+儀表板 → 頭像 → **My Profile** → **API Tokens** → **Create Token**
+→ **Create Custom Token**，權限加這兩項：
 
-Bybit 憑證與 Discord Webhook 會自動從掃描器那支腳本共用的 Keychain 讀取，
-不用重打。管理 Token 沒設過會自動產一組 32 字元隨機字串。
+| 類型 | 項目 | 權限 |
+| --- | --- | --- |
+| Account | Workers Scripts | Edit |
+| Account | Workers KV Storage | Edit |
 
-**一件要先知道的事**：這支腳本的 Cloudflare API 呼叫**沒有在開發環境實測過**，
-因為那個環境連不到 api.cloudflare.com。請求構造是照 Cloudflare 的 API 文件寫的，
+**二、cron 額度不夠時，要釋出哪一支**
+
+免費方案每個帳號只有 5 個 cron 觸發器。用滿的話，工具會列出帳號上
+所有排程讓你挑一個釋出，本工具自己部署的會標記出來並排在前面。
+
+**選到不是本工具部署的會再確認一次**，因為那可能是你正在跑的東西
+（例如既有的交易系統），清掉排程它就不會再自動執行。工具不會自動
+替你選，也不會自動刪。
+
+釋出之後會自動重試，不用重來一遍。
+
+其餘全部自動。Bybit 憑證與 Discord Webhook 從掃描器共用的 Keychain
+讀取，管理 Token 沒設過會自動產一組 32 字元隨機字串。
+
+### 選單其他項目
+
+| 項目 | 用途 |
+| --- | --- |
+| 只設定排程 | Worker 已在、只補排程，不重新上傳 |
+| 查看 Cron 用量 | 逐支列出誰佔了那 5 個額度 |
+| 查看目前狀態 | 讀 /api/status |
+| 開啟網頁 | 自動帶上管理 Token |
+
+**一件要先知道的事**：這支腳本的 Cloudflare API 呼叫**沒有在開發環境
+實測過**，因為那個環境連不到 api.cloudflare.com。請求構造是照文件寫的，
 也有測試驗證構造與流程，但實際能不能通要以你執行的結果為準。
 任何一步失敗都會明確告訴你卡在哪一步、Cloudflare 原話怎麼說。
 

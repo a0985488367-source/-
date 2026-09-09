@@ -234,10 +234,11 @@ function describeStepError(err) {
 
 /* ================= 部署 ================= */
 
-async function deployGuardian() {
+async function deployGuardian(opts) {
   const token = kcGet(KEY_CF_TOKEN);
   const accountId = kcGet(KEY_CF_ACCOUNT);
-  if (!token || !accountId) { await notice('尚未設定', '請先設定 Cloudflare API Token。'); return; }
+  const silent = opts && opts.silent;
+  if (!token || !accountId) { await notice('尚未設定', '請先設定 Cloudflare API Token。'); return null; }
 
   const webhook = kcGet(KEY_WEBHOOK);
   const apiKey = kcGet(KEY_API_KEY);
@@ -257,7 +258,7 @@ async function deployGuardian() {
     + 'Bybit 帳戶：' + (apiKey && apiSecret ? '已帶入（' + bybitEnv + '）' : '未設定') + '\n\n'
     + '機密會直接寫進 Worker 的 Secrets，不會出現在網頁上。';
 
-  if (!(await confirm('部署 Guardian', summary, '開始部署'))) return;
+  if (!(await confirm('部署 Guardian', summary, '開始部署'))) return null;
 
   try {
     const client = makeClient(token, scriptableFetch);
@@ -283,15 +284,20 @@ async function deployGuardian() {
 
     if (result.url) kcSet(KEY_GUARDIAN_URL, result.url);
 
-    if (result.scheduleError) {
-      await reportScheduleFailure(result, 'crypto-radar-guardian');
-    } else {
-      await notice('部署完成', result.steps.join('\n')
-        + '\n\n第一次掃描要等排程觸發，最多 5 分鐘。'
-        + (result.url ? '\n\n看帳戶請在網址後面加：\n?token=' + adminToken : ''));
+    // 一鍵流程要自己接手處理排程問題，所以這裡不重複跳訊息
+    if (!silent) {
+      if (result.scheduleError) {
+        await reportScheduleFailure(result, 'crypto-radar-guardian');
+      } else {
+        await notice('部署完成', result.steps.join('\n')
+          + '\n\n第一次掃描要等排程觸發，最多 5 分鐘。'
+          + (result.url ? '\n\n看帳戶請在網址後面加：\n?token=' + adminToken : ''));
+      }
     }
+    return result;
   } catch (err) {
     await notice('部署失敗', describeStepError(err));
+    return null;
   }
 }
 
@@ -448,6 +454,125 @@ async function showCronUsage() {
   }
 }
 
+/**
+ * cron 額度滿了的時候，讓使用者挑一個釋出。
+ *
+ * 絕不自動選。帳號上那些排程可能正在跑別的東西
+ * （例如既有的交易系統），刪掉是不可逆的。
+ *
+ * @returns {Promise<boolean>} 有沒有成功釋出
+ */
+async function freeCronSlot(client, accountId) {
+  const audit = await auditCrons(client, accountId);
+  const options = freeableCrons(audit);
+
+  if (!options.length) {
+    await notice('沒有可以釋出的排程',
+      '帳號上找不到任何已設定的 cron 排程，但 Cloudflare 說額度已滿。\n\n'
+      + '請直接到 Cloudflare 儀表板檢查各個 Worker 的 Trigger Events。');
+    return false;
+  }
+
+  const a = new Alert();
+  a.title = 'Cron 額度已滿（' + audit.total + '/' + audit.limitFree + '）';
+  a.message = '要釋出哪一支的排程給 Guardian 用？\n\n'
+    + '釋出後那支 Worker 就不會再自動執行。\n'
+    + '「本工具」標記的是這支腳本自己部署的，刪掉沒有外部影響。';
+  for (const opt of options) {
+    a.addAction((opt.origin === 'own' ? '［本工具］' : '［其他］') + opt.script
+      + '（' + opt.count + ' 個）');
+  }
+  a.addCancelAction('取消');
+  const idx = await a.presentSheet();
+  if (idx === -1) return false;
+
+  const chosen = options[idx];
+
+  // 不是自己部署的，再確認一次。這可能是正在跑的東西。
+  if (chosen.origin !== 'own') {
+    const warn = new Alert();
+    warn.title = '這不是本工具部署的';
+    warn.message = '「' + chosen.script + '」的排程：\n'
+      + chosen.crons.join('\n')
+      + '\n\n清掉之後這支 Worker 就不會再自動執行。\n'
+      + '如果它正在管理交易或做其他定時工作，那些都會停止。\n\n'
+      + '確定要釋出嗎？';
+    warn.addDestructiveAction('確定釋出');
+    warn.addCancelAction('取消');
+    if ((await warn.present()) === -1) return false;
+  }
+
+  try {
+    await clearSchedules(client, accountId, chosen.script);
+    await notice('已釋出', chosen.script + ' 的排程已清除，釋出 ' + chosen.count + ' 個額度。');
+    return true;
+  } catch (err) {
+    await notice('釋出失敗', describeStepError(err));
+    return false;
+  }
+}
+
+/**
+ * 一鍵安裝：設定、部署、處理 cron 額度、驗證，一路走完。
+ *
+ * 中間只有兩件事會停下來問你：Cloudflare Token，
+ * 以及 cron 額度不夠時要釋出哪一支。其餘全部自動。
+ */
+async function oneTapInstall() {
+  // 一、確保有 Token 與帳號
+  if (!kcGet(KEY_CF_TOKEN) || !kcGet(KEY_CF_ACCOUNT)) {
+    if (!(await setupToken())) return;
+  }
+
+  const token = kcGet(KEY_CF_TOKEN);
+  const accountId = kcGet(KEY_CF_ACCOUNT);
+  const client = makeClient(token, scriptableFetch);
+
+  // 二、部署 Guardian
+  const deployed = await deployGuardian({ silent: true });
+  if (!deployed) return;
+
+  // 三、排程沒設成就處理額度後重試
+  if (deployed.scheduleError) {
+    if (!isCronLimitError(deployed.scheduleError)) {
+      await notice('已部署，但排程沒設成', describeStepError(deployed.scheduleError));
+      return;
+    }
+    const freed = await freeCronSlot(client, accountId);
+    if (!freed) {
+      await notice('安裝未完成',
+        'Worker 已經部署好，網頁打得開，但還沒有自動排程。\n\n'
+        + '之後可以隨時回到選單選「只設定排程」補上。');
+      return;
+    }
+    try {
+      await setSchedules(client, accountId, 'crypto-radar-guardian', ['*/5 * * * *']);
+    } catch (err) {
+      await notice('排程仍然設不上', describeStepError(err));
+      return;
+    }
+  }
+
+  // 四、驗證
+  const url = kcGet(KEY_GUARDIAN_URL);
+  let statusLine = '第一次掃描要等排程觸發，最多 5 分鐘。';
+  try {
+    const req = new Request(url + '/api/status');
+    req.timeoutInterval = 30;
+    const st = await req.loadJSON();
+    statusLine = '版本 ' + st.version + '｜狀態 ' + st.health
+      + '｜排程 ' + st.cron + '｜' + st.tradeMode;
+  } catch (e) {
+    // 剛部署完還沒跑過排程，讀不到是正常的
+  }
+
+  await notice('安裝完成',
+    '網址：\n' + url + '\n\n'
+    + statusLine + '\n\n'
+    + '看帳戶請在網址後面加：\n?token=' + kcGet(KEY_ADMIN_TOKEN)
+    + '\n\n（選單裡有「開啟網頁」會自動帶上）');
+}
+
 function randomToken() {
   const chars = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let out = '';
@@ -504,6 +629,7 @@ async function menu() {
   a.title = 'Crypto Radar 部署工具';
   a.message = 'Cloudflare：' + (token ? mask(token) : '未設定')
     + '\nGuardian：' + (url || '未部署');
+  a.addAction('★ 一鍵安裝（推薦）');
   a.addAction(token ? '重新設定 Cloudflare Token' : '① 設定 Cloudflare Token');
   a.addAction('② 部署 Guardian');
   a.addAction('③ 部署心跳守衛（選配）');
@@ -515,14 +641,15 @@ async function menu() {
   a.addCancelAction('關閉');
 
   const idx = await a.presentSheet();
-  if (idx === 0) { await setupToken(); await menu(); }
-  else if (idx === 1) { await deployGuardian(); await menu(); }
-  else if (idx === 2) { await deployWatchdog(); await menu(); }
-  else if (idx === 3) { await setCronOnly(); await menu(); }
-  else if (idx === 4) { await showCronUsage(); await menu(); }
-  else if (idx === 5) { await checkStatus(); await menu(); }
-  else if (idx === 6) { await openSite(); }
-  else if (idx === 7) { await clearAll(); await menu(); }
+  if (idx === 0) { await oneTapInstall(); await menu(); }
+  else if (idx === 1) { await setupToken(); await menu(); }
+  else if (idx === 2) { await deployGuardian(); await menu(); }
+  else if (idx === 3) { await deployWatchdog(); await menu(); }
+  else if (idx === 4) { await setCronOnly(); await menu(); }
+  else if (idx === 5) { await showCronUsage(); await menu(); }
+  else if (idx === 6) { await checkStatus(); await menu(); }
+  else if (idx === 7) { await openSite(); }
+  else if (idx === 8) { await clearAll(); await menu(); }
 }
 
 try {

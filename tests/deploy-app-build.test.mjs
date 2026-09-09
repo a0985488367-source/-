@@ -152,7 +152,7 @@ test('未設定時選單顯示未設定，不會誤導', async () => {
 test('設定 Token 會用真正需要的權限驗證，不碰 /user/ 端點', async () => {
   const store = new Map();
   const { cfCalls, store: after } = await run({
-    sheetAnswers: [0, -1], alertAnswers: [0, 0], textValues: [CF_TOKEN], store,
+    sheetAnswers: [1, -1], alertAnswers: [0, 0], textValues: [CF_TOKEN], store,
   });
   const paths = cfCalls.map((c) => c.path);
   assert.ok(!paths.includes('/user/tokens/verify'),
@@ -168,7 +168,7 @@ test('Token 夾帶隱形字元時會先清乾淨再用', async () => {
   const store = new Map();
   const dirty = ' ' + CF_TOKEN.slice(0, 10) + '\u200B' + CF_TOKEN.slice(10) + '\n';
   const { cfCalls, store: after } = await run({
-    sheetAnswers: [0, -1], alertAnswers: [0, 0], textValues: [dirty], store,
+    sheetAnswers: [1, -1], alertAnswers: [0, 0], textValues: [dirty], store,
   });
   assert.equal(after.get('crg.cf.token'), CF_TOKEN, '存進去的必須是清乾淨的');
   assert.equal(cfCalls[0].headers.Authorization, `Bearer ${CF_TOKEN}`);
@@ -177,7 +177,7 @@ test('Token 夾帶隱形字元時會先清乾淨再用', async () => {
 test('Token 明顯複製錯時，連請求都不發', async () => {
   for (const bad of ['太短', 'abc def 這是說明文字不是 token', 'x'.repeat(200)]) {
     const { cfCalls, alerts } = await run({
-      sheetAnswers: [0, -1], alertAnswers: [0, 0], textValues: [bad], store: new Map(),
+      sheetAnswers: [1, -1], alertAnswers: [0, 0], textValues: [bad], store: new Map(),
     });
     assert.equal(cfCalls.length, 0, `"${bad.slice(0, 12)}" 不該發出請求`);
     assert.ok(alerts.some((a) => a.title === 'Token 看起來不對'));
@@ -187,7 +187,7 @@ test('Token 明顯複製錯時，連請求都不發', async () => {
 test('列不出帳號時退回手動輸入 Account ID，不當成 Token 失效', async () => {
   const store = new Map();
   const { cfCalls, alerts, store: after } = await run({
-    sheetAnswers: [0, -1], alertAnswers: [0, 0, 0],
+    sheetAnswers: [1, -1], alertAnswers: [0, 0, 0],
     textValues: [CF_TOKEN, 'abcdef0123456789abcdef0123456789'], store,
     failAt: (path) => (path === '/accounts' ? { code: 9109, message: 'not entitled' } : null),
   });
@@ -198,7 +198,7 @@ test('列不出帳號時退回手動輸入 Account ID，不當成 Token 失效',
 
 test('手動輸入的 Account ID 格式不對會擋下', async () => {
   const { alerts, store: after } = await run({
-    sheetAnswers: [0, -1], alertAnswers: [0, 0, 0],
+    sheetAnswers: [1, -1], alertAnswers: [0, 0, 0],
     textValues: [CF_TOKEN, '這不是ID'], store: new Map(),
     failAt: (path) => (path === '/accounts' ? { code: 9109, message: 'not entitled' } : null),
   });
@@ -209,7 +209,7 @@ test('手動輸入的 Account ID 格式不對會擋下', async () => {
 test('回應不是 JSON 時，錯誤訊息帶出狀態碼與原始內容', async () => {
   const store = new Map([['crg.cf.token', CF_TOKEN], ['crg.cf.account', 'acct123']]);
   const { alerts } = await run({
-    sheetAnswers: [1, -1], alertAnswers: [0, 0], store, rawResponse: '<html>502 Bad Gateway</html>',
+    sheetAnswers: [2, -1], alertAnswers: [0, 0], store, rawResponse: '<html>502 Bad Gateway</html>',
   });
   const failure = alerts.find((a) => a.title === '部署失敗');
   assert.ok(failure, '應顯示失敗');
@@ -226,7 +226,7 @@ test('部署 Guardian 會走完建 KV、上傳、排程、開網址', async () =
     ['crg.bybit.env', 'demo'],
   ]);
   const { cfCalls, multipartParts, store: after, alerts } = await run({
-    sheetAnswers: [1, -1], alertAnswers: [0, 0], store,
+    sheetAnswers: [2, -1], alertAnswers: [0, 0], store,
   });
 
   const paths = cfCalls.map((c) => `${c.method} ${c.path}`);
@@ -249,7 +249,7 @@ test('上傳的 multipart 帶著真正的 Worker 程式碼與完整綁定', asyn
     ['crg.discord.webhook', HOOK], ['crg.bybit.apiKey', BYBIT_KEY],
     ['crg.bybit.apiSecret', BYBIT_SECRET], ['crg.bybit.env', 'demo'],
   ]);
-  const { multipartParts } = await run({ sheetAnswers: [1, -1], alertAnswers: [0, 0], store });
+  const { multipartParts } = await run({ sheetAnswers: [2, -1], alertAnswers: [0, 0], store });
 
   assert.equal(multipartParts.length, 1);
   const parts = multipartParts[0];
@@ -271,20 +271,20 @@ test('上傳的 multipart 帶著真正的 Worker 程式碼與完整綁定', asyn
 
 test('沒設過 ADMIN_TOKEN 會自動產生並存起來', async () => {
   const store = new Map([['crg.cf.token', CF_TOKEN], ['crg.cf.account', 'acct123']]);
-  const { store: after } = await run({ sheetAnswers: [1, -1], alertAnswers: [0, 0], store });
+  const { store: after } = await run({ sheetAnswers: [2, -1], alertAnswers: [0, 0], store });
   const token = after.get('crg.admin.token');
   assert.ok(token && token.length === 32, `自動產生的 Token 長度為 ${token && token.length}`);
 });
 
 test('未設定 Token 就部署會被擋下，不會發任何請求', async () => {
-  const { cfCalls, alerts } = await run({ sheetAnswers: [1, -1], alertAnswers: [0], store: new Map() });
+  const { cfCalls, alerts } = await run({ sheetAnswers: [2, -1], alertAnswers: [0], store: new Map() });
   assert.equal(cfCalls.length, 0);
   assert.ok(alerts.some((a) => a.title === '尚未設定'));
 });
 
 test('沒部署 Guardian 就部署守衛會被擋下', async () => {
   const store = new Map([['crg.cf.token', CF_TOKEN], ['crg.cf.account', 'acct123'], ['crg.discord.webhook', HOOK]]);
-  const { cfCalls, alerts } = await run({ sheetAnswers: [2, -1], alertAnswers: [0], store });
+  const { cfCalls, alerts } = await run({ sheetAnswers: [3, -1], alertAnswers: [0], store });
   assert.equal(cfCalls.length, 0);
   assert.ok(alerts.some((a) => a.title === '順序不對'));
 });
@@ -294,7 +294,7 @@ test('沒有 Webhook 就部署守衛會被擋下', async () => {
     ['crg.cf.token', CF_TOKEN], ['crg.cf.account', 'acct123'],
     ['crg.cf.guardianUrl', 'https://g.example.workers.dev'],
   ]);
-  const { cfCalls, alerts } = await run({ sheetAnswers: [2, -1], alertAnswers: [0], store });
+  const { cfCalls, alerts } = await run({ sheetAnswers: [3, -1], alertAnswers: [0], store });
   assert.equal(cfCalls.length, 0);
   assert.ok(alerts.some((a) => a.title === '缺少 Webhook'));
 });
@@ -304,7 +304,7 @@ test('部署守衛帶入 Guardian 網址與錯開的排程', async () => {
     ['crg.cf.token', CF_TOKEN], ['crg.cf.account', 'acct123'],
     ['crg.cf.guardianUrl', 'https://g.example.workers.dev'], ['crg.discord.webhook', HOOK],
   ]);
-  const { cfCalls, multipartParts } = await run({ sheetAnswers: [2, -1], alertAnswers: [0, 0], store });
+  const { cfCalls, multipartParts } = await run({ sheetAnswers: [3, -1], alertAnswers: [0, 0], store });
   const sched = cfCalls.find((c) => c.path.endsWith('/schedules'));
   assert.deepEqual(JSON.parse(sched.body), [{ cron: '4,14,24,34,44,54 * * * *' }]);
   const meta = JSON.parse(multipartParts[0].metadata);
@@ -313,20 +313,20 @@ test('部署守衛帶入 Guardian 網址與錯開的排程', async () => {
   assert.equal(byName.WATCHDOG_KV.type, 'kv_namespace');
 });
 
-// 選單順序：0 設定Token / 1 部署Guardian / 2 部署守衛 /
-//           3 只設定排程 / 4 查看Cron用量 / 5 查看狀態 / 6 開啟網頁 / 7 清除
+// 選單順序：0 一鍵安裝 / 1 設定Token / 2 部署Guardian / 3 部署守衛 /
+//           4 只設定排程 / 5 查看Cron用量 / 6 查看狀態 / 7 開啟網頁 / 8 清除
 test('開啟網頁會帶上管理 Token', async () => {
   const store = new Map([
     ['crg.cf.guardianUrl', 'https://g.example.workers.dev'],
     ['crg.admin.token', 'tok12345'],
   ]);
-  const { opened } = await run({ sheetAnswers: [6], store });
+  const { opened } = await run({ sheetAnswers: [7], store });
   assert.equal(opened[0], 'https://g.example.workers.dev?token=tok12345');
 });
 
 test('查看狀態會讀 /api/status 並顯示關鍵欄位', async () => {
   const store = new Map([['crg.cf.guardianUrl', 'https://g.example.workers.dev']]);
-  const { alerts } = await run({ sheetAnswers: [5, -1], alertAnswers: [0], store });
+  const { alerts } = await run({ sheetAnswers: [6, -1], alertAnswers: [0], store });
   const status = alerts.find((a) => a.title === '目前狀態');
   assert.ok(status);
   assert.match(status.message, /Crypto Radar Guardian 10\.0/);
@@ -336,7 +336,7 @@ test('查看狀態會讀 /api/status 並顯示關鍵欄位', async () => {
 test('上傳失敗時明確指出卡在哪一步，並轉述 Cloudflare 的說法', async () => {
   const store = new Map([['crg.cf.token', CF_TOKEN], ['crg.cf.account', 'acct123']]);
   const { alerts } = await run({
-    sheetAnswers: [1, -1], alertAnswers: [0, 0], store,
+    sheetAnswers: [2, -1], alertAnswers: [0, 0], store,
     failAt: (path, method) => (method === 'PUT' && /\/workers\/scripts\/[^/]+$/.test(path)
       ? { code: 10021, message: 'Script startup exceeded CPU limit' }
       : null),
@@ -349,7 +349,7 @@ test('上傳失敗時明確指出卡在哪一步，並轉述 Cloudflare 的說�
 
 test('權限不足時，錯誤訊息會講出要加哪些權限', async () => {
   const { alerts } = await run({
-    sheetAnswers: [0, -1], alertAnswers: [0, 0], textValues: [CF_TOKEN], store: new Map(),
+    sheetAnswers: [1, -1], alertAnswers: [0, 0], textValues: [CF_TOKEN], store: new Map(),
     failAt: (path) => (path.endsWith('/workers/scripts')
       ? { code: 10000, message: 'Invalid API Token' } : null),
   });
@@ -380,7 +380,7 @@ test('產生器輸出是決定性的', () => {
 test('帳號上有別的 Worker 時不會被動到，也不會多問', async () => {
   const store = new Map([['crg.cf.token', CF_TOKEN], ['crg.cf.account', 'acct123']]);
   const { cfCalls, alerts } = await run({
-    sheetAnswers: [1, -1], alertAnswers: [0, 0], store,
+    sheetAnswers: [2, -1], alertAnswers: [0, 0], store,
     existingScripts: ['crypto-radar-guardian-24x7'],
   });
   assert.ok(cfCalls.some((c) => c.path.endsWith('/workers/scripts/crypto-radar-guardian')),
@@ -394,7 +394,7 @@ test('同名時會跳出覆蓋警告，取消就不上傳', async () => {
   const store = new Map([['crg.cf.token', CF_TOKEN], ['crg.cf.account', 'acct123']]);
   const { cfCalls, alerts } = await run({
     // 第一個 alertAnswers 是部署確認，第二個是覆蓋確認（回 -1 代表取消）
-    sheetAnswers: [1, -1], alertAnswers: [0, -1, 0], store,
+    sheetAnswers: [2, -1], alertAnswers: [0, -1, 0], store,
     existingScripts: ['crypto-radar-guardian'],
   });
   const warn = alerts.find((a) => a.title === '這個名字已經有 Worker 了');
@@ -411,7 +411,7 @@ test('同名時會跳出覆蓋警告，取消就不上傳', async () => {
 test('cron 額度滿時，回報成「已部署但排程沒設成」而不是部署失敗', async () => {
   const store = new Map([['crg.cf.token', CF_TOKEN], ['crg.cf.account', 'acct123']]);
   const { alerts, store: after } = await run({
-    sheetAnswers: [1, -1], alertAnswers: [0, 0], store,
+    sheetAnswers: [2, -1], alertAnswers: [0, 0], store,
     failAt: (path, method) => (method === 'PUT' && path.endsWith('/schedules')
       ? { code: 10072, message: 'This account has reached the Workers Free limit of 5 cron triggers per account.' }
       : null),
@@ -429,7 +429,7 @@ test('cron 額度滿時，回報成「已部署但排程沒設成」而不是部
 test('查看 Cron 用量會逐支列出並算總數', async () => {
   const store = new Map([['crg.cf.token', CF_TOKEN], ['crg.cf.account', 'acct123']]);
   const { alerts } = await run({
-    sheetAnswers: [4, -1], alertAnswers: [0], store,
+    sheetAnswers: [5, -1], alertAnswers: [0], store,
     existingScripts: ['crypto-radar-guardian-24x7', 'old-worker'],
     schedulesByScript: {
       'crypto-radar-guardian-24x7': ['*/5 * * * *', '4,14,24,34,44,54 * * * *'],
@@ -446,7 +446,7 @@ test('查看 Cron 用量會逐支列出並算總數', async () => {
 test('cron 用滿時，用量畫面會講出解法', async () => {
   const store = new Map([['crg.cf.token', CF_TOKEN], ['crg.cf.account', 'acct123']]);
   const { alerts } = await run({
-    sheetAnswers: [4, -1], alertAnswers: [0], store,
+    sheetAnswers: [5, -1], alertAnswers: [0], store,
     existingScripts: ['a', 'b'],
     schedulesByScript: { a: ['1 * * * *', '2 * * * *', '3 * * * *'], b: ['4 * * * *', '5 * * * *'] },
   });
@@ -459,7 +459,7 @@ test('cron 用滿時，用量畫面會講出解法', async () => {
 test('只設定排程不會重新上傳 Worker', async () => {
   const store = new Map([['crg.cf.token', CF_TOKEN], ['crg.cf.account', 'acct123']]);
   const { cfCalls, alerts } = await run({
-    sheetAnswers: [3, 0, -1], alertAnswers: [0], store,
+    sheetAnswers: [4, 0, -1], alertAnswers: [0], store,
   });
   assert.ok(!cfCalls.some((c) => c.parts), '不該有 multipart 上傳');
   const sched = cfCalls.find((c) => c.method === 'PUT' && c.path.endsWith('/schedules'));
@@ -471,11 +471,147 @@ test('只設定排程不會重新上傳 Worker', async () => {
 test('只設定排程時若額度仍滿，說明要先釋出', async () => {
   const store = new Map([['crg.cf.token', CF_TOKEN], ['crg.cf.account', 'acct123']]);
   const { alerts } = await run({
-    sheetAnswers: [3, 0, -1], alertAnswers: [0], store,
+    sheetAnswers: [4, 0, -1], alertAnswers: [0], store,
     failAt: (path, method) => (method === 'PUT' && path.endsWith('/schedules')
       ? { code: 10072, message: '5 cron triggers per account' } : null),
   });
   const failure = alerts.find((a) => a.title === '額度仍然不足');
   assert.ok(failure);
   assert.match(failure.message, /查看 Cron 用量/);
+});
+
+/* ------------------------------------------------------------------ */
+/* 一鍵安裝與釋出 cron 額度                                              */
+/* ------------------------------------------------------------------ */
+
+/** 只讓第一次設定排程失敗，重試時放行 */
+function failFirstScheduleOnly(code, message) {
+  let seen = 0;
+  return (path, method) => {
+    if (method === 'PUT' && path.endsWith('/schedules')) {
+      seen += 1;
+      if (seen === 1) return { code, message };
+    }
+    return null;
+  };
+}
+
+test('一鍵安裝：cron 滿了會讓你挑一支釋出，然後自動重試', async () => {
+  const store = new Map([
+    ['crg.cf.token', CF_TOKEN], ['crg.cf.account', 'acct123'],
+    ['crg.discord.webhook', HOOK],
+  ]);
+  const { cfCalls, alerts, store: after } = await run({
+    // 0=一鍵安裝, 1=釋出清單挑第一個(本工具自己的), 2=回選單關閉
+    sheetAnswers: [0, 0, -1],
+    // 部署確認 / 已釋出 / 安裝完成
+    alertAnswers: [0, 0, 0],
+    store,
+    existingScripts: ['crypto-radar-guardian', 'crypto-radar-guardian-24x7'],
+    schedulesByScript: {
+      'crypto-radar-guardian': ['*/5 * * * *'],
+      'crypto-radar-guardian-24x7': ['*/5 * * * *', '0 * * * *'],
+    },
+    failAt: failFirstScheduleOnly(10072, '5 cron triggers per account'),
+  });
+
+  // 應該清掉了排程（PUT schedules 帶空陣列）
+  const cleared = cfCalls.filter((c) => c.method === 'PUT' && c.path.endsWith('/schedules')
+    && c.body === '[]');
+  assert.equal(cleared.length, 1, '應清除一支的排程');
+
+  // 然後重試設定 Guardian 的排程
+  const retried = cfCalls.filter((c) => c.method === 'PUT'
+    && c.path.includes('crypto-radar-guardian/schedules') && c.body !== '[]');
+  assert.equal(retried.length, 2, '第一次失敗加重試共兩次');
+  assert.deepEqual(JSON.parse(retried[1].body), [{ cron: '*/5 * * * *' }]);
+
+  assert.ok(alerts.some((a) => a.title === '已釋出'));
+  assert.ok(alerts.some((a) => a.title === '安裝完成'));
+  assert.ok(after.get('crg.cf.guardianUrl'));
+});
+
+test('釋出清單把本工具自己的排在前面並標記來源', async () => {
+  const store = new Map([['crg.cf.token', CF_TOKEN], ['crg.cf.account', 'acct123']]);
+  const { alerts } = await run({
+    sheetAnswers: [0, -1, -1], alertAnswers: [0, 0], store,
+    existingScripts: ['zzz-other', 'crypto-radar-guardian'],
+    schedulesByScript: { 'zzz-other': ['0 * * * *'], 'crypto-radar-guardian': ['*/5 * * * *'] },
+    failAt: failFirstScheduleOnly(10072, '5 cron triggers per account'),
+  });
+  const picker = alerts.find((a) => a.title && a.title.startsWith('Cron 額度已滿'));
+  assert.ok(picker, '應顯示釋出清單');
+  assert.match(picker.message, /本工具/);
+  assert.match(picker.message, /不會再自動執行/, '要講清楚後果');
+});
+
+test('選到別人的 Worker 時要再確認一次，取消就不清除', async () => {
+  const store = new Map([['crg.cf.token', CF_TOKEN], ['crg.cf.account', 'acct123']]);
+  const { cfCalls, alerts } = await run({
+    // 0=一鍵安裝, 1=清單只有一項(別人的)選它, 2=回選單
+    sheetAnswers: [0, 0, -1],
+    // 部署確認 / 二次確認取消(-1) / 安裝未完成
+    alertAnswers: [0, -1, 0],
+    store,
+    existingScripts: ['crypto-radar-guardian-24x7'],
+    schedulesByScript: { 'crypto-radar-guardian-24x7': ['*/5 * * * *'] },
+    failAt: failFirstScheduleOnly(10072, '5 cron triggers per account'),
+  });
+
+  const warn = alerts.find((a) => a.title === '這不是本工具部署的');
+  assert.ok(warn, '非自有的必須再確認');
+  assert.match(warn.message, /正在管理交易/, '要點出可能停掉交易');
+  assert.equal(
+    cfCalls.filter((c) => c.method === 'PUT' && c.body === '[]').length, 0,
+    '取消後不得清除任何排程',
+  );
+  assert.ok(alerts.some((a) => a.title === '安裝未完成'));
+});
+
+test('一鍵安裝：完全順利時一路走到完成', async () => {
+  const store = new Map([
+    ['crg.cf.token', CF_TOKEN], ['crg.cf.account', 'acct123'], ['crg.discord.webhook', HOOK],
+  ]);
+  const { alerts, store: after } = await run({
+    sheetAnswers: [0, -1], alertAnswers: [0, 0], store,
+  });
+  const done = alerts.find((a) => a.title === '安裝完成');
+  assert.ok(done, '應顯示安裝完成');
+  assert.match(done.message, /workers\.dev/);
+  assert.match(done.message, /\?token=/, '要告訴使用者怎麼看帳戶');
+  assert.ok(!alerts.some((a) => a.title && a.title.startsWith('Cron 額度已滿')),
+    '沒撞到額度就不該出現釋出流程');
+  assert.ok(after.get('crg.admin.token'));
+});
+
+test('一鍵安裝：沒有 Token 時先帶你設定', async () => {
+  const { cfCalls, store: after } = await run({
+    sheetAnswers: [0, -1], alertAnswers: [0, 0, 0], textValues: [CF_TOKEN], store: new Map(),
+  });
+  assert.equal(after.get('crg.cf.token'), CF_TOKEN);
+  assert.ok(cfCalls.some((c) => c.path.endsWith('/workers/scripts')), '應完成權限驗證');
+});
+
+test('一鍵安裝：非額度問題的排程失敗不會進釋出流程', async () => {
+  const store = new Map([['crg.cf.token', CF_TOKEN], ['crg.cf.account', 'acct123']]);
+  const { alerts } = await run({
+    sheetAnswers: [0, -1], alertAnswers: [0, 0], store,
+    failAt: (path, method) => (method === 'PUT' && path.endsWith('/schedules')
+      ? { code: 10022, message: 'cron 格式錯誤' } : null),
+  });
+  assert.ok(!alerts.some((a) => a.title && a.title.startsWith('Cron 額度已滿')));
+  const failure = alerts.find((a) => a.title === '已部署，但排程沒設成');
+  assert.ok(failure);
+  assert.match(failure.message, /cron 格式錯誤/);
+});
+
+test('沒有任何排程可釋出時，據實說明而不是空清單', async () => {
+  const store = new Map([['crg.cf.token', CF_TOKEN], ['crg.cf.account', 'acct123']]);
+  const { alerts } = await run({
+    sheetAnswers: [0, -1], alertAnswers: [0, 0, 0], store,
+    existingScripts: ['crypto-radar-guardian'],
+    schedulesByScript: {},
+    failAt: failFirstScheduleOnly(10072, '5 cron triggers per account'),
+  });
+  assert.ok(alerts.some((a) => a.title === '沒有可以釋出的排程'));
 });

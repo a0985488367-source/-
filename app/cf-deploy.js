@@ -305,6 +305,45 @@ export async function auditCrons(client, accountId) {
   return { rows, total, limitFree: 5 };
 }
 
+/**
+ * 清掉某支 Worker 的全部排程，釋出 cron 額度。
+ *
+ * 這是破壞性操作：那支 Worker 會停止自動執行。
+ * 呼叫端必須先取得明確同意，本函式不做任何判斷。
+ */
+export async function clearSchedules(client, accountId, scriptName) {
+  return client.call(
+    '清除排程', 'PUT',
+    `/accounts/${accountId}/workers/scripts/${encodeURIComponent(scriptName)}/schedules`,
+    { json: [] },
+  );
+}
+
+/** 這幾支是本工具自己部署的，釋出它們的排程沒有外部影響 */
+export const OWN_SCRIPTS = Object.freeze(['crypto-radar-guardian', 'crypto-radar-watchdog']);
+
+/**
+ * 把盤點結果整理成「可以釋出哪些」的清單。
+ *
+ * 本工具自己部署的標成 own，其餘標成 foreign。
+ * foreign 的可能正在跑別的事情（例如既有的交易系統），
+ * 釋出前必須額外確認。
+ */
+export function freeableCrons(audit) {
+  const out = [];
+  for (const row of audit.rows ?? []) {
+    if (!row.crons || row.crons.length === 0) continue;
+    out.push({
+      script: row.script,
+      crons: row.crons,
+      count: row.crons.length,
+      origin: OWN_SCRIPTS.includes(row.script) ? 'own' : 'foreign',
+    });
+  }
+  // 自己的排前面，比較不會誤刪別人的
+  return out.sort((a, b) => (a.origin === b.origin ? 0 : a.origin === 'own' ? -1 : 1));
+}
+
 /** 判斷錯誤是不是撞到免費方案的 cron 上限 */
 export function isCronLimitError(err) {
   if (!err) return false;
