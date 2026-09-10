@@ -246,8 +246,37 @@ export function buildMetadata({ mainModule, kvBindingName, kvNamespaceId, secret
 
 /** 列出帳號上已經存在的 Worker 名稱 */
 export async function listScripts(client, accountId) {
+  return (await listScriptsDetailed(client, accountId)).map((s) => s.name);
+}
+
+/**
+ * 連同建立與最後修改時間一起取回。
+ *
+ * 使用者常常分不清哪支 Worker 還在用。最後修改時間是最直接的線索：
+ * 一年沒動過的多半已經沒在維護。
+ */
+export async function listScriptsDetailed(client, accountId) {
   const result = await client.call('讀取現有 Worker', 'GET', `/accounts/${accountId}/workers/scripts`);
-  return (Array.isArray(result) ? result : []).map((s) => s.id).filter(Boolean);
+  return (Array.isArray(result) ? result : [])
+    .filter((s) => s && s.id)
+    .map((s) => ({
+      name: s.id,
+      createdOn: s.created_on ?? null,
+      modifiedOn: s.modified_on ?? null,
+    }));
+}
+
+/** 距今多久，用中文粗略描述。無法判斷時回 null。 */
+export function describeAge(iso, now = Date.now()) {
+  if (!iso) return null;
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return null;
+  const days = Math.floor((now - t) / 86400000);
+  if (days < 0) return null;
+  if (days === 0) return '今天';
+  if (days < 30) return `${days} 天前`;
+  if (days < 365) return `${Math.floor(days / 30)} 個月前`;
+  return `${Math.floor(days / 365)} 年前`;
 }
 
 /** 上傳 Worker。multipart 的組裝由宿主環境負責，這裡只給它需要的材料。 */
@@ -289,17 +318,18 @@ export async function getSchedules(client, accountId, scriptName) {
  * 所以要能一眼看出是誰佔著。讀不到某支的排程就跳過，
  * 不讓單一支失敗擋掉整份盤點。
  */
-export async function auditCrons(client, accountId) {
-  const scripts = await listScripts(client, accountId);
+export async function auditCrons(client, accountId, now = Date.now()) {
+  const scripts = await listScriptsDetailed(client, accountId);
   const rows = [];
   let total = 0;
-  for (const name of scripts) {
+  for (const info of scripts) {
+    const base = { script: info.name, modifiedOn: info.modifiedOn, age: describeAge(info.modifiedOn, now) };
     try {
-      const crons = await getSchedules(client, accountId, name);
-      rows.push({ script: name, crons });
+      const crons = await getSchedules(client, accountId, info.name);
+      rows.push({ ...base, crons });
       total += crons.length;
     } catch {
-      rows.push({ script: name, crons: null });
+      rows.push({ ...base, crons: null });
     }
   }
   return { rows, total, limitFree: 5 };
@@ -338,6 +368,8 @@ export function freeableCrons(audit) {
       crons: row.crons,
       count: row.crons.length,
       origin: OWN_SCRIPTS.includes(row.script) ? 'own' : 'foreign',
+      age: row.age ?? null,
+      modifiedOn: row.modifiedOn ?? null,
     });
   }
   // 自己的排前面，比較不會誤刪別人的

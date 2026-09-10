@@ -552,3 +552,126 @@ test('產生器輸出是決定性的', () => {
   });
   assert.equal(readFileSync(PATH, 'utf8'), before);
 });
+
+/* ------------------------------------------------------------------ */
+/* 手動觸發掃描（給外部排程用，避開 Cloudflare cron 額度）                 */
+/* ------------------------------------------------------------------ */
+
+async function call(worker, env, kv, path, init) {
+  return worker.fetch(new Request('https://example.workers.dev' + path, init), { ...env, GUARDIAN_KV: kv }, {});
+}
+
+test('/scan 未設 ADMIN_TOKEN 時停用，不會被匿名觸發', async () => {
+  const net = installFetch();
+  try {
+    const worker = await loadWorker();
+    const res = await call(worker, makeEnv(), makeKv(), '/scan', { method: 'POST' });
+    assert.equal(res.status, 403);
+    assert.match((await res.json()).error, /ADMIN_TOKEN/);
+    assert.equal(net.calls.length, 0, '不得因此觸發任何抓取');
+  } finally {
+    net.restore();
+  }
+});
+
+test('/scan 沒帶 Token 一律 401', async () => {
+  const net = installFetch();
+  try {
+    const worker = await loadWorker();
+    const env = makeEnv({ ADMIN_TOKEN: TOKEN });
+    for (const p of ['/scan', '/scan?token=', '/scan?token=wrong', `/scan?token=${TOKEN}x`]) {
+      const res = await call(worker, env, makeKv(), p, { method: 'POST' });
+      assert.equal(res.status, 401, `${p} 應被拒`);
+    }
+    assert.equal(net.calls.length, 0);
+  } finally {
+    net.restore();
+  }
+});
+
+test('/scan 帶對 Token 會實際跑一輪並寫入 KV', async () => {
+  const net = installFetch();
+  try {
+    const kv = makeKv();
+    const worker = await loadWorker();
+    const res = await call(worker, makeEnv({ ADMIN_TOKEN: TOKEN }), kv, `/scan?token=${TOKEN}`, { method: 'POST' });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.ok, true);
+    assert.ok(body.analyzed > 0);
+    assert.ok(kv.store.get('state:latest'), '應寫入掃描結果');
+    assert.ok(kv.store.get('state:heartbeat'), '應寫入心跳');
+    assert.ok(net.calls.some((c) => c.pathname === '/v5/market/tickers'));
+  } finally {
+    net.restore();
+  }
+});
+
+test('/scan 也接受 X-Admin-Token 標頭，Token 不必出現在網址', async () => {
+  const net = installFetch();
+  try {
+    const kv = makeKv();
+    const worker = await loadWorker();
+    const res = await call(worker, makeEnv({ ADMIN_TOKEN: TOKEN }), kv, '/scan', {
+      method: 'POST', headers: { 'X-Admin-Token': TOKEN },
+    });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).ok, true);
+
+    const bad = await call(worker, makeEnv({ ADMIN_TOKEN: TOKEN }), makeKv(), '/scan', {
+      method: 'POST', headers: { 'X-Admin-Token': 'wrong' },
+    });
+    assert.equal(bad.status, 401);
+  } finally {
+    net.restore();
+  }
+});
+
+test('/scan 觸發後，/health 與網頁就有資料了', async () => {
+  const net = installFetch();
+  try {
+    const kv = makeKv();
+    const worker = await loadWorker();
+    const env = makeEnv({ ADMIN_TOKEN: TOKEN });
+
+    assert.equal((await get(worker, env, kv, '/health')).status, 503, '掃描前應為不健康');
+    await call(worker, env, kv, '/scan', { method: 'POST', headers: { 'X-Admin-Token': TOKEN } });
+
+    const health = await get(worker, env, kv, '/health');
+    assert.equal(health.status, 200);
+    assert.equal((await health.json()).status, 'healthy');
+
+    const html = await (await get(worker, env, kv, '/')).text();
+    assert.match(html, /<h2>主幣/);
+  } finally {
+    net.restore();
+  }
+});
+
+test('/scan 期間的錯誤會回 500 並帶原因', async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error('bybit unreachable'); };
+  try {
+    const worker = await loadWorker();
+    const res = await call(worker, makeEnv({ ADMIN_TOKEN: TOKEN }), makeKv(), '/scan', {
+      method: 'POST', headers: { 'X-Admin-Token': TOKEN },
+    });
+    assert.equal(res.status, 500);
+    assert.match((await res.json()).error, /bybit unreachable/);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test('GET /scan 也能觸發，讓只支援 GET 的排程工具也能用', async () => {
+  const net = installFetch();
+  try {
+    const kv = makeKv();
+    const worker = await loadWorker();
+    const res = await call(worker, makeEnv({ ADMIN_TOKEN: TOKEN }), kv, `/scan?token=${TOKEN}`);
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).ok, true);
+  } finally {
+    net.restore();
+  }
+});

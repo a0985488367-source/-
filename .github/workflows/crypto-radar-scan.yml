@@ -1,0 +1,72 @@
+# 定時觸發 Crypto Radar Guardian 掃描
+#
+# 為什麼需要這個：
+#   Cloudflare 免費方案每個帳號只有 5 個 cron 觸發器。額度用完時，
+#   改用 GitHub Actions 定時打 Worker 的 /scan 端點，效果一樣，
+#   不佔用 Cloudflare 的額度，也不用刪掉既有的排程。
+#
+# 使用前要在 GitHub 設定兩個 Secret：
+#   Settings → Secrets and variables → Actions → New repository secret
+#     GUARDIAN_URL   你的 Worker 網址，例如
+#                    https://crypto-radar-guardian.你的帳號.workers.dev
+#     ADMIN_TOKEN    部署工具產生的管理 Token
+#                    （Scriptable 選單裡「開啟網頁」的網址結尾就是）
+#
+# 排程說明：
+#   GitHub Actions 的定時任務最短間隔是 5 分鐘，而且常常會延遲，
+#   尖峰時可能晚十幾分鐘才跑。這裡設 10 分鐘是務實的取捨。
+#   如果需要準時，還是 Cloudflare cron 比較可靠。
+#
+#   另外 GitHub 會把「連續 60 天沒有任何提交」的倉庫的定時任務停用，
+#   到時候會寄信通知，手動再啟用即可。
+
+name: Crypto Radar 定時掃描
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  # 也可以到 Actions 分頁手動按一次，用來驗證設定有沒有對
+  workflow_dispatch:
+
+# 同時只跑一個，避免延遲堆積時重複觸發
+concurrency:
+  group: crypto-radar-scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 檢查 Secret 是否已設定
+        run: |
+          if [ -z "${{ secrets.GUARDIAN_URL }}" ]; then
+            echo "缺少 GUARDIAN_URL。請到 Settings → Secrets and variables → Actions 新增。"
+            exit 1
+          fi
+          if [ -z "${{ secrets.ADMIN_TOKEN }}" ]; then
+            echo "缺少 ADMIN_TOKEN。請到 Settings → Secrets and variables → Actions 新增。"
+            exit 1
+          fi
+
+      - name: 觸發掃描
+        env:
+          GUARDIAN_URL: ${{ secrets.GUARDIAN_URL }}
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Token 走標頭，不放網址，才不會出現在記錄裡
+          status=$(curl -sS -o response.json -w '%{http_code}' \
+            --max-time 120 \
+            -X POST \
+            -H "X-Admin-Token: ${ADMIN_TOKEN}" \
+            "${GUARDIAN_URL%/}/scan")
+
+          echo "HTTP ${status}"
+          cat response.json
+          echo
+
+          if [ "${status}" != "200" ]; then
+            echo "掃描沒有成功。上面的回應內容說明了原因。"
+            exit 1
+          fi

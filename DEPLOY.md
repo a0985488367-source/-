@@ -32,14 +32,35 @@ Worker、設排程、開網址、驗證。**完全不碰儀表板的程式編輯
 | Account | Workers Scripts | Edit |
 | Account | Workers KV Storage | Edit |
 
-**二、cron 額度不夠時，要釋出哪一支**
+**二、cron 額度不夠時，走哪條路**
 
-免費方案每個帳號只有 5 個 cron 觸發器。用滿的話，工具會列出帳號上
-所有排程讓你挑一個釋出，本工具自己部署的會標記出來並排在前面。
+免費方案每個帳號只有 5 個定時觸發器。用滿的話，工具會問你兩條路：
+
+**A. 用 GitHub Actions 代替（不用動任何現有排程）**
+
+Worker 有一個帶 Token 的 `/scan` 端點，打一次就掃描一次。
+倉庫裡已經放好設定檔 `.github/workflows/crypto-radar-scan.yml`，
+你只要到 GitHub 加兩個 Secret：
+
+| Secret | 值 |
+| --- | --- |
+| `GUARDIAN_URL` | Worker 網址 |
+| `ADMIN_TOKEN` | 部署工具產生的管理 Token |
+
+工具會把這兩個值直接顯示出來，也可以一鍵複製。
+加完到 Actions 分頁手動跑一次驗證即可。
+
+代價是 GitHub Actions 的定時任務常有延遲，尖峰時可能晚十幾分鐘。
+另外倉庫連續 60 天沒有提交的話，GitHub 會停用定時任務並寄信通知。
+
+**B. 釋出一個 Cloudflare 額度**
+
+工具列出帳號上所有排程，標示各自的最後修改時間當判斷依據，
+本工具自己部署的排在最前面（刪掉沒有外部影響）。
 
 **選到不是本工具部署的會再確認一次**，因為那可能是你正在跑的東西
-（例如既有的交易系統），清掉排程它就不會再自動執行。工具不會自動
-替你選，也不會自動刪。
+（例如既有的交易系統），清掉排程它就不會再自動執行。
+工具不會自動替你選，也不會自動刪。
 
 釋出之後會自動重試，不用重來一遍。
 
@@ -344,3 +365,25 @@ Deploy 就等於按了個空的。
 
 **Worker 網址開起來是空的** → cron 還沒跑過。等 5 分鐘，
 或在 Worker 頁面手動觸發一次。
+
+
+---
+
+## 附錄：不佔 Cloudflare 額度的定時觸發
+
+Worker 提供 `/scan` 端點，帶對管理 Token 就會立刻跑一輪掃描，
+效果與 cron 相同。適合 Cloudflare 的 5 個定時觸發器已經用滿的情況。
+
+```
+POST https://<你的worker>.workers.dev/scan
+X-Admin-Token: <你的 ADMIN_TOKEN>
+```
+
+也接受 `?token=` 網址參數，方便只支援 GET 的排程工具。
+不過走標頭比較好，Token 不會留在網址與記錄裡。
+
+沒有設 `ADMIN_TOKEN` 時這個端點是停用的，回 403。
+Token 不對回 401。任何人都無法匿名觸發。
+
+倉庫裡的 `.github/workflows/crypto-radar-scan.yml` 就是用這個端點做的，
+預設每 10 分鐘一次，也可以到 Actions 分頁手動觸發。

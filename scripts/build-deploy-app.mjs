@@ -466,21 +466,39 @@ async function freeCronSlot(client, accountId) {
   const audit = await auditCrons(client, accountId);
   const options = freeableCrons(audit);
 
+  // 先讓使用者選路線。多數人分不清哪支 Worker 還在用，
+  // 硬要他們挑一個刪掉是不合理的，所以把不用動任何東西的路線放第一個。
+  const route = new Alert();
+  route.title = 'Cron 額度已滿（' + audit.total + '/' + audit.limitFree + '）';
+  route.message = 'Cloudflare 免費方案每個帳號只有 ' + audit.limitFree + ' 個定時觸發器，已經用完。\n\n'
+    + '有兩條路：';
+  route.addAction('用 GitHub Actions 代替（不用動現有排程）');
+  route.addAction('釋出一個 Cloudflare 額度');
+  route.addCancelAction('之後再說');
+  const choice = await route.presentSheet();
+  if (choice === -1) return false;
+
+  if (choice === 0) {
+    await showExternalCronGuide();
+    return false;
+  }
+
   if (!options.length) {
     await notice('沒有可以釋出的排程',
-      '帳號上找不到任何已設定的 cron 排程，但 Cloudflare 說額度已滿。\n\n'
+      '帳號上找不到任何已設定的定時觸發器，但 Cloudflare 說額度已滿。\n\n'
       + '請直接到 Cloudflare 儀表板檢查各個 Worker 的 Trigger Events。');
     return false;
   }
 
   const a = new Alert();
-  a.title = 'Cron 額度已滿（' + audit.total + '/' + audit.limitFree + '）';
-  a.message = '要釋出哪一支的排程給 Guardian 用？\n\n'
-    + '釋出後那支 Worker 就不會再自動執行。\n'
-    + '「本工具」標記的是這支腳本自己部署的，刪掉沒有外部影響。';
+  a.title = '要釋出哪一支？';
+  a.message = '釋出後那支 Worker 就不會再自動執行。\n\n'
+    + '括號裡是最後修改時間，很久沒動過的通常已經沒在用。\n'
+    + '「本工具」是這支腳本自己部署的，刪掉沒有外部影響。';
   for (const opt of options) {
-    a.addAction((opt.origin === 'own' ? '［本工具］' : '［其他］') + opt.script
-      + '（' + opt.count + ' 個）');
+    const tag = opt.origin === 'own' ? '［本工具］' : '［其他］';
+    const age = opt.age ? '，' + opt.age + '改過' : '';
+    a.addAction(tag + opt.script + '（' + opt.count + ' 個' + age + '）');
   }
   a.addCancelAction('取消');
   const idx = await a.presentSheet();
@@ -488,16 +506,16 @@ async function freeCronSlot(client, accountId) {
 
   const chosen = options[idx];
 
-  // 不是自己部署的，再確認一次。這可能是正在跑的東西。
   if (chosen.origin !== 'own') {
     const warn = new Alert();
     warn.title = '這不是本工具部署的';
     warn.message = '「' + chosen.script + '」的排程：\n'
       + chosen.crons.join('\n')
+      + (chosen.age ? '\n\n最後修改：' + chosen.age : '')
       + '\n\n清掉之後這支 Worker 就不會再自動執行。\n'
       + '如果它正在管理交易或做其他定時工作，那些都會停止。\n\n'
-      + '確定要釋出嗎？';
-    warn.addDestructiveAction('確定釋出');
+      + '不確定的話，建議改用 GitHub Actions 那條路，什麼都不用刪。';
+    warn.addDestructiveAction('我確定，釋出');
     warn.addCancelAction('取消');
     if ((await warn.present()) === -1) return false;
   }
@@ -510,6 +528,37 @@ async function freeCronSlot(client, accountId) {
     await notice('釋出失敗', describeStepError(err));
     return false;
   }
+}
+
+/**
+ * 不動 Cloudflare 排程的替代方案。
+ *
+ * Worker 有一個帶 Token 的 /scan 端點，任何外部排程定時打它就等於 cron。
+ * 倉庫裡已經放好 GitHub Actions 的設定檔，使用者只要填兩個 Secret。
+ */
+async function showExternalCronGuide() {
+  const url = kcGet(KEY_GUARDIAN_URL);
+  const adminToken = kcGet(KEY_ADMIN_TOKEN);
+
+  await notice('用 GitHub Actions 定時觸發',
+    'Worker 已經部署好了，它有一個 /scan 端點，打一次就掃描一次。\n\n'
+    + '倉庫裡已經放好設定檔：\n.github/workflows/crypto-radar-scan.yml\n\n'
+    + '你只要到 GitHub 加兩個 Secret：\n'
+    + 'Settings → Secrets and variables → Actions\n\n'
+    + 'GUARDIAN_URL\n' + (url || '（尚未取得網址）') + '\n\n'
+    + 'ADMIN_TOKEN\n' + (adminToken || '（尚未產生）') + '\n\n'
+    + '加完之後到 Actions 分頁手動跑一次驗證。\n'
+    + '之後每 10 分鐘會自動觸發，不佔用 Cloudflare 的額度。');
+
+  const a = new Alert();
+  a.title = '要把網址與 Token 複製起來嗎？';
+  a.message = '待會貼到 GitHub 的 Secret 欄位。';
+  a.addAction('複製網址');
+  a.addAction('複製 Token');
+  a.addCancelAction('關閉');
+  const idx = await a.presentSheet();
+  if (idx === 0 && url) Pasteboard.copy(url);
+  else if (idx === 1 && adminToken) Pasteboard.copy(adminToken);
 }
 
 /**
@@ -542,7 +591,9 @@ async function oneTapInstall() {
     if (!freed) {
       await notice('安裝未完成',
         'Worker 已經部署好，網頁打得開，但還沒有自動排程。\n\n'
-        + '之後可以隨時回到選單選「只設定排程」補上。');
+        + '兩條路都可以之後再做：\n'
+        + '· 選單「只設定排程」（需要先釋出 Cloudflare 額度）\n'
+        + '· 或用 GitHub Actions，倉庫裡的設定檔已經放好了');
       return;
     }
     try {

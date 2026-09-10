@@ -18,11 +18,12 @@ const ok = (result) => ({ success: true, result, errors: [] });
  * 模擬 Scriptable 環境並驅動選單。
  * sheetAnswers 依序回應 presentSheet，alertAnswers 依序回應 present。
  */
-async function run({ sheetAnswers = [], alertAnswers = [], textValues = [], store = new Map(), failAt = null, existingScripts = [], rawResponse = null, schedulesByScript = {} } = {}) {
+async function run({ sheetAnswers = [], alertAnswers = [], textValues = [], store = new Map(), failAt = null, existingScripts = [], rawResponse = null, schedulesByScript = {}, scriptMeta = {} } = {}) {
   const cfCalls = [];
   const multipartParts = [];
   const alerts = [];
   const opened = [];
+  const copied = [];
   let sheetIdx = 0;
   let alertIdx = 0;
   let textIdx = 0;
@@ -35,6 +36,7 @@ async function run({ sheetAnswers = [], alertAnswers = [], textValues = [], stor
   };
   globalThis.Data = { fromString: (s) => ({ __data: s }) };
   globalThis.Safari = { open: (u) => opened.push(u) };
+  globalThis.Pasteboard = { copy: (v) => copied.push(v) };
   globalThis.Script = { complete() {} };
 
   globalThis.Request = class {
@@ -76,7 +78,9 @@ async function run({ sheetAnswers = [], alertAnswers = [], textValues = [], stor
 
       if (path === '/user/tokens/verify') return ok({ status: 'active' });
       if (path === '/accounts') return ok([{ id: 'acct123', name: '我的帳號' }]);
-      if (path.endsWith('/workers/scripts') && this.method === 'GET') return ok(existingScripts.map((id) => ({ id })));
+      if (path.endsWith('/workers/scripts') && this.method === 'GET') {
+        return ok(existingScripts.map((id) => ({ id, ...(scriptMeta[id] ?? {}) })));
+      }
       if (path.endsWith('/schedules') && this.method === 'GET') {
         const name = path.split('/workers/scripts/')[1].replace('/schedules', '');
         return ok({ schedules: (schedulesByScript[decodeURIComponent(name)] ?? []).map((cron) => ({ cron })) });
@@ -114,7 +118,7 @@ async function run({ sheetAnswers = [], alertAnswers = [], textValues = [], stor
   } finally {
     console.log = realLog;
   }
-  return { cfCalls, multipartParts, alerts, opened, store };
+  return { cfCalls, multipartParts, alerts, opened, copied, store };
 }
 
 /* ------------------------------------------------------------------ */
@@ -502,8 +506,8 @@ test('一鍵安裝：cron 滿了會讓你挑一支釋出，然後自動重試', 
     ['crg.discord.webhook', HOOK],
   ]);
   const { cfCalls, alerts, store: after } = await run({
-    // 0=一鍵安裝, 1=釋出清單挑第一個(本工具自己的), 2=回選單關閉
-    sheetAnswers: [0, 0, -1],
+    // 0=一鍵安裝, 1=路線選「釋出額度」, 0=清單挑第一個(本工具自己的), -1=回選單
+    sheetAnswers: [0, 1, 0, -1],
     // 部署確認 / 已釋出 / 安裝完成
     alertAnswers: [0, 0, 0],
     store,
@@ -534,22 +538,23 @@ test('一鍵安裝：cron 滿了會讓你挑一支釋出，然後自動重試', 
 test('釋出清單把本工具自己的排在前面並標記來源', async () => {
   const store = new Map([['crg.cf.token', CF_TOKEN], ['crg.cf.account', 'acct123']]);
   const { alerts } = await run({
-    sheetAnswers: [0, -1, -1], alertAnswers: [0, 0], store,
+    sheetAnswers: [0, 1, -1, -1], alertAnswers: [0, 0], store,
     existingScripts: ['zzz-other', 'crypto-radar-guardian'],
     schedulesByScript: { 'zzz-other': ['0 * * * *'], 'crypto-radar-guardian': ['*/5 * * * *'] },
     failAt: failFirstScheduleOnly(10072, '5 cron triggers per account'),
   });
-  const picker = alerts.find((a) => a.title && a.title.startsWith('Cron 額度已滿'));
+  const picker = alerts.find((a) => a.title === '要釋出哪一支？');
   assert.ok(picker, '應顯示釋出清單');
   assert.match(picker.message, /本工具/);
   assert.match(picker.message, /不會再自動執行/, '要講清楚後果');
+  assert.match(picker.message, /最後修改時間/, '要提供判斷依據');
 });
 
 test('選到別人的 Worker 時要再確認一次，取消就不清除', async () => {
   const store = new Map([['crg.cf.token', CF_TOKEN], ['crg.cf.account', 'acct123']]);
   const { cfCalls, alerts } = await run({
-    // 0=一鍵安裝, 1=清單只有一項(別人的)選它, 2=回選單
-    sheetAnswers: [0, 0, -1],
+    // 0=一鍵安裝, 1=路線選「釋出額度」, 0=清單只有一項(別人的)選它, -1=回選單
+    sheetAnswers: [0, 1, 0, -1],
     // 部署確認 / 二次確認取消(-1) / 安裝未完成
     alertAnswers: [0, -1, 0],
     store,
@@ -608,10 +613,76 @@ test('一鍵安裝：非額度問題的排程失敗不會進釋出流程', async
 test('沒有任何排程可釋出時，據實說明而不是空清單', async () => {
   const store = new Map([['crg.cf.token', CF_TOKEN], ['crg.cf.account', 'acct123']]);
   const { alerts } = await run({
-    sheetAnswers: [0, -1], alertAnswers: [0, 0, 0], store,
+    sheetAnswers: [0, 1, -1], alertAnswers: [0, 0, 0], store,
     existingScripts: ['crypto-radar-guardian'],
     schedulesByScript: {},
     failAt: failFirstScheduleOnly(10072, '5 cron triggers per account'),
   });
   assert.ok(alerts.some((a) => a.title === '沒有可以釋出的排程'));
+});
+
+test('額度滿時，第一個選項是不用動任何現有排程的路線', async () => {
+  const store = new Map([['crg.cf.token', CF_TOKEN], ['crg.cf.account', 'acct123']]);
+  const { alerts } = await run({
+    sheetAnswers: [0, -1, -1], alertAnswers: [0, 0], store,
+    existingScripts: ['crypto-radar-guardian-24x7'],
+    schedulesByScript: { 'crypto-radar-guardian-24x7': ['*/5 * * * *'] },
+    failAt: failFirstScheduleOnly(10072, '5 cron triggers per account'),
+  });
+  const route = alerts.find((a) => a.title && a.title.startsWith('Cron 額度已滿'));
+  assert.ok(route, '應先問走哪條路');
+  assert.match(route.message, /兩條路/);
+});
+
+test('選 GitHub Actions 路線會給出網址與 Token，且不刪任何排程', async () => {
+  const store = new Map([
+    ['crg.cf.token', CF_TOKEN], ['crg.cf.account', 'acct123'],
+    ['crg.admin.token', 'admintok12345678'],
+  ]);
+  const { cfCalls, alerts, copied } = await run({
+    // 0=一鍵安裝, 0=路線選 GitHub Actions, -1=不複製, -1=回選單
+    sheetAnswers: [0, 0, -1, -1], alertAnswers: [0, 0, 0], store,
+    existingScripts: ['crypto-radar-guardian-24x7'],
+    schedulesByScript: { 'crypto-radar-guardian-24x7': ['*/5 * * * *'] },
+    failAt: failFirstScheduleOnly(10072, '5 cron triggers per account'),
+  });
+
+  const guide = alerts.find((a) => a.title === '用 GitHub Actions 定時觸發');
+  assert.ok(guide, '應顯示替代方案說明');
+  assert.match(guide.message, /crypto-radar-scan\.yml/, '要指出設定檔在哪');
+  assert.match(guide.message, /GUARDIAN_URL/);
+  assert.match(guide.message, /ADMIN_TOKEN/);
+  assert.match(guide.message, /admintok12345678/, '要把 Token 給使用者');
+  assert.equal(
+    cfCalls.filter((c) => c.method === 'PUT' && c.body === '[]').length, 0,
+    '這條路不該刪掉任何排程',
+  );
+  assert.deepEqual(copied, [], '沒選複製就不該動剪貼簿');
+});
+
+test('可以把網址或 Token 複製到剪貼簿', async () => {
+  const store = new Map([
+    ['crg.cf.token', CF_TOKEN], ['crg.cf.account', 'acct123'],
+    ['crg.admin.token', 'admintok12345678'],
+  ]);
+  const { copied } = await run({
+    sheetAnswers: [0, 0, 1, -1], alertAnswers: [0, 0, 0], store,
+    existingScripts: ['x'], schedulesByScript: { x: ['*/5 * * * *'] },
+    failAt: failFirstScheduleOnly(10072, '5 cron triggers per account'),
+  });
+  assert.deepEqual(copied, ['admintok12345678'], '選「複製 Token」應複製 Token');
+});
+
+test('釋出清單會顯示最後修改時間當判斷依據', async () => {
+  const store = new Map([['crg.cf.token', CF_TOKEN], ['crg.cf.account', 'acct123']]);
+  const { alerts } = await run({
+    sheetAnswers: [0, 1, -1, -1], alertAnswers: [0, 0], store,
+    existingScripts: ['old-worker'],
+    schedulesByScript: { 'old-worker': ['0 0 * * *'] },
+    scriptMeta: { 'old-worker': { modified_on: new Date(Date.now() - 400 * 86400000).toISOString() } },
+    failAt: failFirstScheduleOnly(10072, '5 cron triggers per account'),
+  });
+  const picker = alerts.find((a) => a.title === '要釋出哪一支？');
+  assert.ok(picker);
+  assert.match(picker.message, /很久沒動過的通常已經沒在用/);
 });

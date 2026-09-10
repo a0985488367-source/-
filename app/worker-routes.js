@@ -13,7 +13,7 @@
 import { listHtml, statText, DISCLAIMER_HTML } from './render.js';
 import { PROVIDER, ENGINE_VERSION } from './scan-engine.js';
 import { normalizeEnv, ENV_LABEL } from './bybit-base.js';
-import { CRON_MINUTES, WORKER_VERSION, fetchAccount, loadHeartbeat, loadState, makeBybitClient } from './worker-core.js';
+import { CRON_MINUTES, WORKER_VERSION, fetchAccount, loadHeartbeat, loadState, makeBybitClient, runScheduled } from './worker-core.js';
 
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' };
 const HTML_HEADERS = { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' };
@@ -33,10 +33,17 @@ export function safeEqual(a, b) {
   return diff === 0;
 }
 
-export function isAuthorized(url, env) {
+/**
+ * 兩種帶 Token 的方式都接受：
+ *   網址參數 ?token=   給手機直接開網頁用
+ *   X-Admin-Token 標頭  給外部排程用，不會留在網址與記錄裡
+ */
+export function isAuthorized(url, env, request) {
   const expected = env.ADMIN_TOKEN;
   if (!expected) return false;
-  return safeEqual(url.searchParams.get('token'), expected);
+  if (safeEqual(url.searchParams.get('token'), expected)) return true;
+  const header = request?.headers?.get?.('x-admin-token');
+  return safeEqual(header, expected);
 }
 
 /** 心跳年齡（秒）。沒有心跳時回傳 null。 */
@@ -61,6 +68,32 @@ export function healthOf(heartbeat, now) {
 export async function handleRequest({ request, env, kv, now = Date.now() }) {
   const url = new URL(request.url);
   const path = url.pathname.replace(/\/+$/, '') || '/';
+
+  // 手動觸發一次掃描。
+  //
+  // 為什麼需要：Cloudflare 免費方案每個帳號只有 5 個 cron 觸發器。
+  // 額度用完時，可以改用外部排程（例如 GitHub Actions）定時打這個端點，
+  // 效果與 cron 一樣，不佔用 Cloudflare 的額度。
+  //
+  // 一定要帶管理 Token，否則任何人都能叫它掃描。
+  if (path === '/scan') {
+    if (!env.ADMIN_TOKEN) {
+      return json({ error: '未設定 ADMIN_TOKEN，手動觸發已停用' }, 403);
+    }
+    if (!isAuthorized(url, env, request)) {
+      return json({ error: 'unauthorized' }, 401);
+    }
+    const result = await runScheduled({ env, kv, now });
+    if (!result.ok) return json({ ok: false, error: result.error }, 500);
+    const g = result.state.groups;
+    return json({
+      ok: true,
+      scannedAt: result.state.scannedAt,
+      analyzed: result.state.analyzedCount,
+      ready: [...g.main, ...g.meme].filter((c) => c.entryReady).length,
+      notified: result.notifyResult?.sent ?? 0,
+    });
+  }
 
   if (request.method !== 'GET' && request.method !== 'HEAD') {
     return json({ error: 'method not allowed' }, 405);
@@ -113,7 +146,7 @@ export async function handleRequest({ request, env, kv, now = Date.now() }) {
   if (path === '/') {
     const state = await loadState(kv);
     // 帳戶資料不存 KV。帶對 Token 的人才即時去 Bybit 查一次。
-    const account = isAuthorized(url, env)
+    const account = isAuthorized(url, env, request)
       ? await fetchAccount(makeBybitClient(env), env)
       : null;
     return new Response(pageHtml(state, account, heartbeat, health, env, now), { headers: HTML_HEADERS });
