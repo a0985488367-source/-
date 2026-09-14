@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="zh-Hant" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+<title>SMC 加密貨幣分析終端 · Smart Money Concepts Terminal</title>
+<meta name="description" content="以 Smart Money Concepts（SMC / ICT）方法論分析加密貨幣市場：市場結構 BOS/CHoCH、訂單塊、FVG、流動性掃除、折溢價區間、多週期矩陣、交易計畫與訊號回測。" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%230b0e14'/><path d='M20 70 L40 45 L55 58 L82 26' stroke='%2326a69a' stroke-width='9' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>" />
+
+<!-- PWA：加到 iPhone / Android 主畫面後可全螢幕、離線啟動 -->
+<link rel="manifest" href="manifest.webmanifest" />
+<meta name="theme-color" content="#0b0e14" media="(prefers-color-scheme: dark)" />
+<meta name="theme-color" content="#f6f8fb" media="(prefers-color-scheme: light)" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="SMC 終端" />
+<meta name="format-detection" content="telephone=no" />
+<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png" />
+<link rel="stylesheet" href="assets/styles/main.css" />
+</head>
+<body>
+<div class="app">
+  <!-- ───────────────────────────── 頂部工具列 ───────────────────────────── -->
+  <header class="topbar">
+    <div class="topbar__brand">
+      <span class="logo">SMC</span>
+      <div class="brand-text">
+        <b data-i18n="appName">SMC 加密貨幣分析終端</b>
+        <small data-i18n="tagline">Smart Money Concepts 專業分析工作台</small>
+      </div>
+    </div>
+
+    <div class="symbol-box">
+      <button id="symbolBtn" class="symbol-btn">
+        <span id="symbolLabel">BTC<span class="dim">/USDT</span></span>
+        <svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 3l4 4 4-4" stroke="currentColor" stroke-width="1.6" fill="none"/></svg>
+      </button>
+      <div id="symbolPanel" class="symbol-panel" hidden>
+        <input id="symbolSearch" type="search" placeholder="搜尋幣種… (BTC, ETH, SOL)" autocomplete="off" />
+        <div class="symbol-panel__quick" id="watchlistQuick"></div>
+        <ul id="symbolList" class="symbol-list"></ul>
+      </div>
+    </div>
+
+    <div id="tickerStrip" class="ticker-strip"></div>
+
+    <div class="topbar__right">
+      <div class="seg" id="intervalSeg"></div>
+      <button class="btn btn--icon" id="liveBtn" title="即時更新 Live">●</button>
+      <button class="btn btn--icon" id="refreshBtn" title="重新整理 Refresh">⟳</button>
+      <button class="btn btn--icon" id="themeBtn" title="主題 Theme">◐</button>
+      <button class="btn btn--icon" id="langBtn" title="語言 Language">文</button>
+      <button class="btn btn--icon only-mobile" id="panelBtn" title="面板">☰</button>
+    </div>
+  </header>
+
+  <!-- ───────────────────────────── 主要工作區 ───────────────────────────── -->
+  <main class="workspace">
+    <section class="chart-area">
+      <div class="chart-toolbar">
+        <div class="chips" id="layerChips"></div>
+        <div class="toolbar-right">
+          <div class="seg seg--sm" id="chartTypeSeg"></div>
+          <button class="btn btn--sm" id="replayBtn" title="回放模式">⏯ <span data-i18n="replay">回放</span></button>
+          <button class="btn btn--icon" id="zoomInBtn" title="放大">＋</button>
+          <button class="btn btn--icon" id="zoomOutBtn" title="縮小">－</button>
+          <button class="btn btn--icon" id="fitBtn" title="重設視圖">⤢</button>
+          <button class="btn btn--icon" id="snapBtn" title="截圖 PNG">⤓</button>
+          <button class="btn btn--icon only-mobile-inline" id="chartFsBtn" title="展開圖表">⛶</button>
+        </div>
+      </div>
+
+      <div id="replayBar" class="replay-bar" hidden>
+        <button class="btn btn--icon" id="replayPrev" title="上一根">◀</button>
+        <button class="btn btn--icon" id="replayPlay" title="播放/暫停">▶</button>
+        <button class="btn btn--icon" id="replayNext" title="下一根">▶|</button>
+        <input type="range" id="replayRange" min="60" max="500" value="500" />
+        <span id="replayLabel" class="mono dim"></span>
+        <select id="replaySpeed" class="mini-select">
+          <option value="700">0.5×</option>
+          <option value="350" selected>1×</option>
+          <option value="150">2×</option>
+          <option value="60">5×</option>
+        </select>
+        <button class="btn btn--sm" id="replayExit">離開回放</button>
+      </div>
+
+      <div class="chart-host">
+        <canvas id="chart"></canvas>
+        <div id="tip" class="tip" hidden></div>
+        <div id="chartLoading" class="chart-loading" hidden><span class="spinner"></span></div>
+      </div>
+
+      <div class="legend-bar" id="legendBar"></div>
+    </section>
+
+    <aside class="sidebar" id="sidebar">
+      <nav class="tabs" id="tabs">
+        <button data-tab="analysis" class="active">分析</button>
+        <button data-tab="mtf">多週期</button>
+        <button data-tab="scanner">掃描</button>
+        <button data-tab="backtest">回測</button>
+        <button data-tab="risk">風險</button>
+        <button data-tab="alerts">警報</button>
+        <button data-tab="learn">教學</button>
+        <button data-tab="settings">設定</button>
+      </nav>
+
+      <div class="tab-body">
+        <div class="tab-panel active" data-panel="analysis" id="panelAnalysis"></div>
+
+        <div class="tab-panel" data-panel="mtf" id="panelMtf"></div>
+
+        <div class="tab-panel" data-panel="scanner">
+          <div class="form-row">
+            <label>掃描清單</label>
+            <select id="scanScope" class="input">
+              <option value="watchlist">自選清單</option>
+              <option value="top20" selected>成交量前 20</option>
+              <option value="top50">成交量前 50</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label>最低評分</label>
+            <input id="scanMinScore" class="input" type="number" value="0" min="0" max="100" step="5" />
+          </div>
+          <button class="btn btn--primary btn--block" id="scanBtn">開始掃描</button>
+          <div class="progress" id="scanProgress" hidden><i></i></div>
+          <div id="scanResult" class="scroll-x"></div>
+        </div>
+
+        <div class="tab-panel" data-panel="backtest">
+          <p class="hint">以「逐步重算」驗證本引擎訊號的歷史品質（每一步只看得到當下資料，無未來函數）。市價訊號立即成交；限價訊號需等價格回到進場區才算成交。</p>
+          <div class="form-row"><label>最低評分</label><input id="btMinScore" class="input" type="number" value="55" min="0" max="100" step="5" /></div>
+          <div class="form-row"><label>持有上限（K 棒）</label><input id="btHorizon" class="input" type="number" value="90" min="10" max="500" step="10" /></div>
+          <div class="form-row"><label>取樣間隔</label><input id="btStep" class="input" type="number" value="5" min="1" max="30" /></div>
+          <button class="btn btn--primary btn--block" id="btRun">執行回測</button>
+          <div class="progress" id="btProgress" hidden><i></i></div>
+          <div id="btResult"></div>
+        </div>
+
+        <div class="tab-panel" data-panel="risk">
+          <div class="form-row"><label>帳戶權益 (USDT)</label><input id="riskAccount" class="input" type="number" value="10000" min="1" /></div>
+          <div class="form-row"><label>單筆風險 (%)</label><input id="riskPct" class="input" type="number" value="1" min="0.05" max="20" step="0.05" /></div>
+          <div class="form-row"><label>槓桿</label><input id="riskLev" class="input" type="number" value="10" min="1" max="125" /></div>
+          <div class="form-row"><label>進場價</label><input id="riskEntry" class="input" type="number" step="any" /></div>
+          <div class="form-row"><label>停損價</label><input id="riskStop" class="input" type="number" step="any" /></div>
+          <div class="form-row"><label>目標價</label><input id="riskTarget" class="input" type="number" step="any" /></div>
+          <div class="btn-row">
+            <button class="btn btn--block" id="riskFromSetup">帶入目前計畫</button>
+            <button class="btn btn--primary btn--block" id="riskCalc">計算</button>
+          </div>
+          <div id="riskResult"></div>
+        </div>
+
+        <div class="tab-panel" data-panel="alerts">
+          <div class="form-row"><label>類型</label>
+            <select id="alertType" class="input">
+              <option value="price">價格穿越</option>
+              <option value="poi">進入 POI</option>
+              <option value="structure">結構事件 BOS/CHoCH</option>
+              <option value="sweep">流動性掃除</option>
+            </select>
+          </div>
+          <div class="form-row" id="alertLevelRow"><label>價位</label><input id="alertLevel" class="input" type="number" step="any" /></div>
+          <div class="form-row"><label>備註</label><input id="alertNote" class="input" type="text" placeholder="選填" /></div>
+          <button class="btn btn--primary btn--block" id="alertAdd">建立警報</button>
+          <div id="alertList"></div>
+        </div>
+
+        <div class="tab-panel" data-panel="learn">
+          <input id="glossSearch" class="input" type="search" placeholder="搜尋術語… OB / FVG / CHoCH" />
+          <div id="glossBody"></div>
+        </div>
+
+        <div class="tab-panel" data-panel="settings">
+          <h4>資料來源</h4>
+          <div class="form-row"><label>交易所</label>
+            <select id="setProvider" class="input">
+              <option value="binance">Binance</option>
+              <option value="bybit">Bybit</option>
+              <option value="okx">OKX</option>
+              <option value="demo">Demo（離線示範）</option>
+            </select>
+          </div>
+          <div class="form-row"><label>K 棒數量</label><input id="setCandles" class="input" type="number" value="500" min="150" max="1000" step="50" /></div>
+          <div class="form-row"><label>時區</label>
+            <select id="setTz" class="input"><option value="UTC">UTC</option><option value="local">本地時間</option></select>
+          </div>
+
+          <h4>SMC 參數</h4>
+          <div class="form-row"><label>內部結構靈敏度 <em id="valInternal">2</em></label><input id="setInternal" type="range" min="1" max="6" value="2" /></div>
+          <div class="form-row"><label>擺動結構靈敏度 <em id="valSwing">7</em></label><input id="setSwing" type="range" min="3" max="20" value="7" /></div>
+          <div class="form-row"><label>突破判定</label>
+            <select id="setBreakBy" class="input"><option value="close">收盤價（嚴謹）</option><option value="wick">影線（敏感）</option></select>
+          </div>
+          <div class="form-row"><label>OB 區間定義</label>
+            <select id="setObMode" class="input"><option value="wick">高低點（含影線）</option><option value="body">實體</option></select>
+          </div>
+          <div class="form-row"><label>最小位移 (ATR) <em id="valDisp">1.0</em></label><input id="setDisp" type="range" min="0" max="3" step="0.1" value="1" /></div>
+          <div class="form-row"><label>FVG 最小大小 (ATR) <em id="valFvg">0.25</em></label><input id="setFvg" type="range" min="0" max="1" step="0.02" value="0.25" /></div>
+          <div class="form-row"><label>流動性容差 (ATR) <em id="valTol">0.18</em></label><input id="setTol" type="range" min="0.02" max="0.6" step="0.02" value="0.18" /></div>
+          <div class="form-row"><label>最低風報比 <em id="valRR">2.0</em></label><input id="setRR" type="range" min="1" max="5" step="0.25" value="2" /></div>
+          <div class="form-row"><label>停損緩衝 (ATR) <em id="valBuf">0.35</em></label><input id="setBuf" type="range" min="0" max="1.5" step="0.05" value="0.35" /></div>
+
+          <h4>多週期矩陣</h4>
+          <div class="chips" id="mtfChips"></div>
+
+          <div class="btn-row">
+            <button class="btn btn--block" id="exportBtn">匯出設定</button>
+            <button class="btn btn--block" id="resetBtn">回復預設</button>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- ───────────────────────────── 狀態列 ───────────────────────────── -->
+  <footer class="statusbar">
+    <span id="statusProvider" class="status-item">—</span>
+    <span id="statusStream" class="status-item">—</span>
+    <span id="statusUpdated" class="status-item">—</span>
+    <span class="status-item status-item--grow" id="statusNarrative"></span>
+    <span class="status-item dim" data-i18n="disclaimer">本工具僅供教育與研究用途，不構成投資建議。</span>
+  </footer>
+</div>
+
+<div id="installHint" class="install-hint" hidden>
+  <span>把這個工具加到主畫面，就能像 App 一樣全螢幕使用：點 <b>分享</b> <svg width="11" height="13" viewBox="0 0 12 14" aria-hidden="true"><path d="M6 1v8M3 4l3-3 3 3M1.5 8v4.5h9V8" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg> → <b>加入主畫面</b></span>
+  <button class="btn btn--icon" id="installHintClose" aria-label="關閉">✕</button>
+</div>
+
+<script type="module" src="src/app.js"></script>
+</body>
+</html>

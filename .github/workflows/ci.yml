@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Run unit tests
+        run: node --test tests/*.test.mjs
+      - name: Build single-file bundle
+        run: node scripts/build-single.mjs /tmp/smc-terminal.html
+      - name: Syntax check all modules
+        run: |
+          for f in $(find src scripts -name '*.js' -o -name '*.mjs'); do
+            node --check "$f"
+          done

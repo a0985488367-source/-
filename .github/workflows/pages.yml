@@ -1,0 +1,51 @@
+# 部署到 GitHub Pages → 取得可在 iPhone Safari 開啟的網址
+#
+# 使用前請先到 repo 的 Settings → Pages → Build and deployment → Source 選「GitHub Actions」。
+# 注意：私有倉庫的 Pages 需要付費方案；免費帳號請先把倉庫設為 Public。
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: ['main', 'claude/smc-crypto-trading-app-6p37v9']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: node --test tests/*.test.mjs
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Rebuild single-file version
+        run: node scripts/build-single.mjs
+      - uses: actions/configure-pages@v5
+      - name: Upload site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: '.'
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
