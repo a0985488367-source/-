@@ -31,7 +31,59 @@
 
 ---
 
-## 快速開始
+## 📱 在 iPhone / iPad 上使用
+
+這個 App 本來就是為手機設計的（響應式版面、觸控縮放平移、可加到主畫面全螢幕執行）。
+三種方式，依「最推薦」排序：
+
+### 方式 1：GitHub Pages（推薦，有網址、可加到主畫面、自動更新）
+
+1. 到 GitHub repo → **Settings → General**，把倉庫改為 **Public**
+   （GitHub 免費帳號的 Pages 不支援私有倉庫；這個 App 沒有任何密鑰，公開沒有風險）
+2. **Settings → Pages → Build and deployment → Source** 選 **GitHub Actions**
+3. 推送任何 commit（或到 **Actions → Deploy to GitHub Pages → Run workflow** 手動執行一次）
+4. 完成後網址是：`https://<你的帳號>.github.io/<倉庫名>/`
+5. iPhone 用 **Safari** 打開該網址 → 點下方 **分享** → **加入主畫面**
+
+加到主畫面後會以全螢幕啟動（沒有網址列）、有自己的圖示，且因為內建 Service Worker，
+**沒有網路時也能打開**（此時會自動使用離線示範資料）。
+
+### 方式 2：保持倉庫私有 → 用 Cloudflare Pages / Netlify（免費且支援私有倉庫）
+
+1. 註冊 Cloudflare Pages（或 Netlify），選 **Connect to Git** 授權這個倉庫
+2. Build command 留空、Output directory 填 `/`（本專案不需要建置）
+3. 部署後會得到 `xxx.pages.dev` 網址，一樣可以加到主畫面
+
+### 方式 3：單檔離線版（完全不需要伺服器或帳號）
+
+`standalone/smc-terminal.html` 是把所有程式、樣式、圖示打包成的**單一檔案**。
+
+1. 在電腦上下載這個檔案（或用 `npm run build:single` 重新產生）
+2. 透過 AirDrop／iCloud 雲碟／LINE／Email 傳到 iPhone
+3. 在「檔案」App 中點開 → 會用 Safari 顯示，功能與完整版相同
+
+限制：本機檔案無法「加入主畫面」，且部分瀏覽器對 `file://` 的網路請求較嚴格，
+若抓不到交易所行情會自動切換為離線示範資料。
+
+> 附帶一提，方式 1 與 2 都只是「把靜態檔案放上網」，沒有後端、沒有資料庫、
+> 不會收集任何資料；你的設定與自選清單只存在你自己手機的瀏覽器裡。
+
+### 手機版操作
+
+| 操作 | 方式 |
+|---|---|
+| 縮放圖表 | 兩指捏合 |
+| 平移圖表 | 單指拖曳 |
+| 看區塊詳情 | 點一下該區塊（OB / FVG / 流動性線） |
+| 圖表全螢幕 | 工具列最右邊的 ⛶ |
+| 分析面板全螢幕 | 右上角 ☰ |
+| 切換圖層 | 工具列的彩色標籤（可左右滑動） |
+
+橫向持握時，版面會自動變成「左圖表 + 右面板」，跟桌機一樣。
+
+---
+
+## 快速開始（電腦）
 
 ```bash
 # 需要 Node.js 18+（只用來開靜態伺服器，程式本身無任何依賴）
@@ -45,6 +97,7 @@ node scripts/serve.mjs 3000
 
 ```bash
 npm test             # 執行 30 項單元測試
+npm run build:single # 重新產生單檔離線版 standalone/smc-terminal.html
 ```
 
 ---
@@ -124,7 +177,11 @@ npm test             # 執行 30 項單元測試
 
 ```
 index.html                  單一頁面
-assets/styles/main.css      設計系統（深／淺色主題、響應式）
+manifest.webmanifest        PWA 設定（加到主畫面、全螢幕、圖示）
+sw.js                       Service Worker（離線啟動）
+standalone/                 單檔離線版（由 scripts/build-single.mjs 產生）
+assets/styles/main.css      設計系統（深／淺色主題、響應式、iOS 安全區域）
+assets/icons/               App 圖示（含 apple-touch-icon）
 src/
   core/      utils / indicators（EMA, ATR, RSI, VWAP, Volume Profile）/ store / bus
   data/      providers（Binance, Bybit, OKX, Demo）/ feed（備援、快取、串流）
@@ -148,7 +205,8 @@ docs/        方法論與架構文件
 1. **可解釋 > 神秘**：每個分數都列出組成因子，每個計畫都列出通過與未通過的條件。
 2. **誠實 > 好看**：回測用保守假設（同根 K 棒同時觸及時算停損），並明確標示未達標準的計畫。
 3. **零依賴**：沒有 npm 套件、沒有打包器、沒有追蹤碼，程式碼看得懂也改得動。
-4. **離線可用**：資料源全掛也能用 Demo 模式學習與展示。
+4. **離線可用**：資料源全掛也能用 Demo 模式學習與展示；加到主畫面後沒網路也能開啟。
+5. **手機優先**：不是把桌面版縮小，而是針對窄螢幕重新調整圖表密度、刻度與版面。
 
 ---
 

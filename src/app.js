@@ -117,9 +117,70 @@ function init() {
   });
   bus.on('provider:error', ({ id, error }) => console.warn(`[provider:${id}]`, error));
 
+  registerServiceWorker();
+  setupInstallHint();
   loadSymbols();
   loadData();
   setInterval(renderStatus, 5000);
+}
+
+/* ------------------------------------------------- PWA（加到主畫面／離線） */
+
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  // file:// 直接開啟時不註冊（Service Worker 需要 http/https）
+  if (!/^https?:$/.test(location.protocol)) return;
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register(new URL('../sw.js', import.meta.url)).catch((e) => console.warn('SW 註冊失敗', e));
+  });
+}
+
+const isStandalone = () =>
+  window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone === true;
+
+function setupInstallHint() {
+  const hint = $('#installHint');
+  if (!hint) return;
+  const dismissed = (() => { try { return localStorage.getItem('smc-install-hint') === 'off'; } catch { return false; } })();
+  const isIos = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  let deferredPrompt = null;
+
+  $('#installHintClose').onclick = () => {
+    hint.hidden = true;
+    try { localStorage.setItem('smc-install-hint', 'off'); } catch {}
+  };
+
+  // Android / 桌面 Chrome：直接提供安裝按鈕
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredPrompt = e;
+    if (dismissed || isStandalone()) return;
+    hint.querySelector('span').innerHTML = isZh()
+      ? '可以把這個工具安裝成 App，全螢幕又能離線使用。'
+      : 'Install this as an app for full-screen, offline use.';
+    const btn = document.createElement('button');
+    btn.className = 'btn btn--primary btn--sm';
+    btn.textContent = isZh() ? '安裝' : 'Install';
+    btn.onclick = async () => {
+      hint.hidden = true;
+      deferredPrompt.prompt();
+      await deferredPrompt.userChoice;
+      deferredPrompt = null;
+    };
+    hint.insertBefore(btn, $('#installHintClose'));
+    hint.hidden = false;
+  });
+
+  const canInstall = /^https?:$/.test(location.protocol);
+  if (isIos && canInstall && !isStandalone() && !dismissed) {
+    if (!isZh()) {
+      hint.querySelector('span').innerHTML =
+        'Add to your Home Screen for a full-screen app: tap <b>Share</b> → <b>Add to Home Screen</b>.';
+    }
+    setTimeout(() => { hint.hidden = false; }, 2500);
+  }
+  if (isStandalone()) document.documentElement.classList.add('standalone');
 }
 
 /* ------------------------------------------------------------------ 建構 UI */
@@ -242,7 +303,13 @@ function bindTopbar() {
     buildLegend();
     renderAll();
   };
-  $('#panelBtn').onclick = () => $('#sidebar').scrollIntoView({ behavior: 'smooth' });
+  // 手機：☰ 放大分析面板、⛶ 放大圖表（互斥）
+  $('#panelBtn').onclick = () => {
+    document.body.classList.remove('chart-full');
+    document.body.classList.toggle('panel-max');
+    $('#panelBtn').classList.toggle('on', document.body.classList.contains('panel-max'));
+    setTimeout(() => chart.resize(), 50);
+  };
 }
 
 function bindTabs() {
@@ -265,6 +332,13 @@ function bindChartTools() {
     a.download = `${state.symbol}-${state.interval}-${Date.now()}.png`;
     a.click();
     toast(isZh() ? '已匯出圖表 PNG' : 'Chart exported');
+  };
+  $('#chartFsBtn').onclick = () => {
+    document.body.classList.remove('panel-max');
+    document.body.classList.toggle('chart-full');
+    $('#chartFsBtn').classList.toggle('on', document.body.classList.contains('chart-full'));
+    $('#panelBtn')?.classList.remove('on');
+    setTimeout(() => chart.resize(), 50);
   };
   $('#replayBtn').onclick = () => toggleReplay(!replay.active);
   $('#replayExit').onclick = () => toggleReplay(false);

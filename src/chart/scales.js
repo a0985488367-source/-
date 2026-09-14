@@ -33,8 +33,12 @@ export function createScales({ width, height, padding, barsVisible, rightIndex, 
   };
 }
 
-/** 自動計算可視範圍的價格上下界（含 overlay 需要的額外空間） */
-export function autoRange(candles, from, to, extra = []) {
+/**
+ * 自動計算可視範圍的價格上下界。
+ * extra（停損／目標等水平線）只有落在合理範圍內才納入，
+ * 否則一個很遠的目標會把 K 棒壓成一條線。
+ */
+export function autoRange(candles, from, to, extra = [], maxExpand = 0.45) {
   let min = Infinity;
   let max = -Infinity;
   for (let i = Math.max(0, Math.floor(from)); i <= Math.min(candles.length - 1, Math.ceil(to)); i++) {
@@ -43,12 +47,16 @@ export function autoRange(candles, from, to, extra = []) {
     if (c.low < min) min = c.low;
     if (c.high > max) max = c.high;
   }
+  if (!isFinite(min) || !isFinite(max)) return { min: 0, max: 1 };
+  const span = max - min || max * 0.02 || 1;
+  const loLimit = min - span * maxExpand;
+  const hiLimit = max + span * maxExpand;
   for (const v of extra) {
     if (v == null || !isFinite(v)) continue;
+    if (v < loLimit || v > hiLimit) continue;
     if (v < min) min = v;
     if (v > max) max = v;
   }
-  if (!isFinite(min) || !isFinite(max)) return { min: 0, max: 1 };
   const pad = (max - min) * 0.08 || max * 0.01 || 1;
   return { min: min - pad, max: max + pad };
 }

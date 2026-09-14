@@ -13,6 +13,8 @@ import { fmtPrice, fmtTime, fmtCompact, clamp, precisionFor } from '../core/util
 
 const TIME_AXIS_H = 22;
 const PRICE_AXIS_W = 68;
+const PRICE_AXIS_W_NARROW = 58;
+const NARROW_WIDTH = 560;
 
 export class Chart {
   constructor(canvas, opts = {}) {
@@ -28,6 +30,9 @@ export class Chart {
     this.chartType = opts.chartType || 'candles';
     this.logScale = false;
     this.barsVisible = 160;
+    this.priceAxisW = PRICE_AXIS_W;
+    this.narrow = false;
+    this._userZoomed = false;
     this.rightIndex = 0;
     this.autoScroll = true;
     this.pointer = null;
@@ -66,12 +71,20 @@ export class Chart {
     this.canvas.style.height = `${h}px`;
     this.width = w;
     this.height = h;
+    const wasNarrow = this.narrow;
+    this.narrow = w < NARROW_WIDTH;
+    this.priceAxisW = this.narrow ? PRICE_AXIS_W_NARROW : PRICE_AXIS_W;
+    // 手機上預設顯示較少 K 棒，否則畫面糊成一片（使用者手動縮放後就不再自動調整）
+    if (!this._userZoomed && this.narrow !== wasNarrow) {
+      this.barsVisible = this.narrow ? 80 : 160;
+      if (this.candles.length) this.rightIndex = this.candles.length + 4;
+    }
     this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     this.requestRender();
   }
 
   get layout() {
-    const padding = { top: 10, right: PRICE_AXIS_W, bottom: TIME_AXIS_H };
+    const padding = { top: 10, right: this.priceAxisW, bottom: TIME_AXIS_H };
     const volumeHeight = Math.round(this.height * this.volumePaneRatio);
     const priceHeight = this.height - padding.top - TIME_AXIS_H - volumeHeight;
     return { padding, volumeHeight, priceHeight, width: this.width, height: this.height, volumeTop: padding.top + priceHeight };
@@ -99,6 +112,7 @@ export class Chart {
       const newBars = clamp(this.barsVisible * factor, 25, 1500);
       const ratio = (anchorIdx - s.leftIndex) / this.barsVisible;
       this.barsVisible = newBars;
+      this._userZoomed = true;
       this.rightIndex = anchorIdx + (1 - ratio) * newBars;
       this.autoScroll = this.rightIndex >= this.candles.length;
       this.clampView();
@@ -174,13 +188,15 @@ export class Chart {
   }
 
   resetView() {
-    this.barsVisible = 160;
+    this._userZoomed = false;
+    this.barsVisible = this.narrow ? 80 : 160;
     this.rightIndex = this.candles.length + 6;
     this.autoScroll = true;
     this.requestRender();
   }
 
   zoom(factor) {
+    this._userZoomed = true;
     this.barsVisible = clamp(this.barsVisible * factor, 25, 1500);
     this.clampView();
     this.requestRender();
@@ -210,7 +226,7 @@ export class Chart {
     return createScales({
       width: this.width,
       height: padding.top + priceHeight + padding.bottom,
-      padding: { top: padding.top, right: PRICE_AXIS_W, bottom: 0 },
+      padding: { top: padding.top, right: this.priceAxisW, bottom: 0 },
       barsVisible: this.barsVisible,
       rightIndex: this.rightIndex,
       min,
@@ -236,7 +252,7 @@ export class Chart {
     }
     const s = this._scales();
     const a = this.analysis && !this.analysis.empty ? this.analysis : null;
-    const env = { ctx, s, t, a, candles: this.candles, layout, layers: this.layers, lang: this.lang };
+    const env = { ctx, s, t, a, candles: this.candles, layout, layers: this.layers, lang: this.lang, narrow: this.narrow };
 
     this._grid(ctx, t, s, layout);
     this._watermark(ctx, t, layout);
@@ -273,18 +289,23 @@ export class Chart {
     this._legend(ctx, t, layout);
   }
 
+  /** 時間軸刻度數量：窄畫面要更少，否則標籤會重疊 */
+  _tickCount() {
+    return Math.max(3, Math.min(9, Math.round(this.width / 110)));
+  }
+
   _grid(ctx, t, s, layout) {
     ctx.save();
     ctx.strokeStyle = t.grid;
     ctx.lineWidth = 1;
-    for (const p of priceTicks(s.min, s.max, 7)) {
+    for (const p of priceTicks(s.min, s.max, this.narrow ? 5 : 7)) {
       const y = Math.round(s.y(p)) + 0.5;
       ctx.beginPath();
       ctx.moveTo(0, y);
       ctx.lineTo(s.plotW, y);
       ctx.stroke();
     }
-    for (const tk of timeTicks(this.candles, s.leftIndex, s.rightIndex, 8)) {
+    for (const tk of timeTicks(this.candles, s.leftIndex, s.rightIndex, this._tickCount())) {
       const x = Math.round(s.x(tk.index)) + 0.5;
       ctx.beginPath();
       ctx.moveTo(x, layout.padding.top);
@@ -298,10 +319,12 @@ export class Chart {
     const base = layout.padding.top + layout.priceHeight - 14;
     ctx.save();
     ctx.fillStyle = t.watermark;
-    ctx.font = 'bold 30px system-ui, sans-serif';
-    ctx.fillText('SMC TERMINAL', 18, base - 16);
-    ctx.font = '12px system-ui, sans-serif';
-    ctx.fillText(this.lang === 'zh' ? 'Smart Money Concepts 分析終端' : 'Smart Money Concepts Analysis', 20, base);
+    ctx.font = `bold ${this.narrow ? 18 : 30}px system-ui, sans-serif`;
+    ctx.fillText('SMC TERMINAL', this.narrow ? 10 : 18, base - (this.narrow ? 10 : 16));
+    if (!this.narrow) {
+      ctx.font = '12px system-ui, sans-serif';
+      ctx.fillText(this.lang === 'zh' ? 'Smart Money Concepts 分析終端' : 'Smart Money Concepts Analysis', 20, base);
+    }
     ctx.restore();
   }
 
@@ -398,16 +421,16 @@ export class Chart {
   _priceAxis(ctx, t, s, layout) {
     ctx.save();
     ctx.fillStyle = t.bg;
-    ctx.fillRect(s.plotW, 0, PRICE_AXIS_W, layout.height);
+    ctx.fillRect(s.plotW, 0, this.priceAxisW, layout.height);
     ctx.strokeStyle = t.axis;
     ctx.beginPath();
     ctx.moveTo(s.plotW + 0.5, 0);
     ctx.lineTo(s.plotW + 0.5, layout.height);
     ctx.stroke();
     ctx.fillStyle = t.textDim;
-    ctx.font = '10px ui-monospace, monospace';
+    ctx.font = `${this.narrow ? 9 : 10}px ui-monospace, monospace`;
     const digits = precisionFor(s.max);
-    for (const p of priceTicks(s.min, s.max, 7)) {
+    for (const p of priceTicks(s.min, s.max, this.narrow ? 5 : 7)) {
       const y = s.y(p);
       if (y < 8 || y > layout.padding.top + layout.priceHeight) continue;
       ctx.fillText(fmtPrice(p, digits), s.plotW + 6, y + 3);
@@ -428,7 +451,7 @@ export class Chart {
     ctx.fillStyle = t.textDim;
     ctx.font = '10px ui-monospace, monospace';
     ctx.textAlign = 'center';
-    const ticks = timeTicks(this.candles, s.leftIndex, s.rightIndex, 8);
+    const ticks = timeTicks(this.candles, s.leftIndex, s.rightIndex, this._tickCount());
     let lastDay = null;
     for (const tk of ticks) {
       const x = s.x(tk.index);
@@ -462,7 +485,7 @@ export class Chart {
     ctx.stroke();
     ctx.setLineDash([]);
     ctx.fillStyle = up ? t.up : t.down;
-    ctx.fillRect(s.plotW, y - 9, PRICE_AXIS_W, 18);
+    ctx.fillRect(s.plotW, y - 9, this.priceAxisW, 18);
     ctx.fillStyle = '#ffffff';
     ctx.font = 'bold 10px ui-monospace, monospace';
     ctx.fillText(fmtPrice(c.close), s.plotW + 5, y + 3.5);
@@ -488,7 +511,7 @@ export class Chart {
     const price = s.yToPrice(y);
     if (y < layout.padding.top + layout.priceHeight) {
       ctx.fillStyle = t.tagBg;
-      ctx.fillRect(s.plotW, y - 9, PRICE_AXIS_W, 18);
+      ctx.fillRect(s.plotW, y - 9, this.priceAxisW, 18);
       ctx.fillStyle = t.text;
       ctx.font = '10px ui-monospace, monospace';
       ctx.fillText(fmtPrice(price), s.plotW + 5, y + 3.5);
@@ -513,16 +536,18 @@ export class Chart {
     const c = info?.candle || this.candles[this.candles.length - 1];
     if (!c) return;
     const chg = ((c.close - c.open) / c.open) * 100;
-    const parts = [
-      `O ${fmtPrice(c.open)}`,
-      `H ${fmtPrice(c.high)}`,
-      `L ${fmtPrice(c.low)}`,
-      `C ${fmtPrice(c.close)}`,
-      `${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%`,
-    ];
+    const parts = this.narrow
+      ? [`H ${fmtPrice(c.high)}`, `L ${fmtPrice(c.low)}`, `C ${fmtPrice(c.close)}`, `${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%`]
+      : [
+          `O ${fmtPrice(c.open)}`,
+          `H ${fmtPrice(c.high)}`,
+          `L ${fmtPrice(c.low)}`,
+          `C ${fmtPrice(c.close)}`,
+          `${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%`,
+        ];
     ctx.save();
     ctx.font = '10px ui-monospace, monospace';
-    let x = 16;
+    let x = this.narrow ? 8 : 16;
     const y = layout.padding.top + 14;
     for (let i = 0; i < parts.length; i++) {
       ctx.fillStyle = i === parts.length - 1 ? (chg >= 0 ? t.up : t.down) : t.textDim;

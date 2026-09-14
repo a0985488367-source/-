@@ -84,7 +84,7 @@ export function drawSessions(env) {
     const x2 = s.x(seg.end) + s.barWidth / 2;
     ctx.fillStyle = hexToRgba(seg.sess.color, 0.07);
     ctx.fillRect(x1, layout.padding.top, x2 - x1, layout.priceHeight);
-    if (x2 - x1 > 44) {
+    if (x2 - x1 > 44 && !env.narrow) {
       ctx.save();
       ctx.font = '9px ui-monospace, monospace';
       ctx.fillStyle = hexToRgba(seg.sess.color, 0.85);
@@ -119,8 +119,10 @@ export function drawPremiumDiscount(env) {
   dashLine(ctx, x1, yHigh, x2, yHigh, [2, 3], t.eq, 1);
   dashLine(ctx, x1, yLow, x2, yLow, [2, 3], t.eq, 1);
   tag(env, x1 + 4, yEq, 'EQ 50%', { bg: t.tagBg, color: t.text, size: 9 });
-  tag(env, x1 + 4, yHigh + 8, env.lang === 'zh' ? '溢價 Premium' : 'Premium', { bg: 'transparent', color: t.textDim, size: 9 });
-  tag(env, x1 + 4, yLow - 8, env.lang === 'zh' ? '折價 Discount' : 'Discount', { bg: 'transparent', color: t.textDim, size: 9 });
+  if (!env.narrow) {
+    tag(env, x1 + 4, yHigh + 8, env.lang === 'zh' ? '溢價 Premium' : 'Premium', { bg: 'transparent', color: t.textDim, size: 9 });
+    tag(env, x1 + 4, yLow - 8, env.lang === 'zh' ? '折價 Discount' : 'Discount', { bg: 'transparent', color: t.textDim, size: 9 });
+  }
   ctx.restore();
 }
 
@@ -157,12 +159,14 @@ export function drawFib(env) {
 
 const MAX_FVG_DRAWN = 26;
 const MAX_OB_DRAWN = 20;
+const MAX_FVG_NARROW = 12;
+const MAX_OB_NARROW = 10;
 
 export function drawFvg(env) {
   const { ctx, s, t, a, candles, layers } = env;
   clipPlot(env);
   // 只畫最近的 N 個缺口，避免整張圖被色塊淹沒
-  const list = a.gaps.slice(-MAX_FVG_DRAWN);
+  const list = a.gaps.slice(-(env.narrow ? MAX_FVG_NARROW : MAX_FVG_DRAWN));
   for (const g of list) {
     if (g.kind === 'vi' && !layers.volumeImbalance) continue;
     if (g.state === 'filled' && !layers.filledZones) continue;
@@ -193,7 +197,10 @@ export function drawFvg(env) {
 export function drawOrderBlocks(env) {
   const { ctx, s, t, a, candles, layers, lang } = env;
   clipPlot(env);
-  const obs = [...a.orderBlocks].sort((x, y) => y.index - x.index).slice(0, MAX_OB_DRAWN).sort((x, y) => x.index - y.index);
+  const obs = [...a.orderBlocks]
+    .sort((x, y) => y.index - x.index)
+    .slice(0, env.narrow ? MAX_OB_NARROW : MAX_OB_DRAWN)
+    .sort((x, y) => x.index - y.index);
   for (const b of obs) {
     if (b.state === 'breaker' && !layers.breakers) continue;
     if (b.state !== 'breaker' && !layers.orderBlocks) continue;
@@ -231,8 +238,10 @@ export function drawOrderBlocks(env) {
 export function drawLiquidity(env) {
   const { ctx, s, t, a, candles, lang } = env;
   clipPlot(env);
+  const minStrength = env.narrow ? 55 : 45;
   for (const p of a.pools) {
-    if (p.touches < 2 && !p.equal && p.strength < 45) continue;
+    if (p.touches < 2 && !p.equal && p.strength < minStrength) continue;
+    if (env.narrow && p.swept) continue;
     const x1 = s.x(p.firstIndex);
     const x2 = p.swept ? s.x(p.sweptIndex) : s.x(candles.length - 1 + RIGHT_EXTEND);
     if (x2 < 0 || x1 > s.plotW) continue;
@@ -275,7 +284,9 @@ export function drawSweeps(env) {
 export function drawStructure(env) {
   const { ctx, s, t, a, layers } = env;
   clipPlot(env);
-  const events = [...a.structure.swing.events.map((e) => ({ ...e, major: true })), ...a.structure.internal.events];
+  const events = env.narrow
+    ? a.structure.swing.events.map((e) => ({ ...e, major: true }))
+    : [...a.structure.swing.events.map((e) => ({ ...e, major: true })), ...a.structure.internal.events];
   for (const e of events) {
     const x1 = s.x(e.fromIndex);
     const x2 = s.x(e.breakIndex);
@@ -292,6 +303,7 @@ export function drawStructure(env) {
 
 export function drawSwingLabels(env) {
   const { ctx, s, t, a } = env;
+  if (s.barWidth < 2.5) return;
   clipPlot(env);
   ctx.font = '9px ui-monospace, monospace';
   for (const sw of a.swings) {
@@ -328,7 +340,7 @@ export function drawKeyLevels(env) {
     const y = s.y(l.price);
     if (y < 0 || y > env.layout.height) continue;
     dashLine(ctx, 0, y, s.plotW, y, [8, 5], l.color, 0.9);
-    tag(env, 6, y, `${l.code} ${fmtPrice(l.price)}`, { bg: t.tagBg, color: l.color, size: 9 });
+    tag(env, 6, y, env.narrow ? l.code : `${l.code} ${fmtPrice(l.price)}`, { bg: t.tagBg, color: l.color, size: 9 });
   }
   ctx.restore();
 }

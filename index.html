@@ -6,6 +6,17 @@
 <title>SMC 加密貨幣分析終端 · Smart Money Concepts Terminal</title>
 <meta name="description" content="以 Smart Money Concepts（SMC / ICT）方法論分析加密貨幣市場：市場結構 BOS/CHoCH、訂單塊、FVG、流動性掃除、折溢價區間、多週期矩陣、交易計畫與訊號回測。" />
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%230b0e14'/><path d='M20 70 L40 45 L55 58 L82 26' stroke='%2326a69a' stroke-width='9' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>" />
+
+<!-- PWA：加到 iPhone / Android 主畫面後可全螢幕、離線啟動 -->
+<link rel="manifest" href="manifest.webmanifest" />
+<meta name="theme-color" content="#0b0e14" media="(prefers-color-scheme: dark)" />
+<meta name="theme-color" content="#f6f8fb" media="(prefers-color-scheme: light)" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="SMC 終端" />
+<meta name="format-detection" content="telephone=no" />
+<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png" />
 <link rel="stylesheet" href="assets/styles/main.css" />
 </head>
 <body>
@@ -56,6 +67,7 @@
           <button class="btn btn--icon" id="zoomOutBtn" title="縮小">－</button>
           <button class="btn btn--icon" id="fitBtn" title="重設視圖">⤢</button>
           <button class="btn btn--icon" id="snapBtn" title="截圖 PNG">⤓</button>
+          <button class="btn btn--icon only-mobile-inline" id="chartFsBtn" title="展開圖表">⛶</button>
         </div>
       </div>
 
@@ -212,6 +224,11 @@
     <span class="status-item status-item--grow" id="statusNarrative"></span>
     <span class="status-item dim" data-i18n="disclaimer">本工具僅供教育與研究用途，不構成投資建議。</span>
   </footer>
+</div>
+
+<div id="installHint" class="install-hint" hidden>
+  <span>把這個工具加到主畫面，就能像 App 一樣全螢幕使用：點 <b>分享</b> <svg width="11" height="13" viewBox="0 0 12 14" aria-hidden="true"><path d="M6 1v8M3 4l3-3 3 3M1.5 8v4.5h9V8" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg> → <b>加入主畫面</b></span>
+  <button class="btn btn--icon" id="installHintClose" aria-label="關閉">✕</button>
 </div>
 
 <script type="module" src="src/app.js"></script>
