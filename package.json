@@ -8,6 +8,7 @@
     "dev": "node scripts/serve.mjs",
     "test": "node --test tests/*.test.mjs",
     "build:single": "node scripts/build-single.mjs",
+    "build:preview": "node scripts/build-single.mjs dist/preview.html --artifact",
     "check": "node --check src/app.js"
   },
   "keywords": ["smc", "smart-money-concepts", "ict", "crypto", "trading", "order-block", "fvg", "liquidity", "market-structure"],
