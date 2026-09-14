@@ -1,7 +1,8 @@
 # 部署到 GitHub Pages → 取得可在 iPhone Safari 開啟的網址
 #
-# 使用前請先到 repo 的 Settings → Pages → Build and deployment → Source 選「GitHub Actions」。
-# 注意：私有倉庫的 Pages 需要付費方案；免費帳號請先把倉庫設為 Public。
+# 這個 workflow 會自動啟用 Pages（configure-pages 的 enablement: true），
+# 所以不需要手動去 Settings → Pages 設定。
+# 唯一的前提：免費帳號的 Pages 不支援私有倉庫，倉庫必須是 Public。
 name: Deploy to GitHub Pages
 
 on:
@@ -42,6 +43,10 @@ jobs:
       - name: Rebuild single-file version
         run: node scripts/build-single.mjs
       - uses: actions/configure-pages@v5
+        with:
+          # 自動幫倉庫開啟 Pages（來源設為 GitHub Actions），
+          # 使用者就不必再手動去 Settings → Pages 設定
+          enablement: true
       - name: Upload site
         uses: actions/upload-pages-artifact@v3
         with:
