@@ -1,0 +1,16 @@
+{
+  "name": "smc-crypto-terminal",
+  "version": "1.0.0",
+  "description": "SMC Crypto Terminal — 以 Smart Money Concepts 分析加密貨幣市場的專業級網頁終端機",
+  "type": "module",
+  "scripts": {
+    "start": "node scripts/serve.mjs",
+    "dev": "node scripts/serve.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "check": "node --check src/app.js"
+  },
+  "keywords": ["smc", "smart-money-concepts", "ict", "crypto", "trading", "order-block", "fvg", "liquidity", "market-structure"],
+  "license": "MIT",
+  "private": true,
+  "engines": { "node": ">=18" }
+}
