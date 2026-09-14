@@ -38,12 +38,13 @@
 
 ### 方式 1：GitHub Pages（推薦，有網址、可加到主畫面、自動更新）
 
-1. 到 GitHub repo → **Settings → General**，把倉庫改為 **Public**
+1. 到 GitHub repo → **Settings → General** → 最下方 **Danger Zone** →
+   **Change repository visibility** → 改為 **Public**
    （GitHub 免費帳號的 Pages 不支援私有倉庫；這個 App 沒有任何密鑰，公開沒有風險）
-2. **Settings → Pages → Build and deployment → Source** 選 **GitHub Actions**
-3. 推送任何 commit（或到 **Actions → Deploy to GitHub Pages → Run workflow** 手動執行一次）
-4. 完成後網址是：`https://<你的帳號>.github.io/<倉庫名>/`
-5. iPhone 用 **Safari** 打開該網址 → 點下方 **分享** → **加入主畫面**
+2. 到 **Actions → Deploy to GitHub Pages → Run workflow** 執行一次
+   （workflow 會自動幫你開啟 Pages，不必手動設定）
+3. 完成後網址是：`https://<你的帳號>.github.io/<倉庫名>/`
+4. iPhone 用 **Safari** 打開該網址 → 點下方 **分享** → **加入主畫面**
 
 加到主畫面後會以全螢幕啟動（沒有網址列）、有自己的圖示，且因為內建 Service Worker，
 **沒有網路時也能打開**（此時會自動使用離線示範資料）。
