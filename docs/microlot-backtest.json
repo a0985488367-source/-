@@ -1,0 +1,956 @@
+{
+  "runs": 10000,
+  "seed": 20260915,
+  "generatedAt": "2026-09-16T14:18:53.532Z",
+  "base": {
+    "price": 4385,
+    "balance": 7.2,
+    "volDaily": 0.01,
+    "minutesPerDay": 1440,
+    "volClustering": 0.35,
+    "fatTail": true,
+    "spread": 0.2,
+    "commission": 0,
+    "sizing": "video",
+    "lotDivisor": 1.5,
+    "fixedLots": 5,
+    "maxLots": 20000,
+    "takeProfitMove": 1.35,
+    "stopLossMove": null,
+    "edgeWinRate": 0.5,
+    "driftPerMinute": null,
+    "maxHoldMinutes": 240,
+    "maxTrades": 200,
+    "ruinBalance": 1
+  },
+  "scenarios": {
+    "video": {
+      "title": "影片原樣（無方向優勢）",
+      "note": "$7.20 本金、張數隨本金加碼、無停損、+1.35/oz 出場",
+      "config": {
+        "price": 4385,
+        "balance": 7.2,
+        "volDaily": 0.01,
+        "minutesPerDay": 1440,
+        "volClustering": 0.35,
+        "fatTail": true,
+        "spread": 0.2,
+        "commission": 0,
+        "sizing": "video",
+        "lotDivisor": 1.5,
+        "fixedLots": 5,
+        "maxLots": 20000,
+        "takeProfitMove": 1.35,
+        "stopLossMove": null,
+        "edgeWinRate": 0.5,
+        "driftPerMinute": null,
+        "maxHoldMinutes": 240,
+        "maxTrades": 200,
+        "ruinBalance": 1
+      },
+      "runs": 10000,
+      "ruinRate": 1,
+      "stopOutRate": 1,
+      "endBalance": {
+        "mean": 0,
+        "p05": 0,
+        "p25": 0,
+        "median": 0,
+        "p75": 0,
+        "p95": 0,
+        "max": 0
+      },
+      "peakBalance": {
+        "median": 7.2,
+        "p95": 161.6455032506273,
+        "max": 129537.98640507241
+      },
+      "tradesToRuin": {
+        "median": 1,
+        "p25": 1,
+        "p75": 2,
+        "mean": 1.9576
+      },
+      "minutesToRuin": {
+        "median": 5,
+        "mean": 7.654
+      },
+      "everDoubled": 0.4139,
+      "doubledThenRuined": 1,
+      "everTripled": 0.2737,
+      "hitLotCapRate": 0.0005,
+      "firstTradeWinRate": 0.488,
+      "firstTradeRuinRate": 0.512,
+      "profitable": 0,
+      "totalTrades": 19576,
+      "realizedWinRate": 0.4891704127503065,
+      "survival": [
+        {
+          "trades": 1,
+          "alive": 0.488
+        },
+        {
+          "trades": 5,
+          "alive": 0.0288
+        },
+        {
+          "trades": 10,
+          "alive": 0.0007
+        },
+        {
+          "trades": 20,
+          "alive": 0
+        },
+        {
+          "trades": 50,
+          "alive": 0
+        },
+        {
+          "trades": 100,
+          "alive": 0
+        },
+        {
+          "trades": 200,
+          "alive": 0
+        }
+      ]
+    },
+    "skilled": {
+      "title": "同樣操作，但方向勝率 55%",
+      "note": "假設他真的看得懂盤，略優於擲硬幣",
+      "config": {
+        "price": 4385,
+        "balance": 7.2,
+        "volDaily": 0.01,
+        "minutesPerDay": 1440,
+        "volClustering": 0.35,
+        "fatTail": true,
+        "spread": 0.2,
+        "commission": 0,
+        "sizing": "video",
+        "lotDivisor": 1.5,
+        "fixedLots": 5,
+        "maxLots": 20000,
+        "takeProfitMove": 1.35,
+        "stopLossMove": null,
+        "edgeWinRate": 0.55,
+        "driftPerMinute": null,
+        "maxHoldMinutes": 240,
+        "maxTrades": 200,
+        "ruinBalance": 1
+      },
+      "runs": 10000,
+      "ruinRate": 0.9996,
+      "stopOutRate": 0.9996,
+      "endBalance": {
+        "mean": 2486.819415879656,
+        "p05": 0,
+        "p25": 0,
+        "median": 0,
+        "p75": 0,
+        "p95": 0,
+        "max": 7038023.848112316
+      },
+      "peakBalance": {
+        "median": 14.569410286711522,
+        "p95": 447.14086310726117,
+        "max": 7038023.848112316
+      },
+      "tradesToRuin": {
+        "median": 2,
+        "p25": 1,
+        "p75": 3,
+        "mean": 2.379451780712285
+      },
+      "minutesToRuin": {
+        "median": 6,
+        "mean": 9.520508203281313
+      },
+      "everDoubled": 0.5059,
+      "doubledThenRuined": 0.9992093299070962,
+      "everTripled": 0.3722,
+      "hitLotCapRate": 0.002,
+      "firstTradeWinRate": 0.5778,
+      "firstTradeRuinRate": 0.4222,
+      "profitable": 0.0004,
+      "totalTrades": 24585,
+      "realizedWinRate": 0.5925971120601993,
+      "survival": [
+        {
+          "trades": 1,
+          "alive": 0.5778
+        },
+        {
+          "trades": 5,
+          "alive": 0.0669
+        },
+        {
+          "trades": 10,
+          "alive": 0.004
+        },
+        {
+          "trades": 20,
+          "alive": 0.0006
+        },
+        {
+          "trades": 50,
+          "alive": 0.0004
+        },
+        {
+          "trades": 100,
+          "alive": 0.0004
+        },
+        {
+          "trades": 200,
+          "alive": 0.0004
+        }
+      ]
+    },
+    "pro": {
+      "title": "同樣操作，但方向勝率 60%",
+      "note": "職業級的方向判斷",
+      "config": {
+        "price": 4385,
+        "balance": 7.2,
+        "volDaily": 0.01,
+        "minutesPerDay": 1440,
+        "volClustering": 0.35,
+        "fatTail": true,
+        "spread": 0.2,
+        "commission": 0,
+        "sizing": "video",
+        "lotDivisor": 1.5,
+        "fixedLots": 5,
+        "maxLots": 20000,
+        "takeProfitMove": 1.35,
+        "stopLossMove": null,
+        "edgeWinRate": 0.6,
+        "driftPerMinute": null,
+        "maxHoldMinutes": 240,
+        "maxTrades": 200,
+        "ruinBalance": 1
+      },
+      "runs": 10000,
+      "ruinRate": 0.9932,
+      "stopOutRate": 0.9932,
+      "endBalance": {
+        "mean": 49697.28504954781,
+        "p05": 0,
+        "p25": 0,
+        "median": 0,
+        "p75": 0,
+        "p95": 0,
+        "max": 8270494.844197238
+      },
+      "peakBalance": {
+        "median": 19.226183198856916,
+        "p95": 2125.806713416196,
+        "max": 8270494.844197238
+      },
+      "tradesToRuin": {
+        "median": 2,
+        "p25": 1,
+        "p75": 4,
+        "mean": 2.9038461538461537
+      },
+      "minutesToRuin": {
+        "median": 7,
+        "mean": 11.440092629883205
+      },
+      "everDoubled": 0.6025,
+      "doubledThenRuined": 0.988713692946058,
+      "everTripled": 0.4802,
+      "hitLotCapRate": 0.0129,
+      "firstTradeWinRate": 0.6613,
+      "firstTradeRuinRate": 0.3387,
+      "profitable": 0.0068,
+      "totalTrades": 42441,
+      "realizedWinRate": 0.7650620861902405,
+      "survival": [
+        {
+          "trades": 1,
+          "alive": 0.6613
+        },
+        {
+          "trades": 5,
+          "alive": 0.1313
+        },
+        {
+          "trades": 10,
+          "alive": 0.0168
+        },
+        {
+          "trades": 20,
+          "alive": 0.0068
+        },
+        {
+          "trades": 50,
+          "alive": 0.0068
+        },
+        {
+          "trades": 100,
+          "alive": 0.0068
+        },
+        {
+          "trades": 200,
+          "alive": 0.0068
+        }
+      ]
+    },
+    "elite": {
+      "title": "同樣操作，但方向勝率 70%",
+      "note": "現實中極罕見的準確度",
+      "config": {
+        "price": 4385,
+        "balance": 7.2,
+        "volDaily": 0.01,
+        "minutesPerDay": 1440,
+        "volClustering": 0.35,
+        "fatTail": true,
+        "spread": 0.2,
+        "commission": 0,
+        "sizing": "video",
+        "lotDivisor": 1.5,
+        "fixedLots": 5,
+        "maxLots": 20000,
+        "takeProfitMove": 1.35,
+        "stopLossMove": null,
+        "edgeWinRate": 0.7,
+        "driftPerMinute": null,
+        "maxHoldMinutes": 240,
+        "maxTrades": 200,
+        "ruinBalance": 1
+      },
+      "runs": 10000,
+      "ruinRate": 0.9233,
+      "stopOutRate": 0.9233,
+      "endBalance": {
+        "mean": 579369.8798188696,
+        "p05": 0,
+        "p25": 0,
+        "median": 0,
+        "p75": 0,
+        "p95": 7440933.425751601,
+        "max": 8462543.664897839
+      },
+      "peakBalance": {
+        "median": 70.80941168252853,
+        "p95": 7440933.425751601,
+        "max": 8462543.664897839
+      },
+      "tradesToRuin": {
+        "median": 3,
+        "p25": 2,
+        "p75": 6,
+        "mean": 4.108090544785011
+      },
+      "minutesToRuin": {
+        "median": 11,
+        "mean": 14.939456298061302
+      },
+      "everDoubled": 0.7707,
+      "doubledThenRuined": 0.9004800830413909,
+      "everTripled": 0.6852,
+      "hitLotCapRate": 0.0936,
+      "firstTradeWinRate": 0.8052,
+      "firstTradeRuinRate": 0.1948,
+      "profitable": 0.0767,
+      "totalTrades": 191330,
+      "realizedWinRate": 0.9517012491506821,
+      "survival": [
+        {
+          "trades": 1,
+          "alive": 0.8052
+        },
+        {
+          "trades": 5,
+          "alive": 0.3353
+        },
+        {
+          "trades": 10,
+          "alive": 0.1069
+        },
+        {
+          "trades": 20,
+          "alive": 0.0767
+        },
+        {
+          "trades": 50,
+          "alive": 0.0767
+        },
+        {
+          "trades": 100,
+          "alive": 0.0767
+        },
+        {
+          "trades": 200,
+          "alive": 0.0767
+        }
+      ]
+    },
+    "fixed5": {
+      "title": "固定 5 張不加碼（勝率 55%）",
+      "note": "賺錢不加碼，本金變厚 → 爆倉距離變遠",
+      "config": {
+        "price": 4385,
+        "balance": 7.2,
+        "volDaily": 0.01,
+        "minutesPerDay": 1440,
+        "volClustering": 0.35,
+        "fatTail": true,
+        "spread": 0.2,
+        "commission": 0,
+        "sizing": "fixed",
+        "lotDivisor": 1.5,
+        "fixedLots": 5,
+        "maxLots": 20000,
+        "takeProfitMove": 1.35,
+        "stopLossMove": null,
+        "edgeWinRate": 0.55,
+        "driftPerMinute": null,
+        "maxHoldMinutes": 240,
+        "maxTrades": 200,
+        "ruinBalance": 1
+      },
+      "runs": 10000,
+      "ruinRate": 0.7597,
+      "stopOutRate": 0.7597,
+      "endBalance": {
+        "mean": 412.40086202170005,
+        "p05": 0,
+        "p25": 0,
+        "median": 0,
+        "p75": 0,
+        "p95": 1838.3176484893934,
+        "max": 2135.1579820641223
+      },
+      "peakBalance": {
+        "median": 15.514664640442646,
+        "p95": 1842.124443353945,
+        "max": 2135.1579820641223
+      },
+      "tradesToRuin": {
+        "median": 1,
+        "p25": 1,
+        "p75": 3,
+        "mean": 2.2818217717520075
+      },
+      "minutesToRuin": {
+        "median": 6,
+        "mean": 26.770830591022772
+      },
+      "everDoubled": 0.5253,
+      "doubledThenRuined": 0.5425471159337522,
+      "everTripled": 0.4318,
+      "hitLotCapRate": 0,
+      "firstTradeWinRate": 0.5778,
+      "firstTradeRuinRate": 0.4222,
+      "profitable": 0.2403,
+      "totalTrades": 497935,
+      "realizedWinRate": 0.9659774870213984,
+      "survival": [
+        {
+          "trades": 1,
+          "alive": 0.5778
+        },
+        {
+          "trades": 5,
+          "alive": 0.2983
+        },
+        {
+          "trades": 10,
+          "alive": 0.2533
+        },
+        {
+          "trades": 20,
+          "alive": 0.2425
+        },
+        {
+          "trades": 50,
+          "alive": 0.2403
+        },
+        {
+          "trades": 100,
+          "alive": 0.2403
+        },
+        {
+          "trades": 200,
+          "alive": 0.2403
+        }
+      ]
+    },
+    "stoploss": {
+      "title": "同樣倉位但設停損 0.40/oz（勝率 55%）",
+      "note": "唯一改動：加上停損",
+      "config": {
+        "price": 4385,
+        "balance": 7.2,
+        "volDaily": 0.01,
+        "minutesPerDay": 1440,
+        "volClustering": 0.35,
+        "fatTail": true,
+        "spread": 0.2,
+        "commission": 0,
+        "sizing": "video",
+        "lotDivisor": 1.5,
+        "fixedLots": 5,
+        "maxLots": 20000,
+        "takeProfitMove": 1.35,
+        "stopLossMove": 0.4,
+        "edgeWinRate": 0.55,
+        "driftPerMinute": null,
+        "maxHoldMinutes": 240,
+        "maxTrades": 200,
+        "ruinBalance": 1
+      },
+      "runs": 10000,
+      "ruinRate": 0.9999,
+      "stopOutRate": 0.6912,
+      "endBalance": {
+        "mean": 94.50433720872608,
+        "p05": 0,
+        "p25": 0,
+        "median": 0,
+        "p75": 0.21947531383001034,
+        "p95": 0.8418107755532038,
+        "max": 943434.7542157571
+      },
+      "peakBalance": {
+        "median": 12.954206743817297,
+        "p95": 214.18320612727072,
+        "max": 943434.7542157571
+      },
+      "tradesToRuin": {
+        "median": 3,
+        "p25": 1,
+        "p75": 5,
+        "mean": 4.078807880788079
+      },
+      "minutesToRuin": {
+        "median": 6,
+        "mean": 10.325332533253325
+      },
+      "everDoubled": 0.4369,
+      "doubledThenRuined": 0.9997711146715496,
+      "everTripled": 0.2988,
+      "hitLotCapRate": 0.0013,
+      "firstTradeWinRate": 0.4414,
+      "firstTradeRuinRate": 0.1977,
+      "profitable": 0.0001,
+      "totalTrades": 40984,
+      "realizedWinRate": 0.42704470037087644,
+      "survival": [
+        {
+          "trades": 1,
+          "alive": 0.7433
+        },
+        {
+          "trades": 5,
+          "alive": 0.2331
+        },
+        {
+          "trades": 10,
+          "alive": 0.0665
+        },
+        {
+          "trades": 20,
+          "alive": 0.0065
+        },
+        {
+          "trades": 50,
+          "alive": 0.0004
+        },
+        {
+          "trades": 100,
+          "alive": 0.0001
+        },
+        {
+          "trades": 200,
+          "alive": 0.0001
+        }
+      ]
+    },
+    "sane": {
+      "title": "對照組：$500 本金、1 張、停損 4.0/oz（勝率 55%）",
+      "note": "每筆風險 0.8%，其餘條件相同",
+      "config": {
+        "price": 4385,
+        "balance": 500,
+        "volDaily": 0.01,
+        "minutesPerDay": 1440,
+        "volClustering": 0.35,
+        "fatTail": true,
+        "spread": 0.2,
+        "commission": 0,
+        "sizing": "fixed",
+        "lotDivisor": 1.5,
+        "fixedLots": 1,
+        "maxLots": 20000,
+        "takeProfitMove": 8,
+        "stopLossMove": 4,
+        "edgeWinRate": 0.55,
+        "driftPerMinute": null,
+        "maxHoldMinutes": 1440,
+        "maxTrades": 200,
+        "ruinBalance": 50
+      },
+      "runs": 10000,
+      "ruinRate": 0,
+      "stopOutRate": 0,
+      "endBalance": {
+        "mean": 568.217755145059,
+        "p05": 415.2481231844538,
+        "p25": 502.88197999666664,
+        "median": 567.845667855285,
+        "p75": 631.695384212305,
+        "p95": 725.0093251665347,
+        "max": 921.5256545463847
+      },
+      "peakBalance": {
+        "median": 604.8303682113985,
+        "p95": 744.4578766380766,
+        "max": 927.0160718627294
+      },
+      "tradesToRuin": {
+        "median": null,
+        "p25": null,
+        "p75": null,
+        "mean": 0
+      },
+      "minutesToRuin": {
+        "median": null,
+        "mean": 0
+      },
+      "everDoubled": 0,
+      "doubledThenRuined": 0,
+      "everTripled": 0,
+      "hitLotCapRate": 0,
+      "firstTradeWinRate": 0.3878,
+      "firstTradeRuinRate": 0,
+      "profitable": 0.7598,
+      "totalTrades": 2000000,
+      "realizedWinRate": 0.3922545,
+      "survival": [
+        {
+          "trades": 1,
+          "alive": 1
+        },
+        {
+          "trades": 5,
+          "alive": 1
+        },
+        {
+          "trades": 10,
+          "alive": 1
+        },
+        {
+          "trades": 20,
+          "alive": 1
+        },
+        {
+          "trades": 50,
+          "alive": 1
+        },
+        {
+          "trades": 100,
+          "alive": 1
+        },
+        {
+          "trades": 200,
+          "alive": 1
+        }
+      ]
+    },
+    "vol-quiet": {
+      "title": "影片原樣 · 安靜盤（日波動 0.5%）",
+      "note": "",
+      "config": {
+        "price": 4385,
+        "balance": 7.2,
+        "volDaily": 0.005,
+        "minutesPerDay": 1440,
+        "volClustering": 0.35,
+        "fatTail": true,
+        "spread": 0.2,
+        "commission": 0,
+        "sizing": "video",
+        "lotDivisor": 1.5,
+        "fixedLots": 5,
+        "maxLots": 20000,
+        "takeProfitMove": 1.35,
+        "stopLossMove": null,
+        "edgeWinRate": 0.5,
+        "driftPerMinute": null,
+        "maxHoldMinutes": 240,
+        "maxTrades": 200,
+        "ruinBalance": 1
+      },
+      "runs": 10000,
+      "ruinRate": 1,
+      "stopOutRate": 1,
+      "endBalance": {
+        "mean": 0,
+        "p05": 0,
+        "p25": 0,
+        "median": 0,
+        "p75": 0,
+        "p95": 0,
+        "max": 0
+      },
+      "peakBalance": {
+        "median": 7.2,
+        "p95": 104.40243942975435,
+        "max": 315034.18282548897
+      },
+      "tradesToRuin": {
+        "median": 1,
+        "p25": 1,
+        "p75": 2,
+        "mean": 1.9414
+      },
+      "minutesToRuin": {
+        "median": 12,
+        "mean": 19.709
+      },
+      "everDoubled": 0.3618,
+      "doubledThenRuined": 1,
+      "everTripled": 0.2441,
+      "hitLotCapRate": 0.0001,
+      "firstTradeWinRate": 0.4816,
+      "firstTradeRuinRate": 0.5184,
+      "profitable": 0,
+      "totalTrades": 19414,
+      "realizedWinRate": 0.48480478005562994,
+      "survival": [
+        {
+          "trades": 1,
+          "alive": 0.4816
+        },
+        {
+          "trades": 5,
+          "alive": 0.0272
+        },
+        {
+          "trades": 10,
+          "alive": 0.0007
+        },
+        {
+          "trades": 20,
+          "alive": 0.0001
+        },
+        {
+          "trades": 50,
+          "alive": 0
+        },
+        {
+          "trades": 100,
+          "alive": 0
+        },
+        {
+          "trades": 200,
+          "alive": 0
+        }
+      ]
+    },
+    "vol-normal": {
+      "title": "影片原樣 · 常態（日波動 1.0%）",
+      "note": "",
+      "config": {
+        "price": 4385,
+        "balance": 7.2,
+        "volDaily": 0.01,
+        "minutesPerDay": 1440,
+        "volClustering": 0.35,
+        "fatTail": true,
+        "spread": 0.2,
+        "commission": 0,
+        "sizing": "video",
+        "lotDivisor": 1.5,
+        "fixedLots": 5,
+        "maxLots": 20000,
+        "takeProfitMove": 1.35,
+        "stopLossMove": null,
+        "edgeWinRate": 0.5,
+        "driftPerMinute": null,
+        "maxHoldMinutes": 240,
+        "maxTrades": 200,
+        "ruinBalance": 1
+      },
+      "runs": 10000,
+      "ruinRate": 1,
+      "stopOutRate": 1,
+      "endBalance": {
+        "mean": 0,
+        "p05": 0,
+        "p25": 0,
+        "median": 0,
+        "p75": 0,
+        "p95": 0,
+        "max": 0
+      },
+      "peakBalance": {
+        "median": 7.2,
+        "p95": 161.6455032506273,
+        "max": 129537.98640507241
+      },
+      "tradesToRuin": {
+        "median": 1,
+        "p25": 1,
+        "p75": 2,
+        "mean": 1.9576
+      },
+      "minutesToRuin": {
+        "median": 5,
+        "mean": 7.654
+      },
+      "everDoubled": 0.4139,
+      "doubledThenRuined": 1,
+      "everTripled": 0.2737,
+      "hitLotCapRate": 0.0005,
+      "firstTradeWinRate": 0.488,
+      "firstTradeRuinRate": 0.512,
+      "profitable": 0,
+      "totalTrades": 19576,
+      "realizedWinRate": 0.4891704127503065,
+      "survival": [
+        {
+          "trades": 1,
+          "alive": 0.488
+        },
+        {
+          "trades": 5,
+          "alive": 0.0288
+        },
+        {
+          "trades": 10,
+          "alive": 0.0007
+        },
+        {
+          "trades": 20,
+          "alive": 0
+        },
+        {
+          "trades": 50,
+          "alive": 0
+        },
+        {
+          "trades": 100,
+          "alive": 0
+        },
+        {
+          "trades": 200,
+          "alive": 0
+        }
+      ]
+    },
+    "vol-active": {
+      "title": "影片原樣 · 活躍盤（日波動 1.8%）",
+      "note": "",
+      "config": {
+        "price": 4385,
+        "balance": 7.2,
+        "volDaily": 0.018,
+        "minutesPerDay": 1440,
+        "volClustering": 0.35,
+        "fatTail": true,
+        "spread": 0.2,
+        "commission": 0,
+        "sizing": "video",
+        "lotDivisor": 1.5,
+        "fixedLots": 5,
+        "maxLots": 20000,
+        "takeProfitMove": 1.35,
+        "stopLossMove": null,
+        "edgeWinRate": 0.5,
+        "driftPerMinute": null,
+        "maxHoldMinutes": 240,
+        "maxTrades": 200,
+        "ruinBalance": 1
+      },
+      "runs": 10000,
+      "ruinRate": 1,
+      "stopOutRate": 1,
+      "endBalance": {
+        "mean": 0,
+        "p05": 0,
+        "p25": 0,
+        "median": 0,
+        "p75": 0,
+        "p95": 0,
+        "max": 0
+      },
+      "peakBalance": {
+        "median": 7.2,
+        "p95": 299.06073668249525,
+        "max": 119148.95749456558
+      },
+      "tradesToRuin": {
+        "median": 1,
+        "p25": 1,
+        "p75": 2,
+        "mean": 1.9715
+      },
+      "minutesToRuin": {
+        "median": 3,
+        "mean": 4.249
+      },
+      "everDoubled": 0.4532,
+      "doubledThenRuined": 1,
+      "everTripled": 0.3208,
+      "hitLotCapRate": 0.0007,
+      "firstTradeWinRate": 0.4922,
+      "firstTradeRuinRate": 0.5078,
+      "profitable": 0,
+      "totalTrades": 19715,
+      "realizedWinRate": 0.492772001014456,
+      "survival": [
+        {
+          "trades": 1,
+          "alive": 0.4922
+        },
+        {
+          "trades": 5,
+          "alive": 0.0294
+        },
+        {
+          "trades": 10,
+          "alive": 0.0006
+        },
+        {
+          "trades": 20,
+          "alive": 0
+        },
+        {
+          "trades": 50,
+          "alive": 0
+        },
+        {
+          "trades": 100,
+          "alive": 0
+        },
+        {
+          "trades": 200,
+          "alive": 0
+        }
+      ]
+    }
+  },
+  "minimumViableAccount": {
+    "stop_1": {
+      "risk1pct": 100,
+      "risk2pct": 50
+    },
+    "stop_2": {
+      "risk1pct": 200,
+      "risk2pct": 100
+    },
+    "stop_4": {
+      "risk1pct": 400,
+      "risk2pct": 200
+    },
+    "stop_8": {
+      "risk1pct": 800,
+      "risk2pct": 400
+    }
+  }
+}

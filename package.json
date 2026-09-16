@@ -9,7 +9,8 @@
     "test": "node --test tests/*.test.mjs",
     "build:single": "node scripts/build-single.mjs",
     "build:preview": "node scripts/build-single.mjs dist/preview.html --artifact",
-    "check": "node --check src/app.js"
+    "check": "node --check src/app.js",
+    "backtest": "node scripts/microlot-montecarlo.mjs --runs 10000 --json docs/microlot-backtest.json --md docs/microlot-backtest.md"
   },
   "keywords": ["smc", "smart-money-concepts", "ict", "crypto", "trading", "order-block", "fvg", "liquidity", "market-structure"],
   "license": "MIT",
