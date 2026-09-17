@@ -11,7 +11,7 @@ for rule,prefix in [('1h','h1'),('4h','h4')]:
  for c in ['trend','macro']: q[f'{prefix}_{c}']=h[c].reindex(dec,method='ffill').to_numpy()
 q['hour']=(q.index+pd.Timedelta(minutes=15)).hour
 qpos=d.index.get_indexer(q.index+pd.Timedelta(minutes=15)).astype(np.int64)
-o=d.open.to_numpy(float); hi=d.high.to_numpy(float); lo=d.low.to_numpy(float); cl=d.close.to_numpy(float); sp=d.spread.to_numpy(float); atr=q.atr.to_numpy(float); times_ns=d.index.asi8
+o=d.open.to_numpy(float); hi=d.high.to_numpy(float); lo=d.low.to_numpy(float); cl=d.close.to_numpy(float); sp=d.spread.to_numpy(float); atr=q.atr.to_numpy(float); times_ns=d.index.asi8*{'s':10**9,'ms':10**6,'us':10**3,'ns':1}[d.index.unit]  # asi8 的單位隨 pandas 版本而異（2.x=ns、3.x=us），ns() 用的 Timestamp.value 恆為 ns，不換算會讓所有時間比較失效且靜默回傳 0 筆
 @njit(cache=True)
 def bt(sig,qpos,atr,o,hi,lo,cl,sp,times_ns,start_ns,end_ns,stopk,rr,cost_mult,return_trades=False):
     maxn=len(sig); rs=np.empty(maxn); exits=np.empty(maxn,np.int64); entries=np.empty(maxn,np.int64); sides=np.empty(maxn,np.int8); n=0; last_exit=-1
