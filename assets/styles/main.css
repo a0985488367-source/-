@@ -105,7 +105,7 @@ sup { font-size: 8px; color: var(--accent); margin-left: 2px; }
 }
 
 .chart-toolbar, .replay-bar, .legend-bar { flex: 0 0 auto; }
-.chart-host { position: relative; flex: 1 1 auto; min-height: 0; }
+.chart-host { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; }
 #chart { display: block; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
 
 /* ------------------------------------------------------------------ Topbar */
@@ -480,6 +480,31 @@ input[type='range'] { width: 100%; accent-color: var(--accent); }
 .toast--out { opacity: 0; transform: translateX(10px); transition: 0.3s; }
 @keyframes slidein { from { opacity: 0; transform: translateX(16px); } }
 
+/* --------------------------------------------- 手機：快速切換列與分隔條 */
+
+.quickbar {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 8px; background: var(--bg-elev); border-bottom: 1px solid var(--border);
+  overflow-x: auto; scrollbar-width: none; flex: 0 0 auto;
+}
+.quickbar::-webkit-scrollbar { display: none; }
+.quickbar__group { display: flex; gap: 4px; flex-shrink: 0; }
+.quickbar__sep { width: 1px; height: 18px; background: var(--border); flex-shrink: 0; margin: 0 2px; }
+.quickbar button {
+  background: var(--bg-elev2); border: 1px solid var(--border); color: var(--text-dim);
+  border-radius: 6px; padding: 4px 10px; font-size: 12px; font-weight: 600;
+  white-space: nowrap; cursor: pointer; min-height: 28px;
+}
+.quickbar button.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+
+.split-bar {
+  align-items: center; justify-content: center;
+  height: 22px; background: var(--bg-elev); border-top: 1px solid var(--border);
+  cursor: row-resize; touch-action: none; flex: 0 0 auto;
+}
+.split-bar__grip { width: 44px; height: 4px; border-radius: 2px; background: var(--border); }
+.split-bar:active .split-bar__grip, .split-bar--dragging .split-bar__grip { background: var(--accent); }
+
 /* ------------------------------------------------------- 安裝提示 / 全螢幕 */
 
 .install-hint {
@@ -495,16 +520,18 @@ input[type='range'] { width: 100%; accent-color: var(--accent); }
 .install-hint button { margin-left: auto; flex-shrink: 0; }
 
 body.chart-full .sidebar,
+body.chart-full .split-bar,
 body.chart-full .statusbar { display: none; }
 body.chart-full .workspace { grid-template-rows: 1fr; grid-template-columns: 1fr; }
 body.chart-full .legend-bar { display: none; }
 
-body.panel-max .chart-area { display: none; }
+body.panel-max .chart-area,
+body.panel-max .split-bar { display: none; }
 body.panel-max .workspace { grid-template-rows: 1fr; grid-template-columns: 1fr; }
 
 /* -------------------------------------------------------------- Responsive */
 
-.only-mobile, .only-mobile-inline { display: none; }
+.only-mobile, .only-mobile-inline, .only-mobile-flex { display: none; }
 
 @media (max-width: 1180px) {
   .workspace { grid-template-columns: minmax(0, 1fr) 330px; }
@@ -521,7 +548,11 @@ body.panel-max .workspace { grid-template-rows: 1fr; grid-template-columns: 1fr;
   .tk__price { font-size: 15px; }
   .tk__item { font-size: 10.5px; }
 
-  .workspace { grid-template-columns: 1fr; grid-template-rows: 50dvh minmax(0, 1fr); }
+  /* 圖表與面板的高度比例由分隔條拖曳調整；用 fr 才會相對於「工作區」而非整個螢幕 */
+  .workspace {
+    grid-template-columns: 1fr;
+    grid-template-rows: var(--split-a, 68fr) auto minmax(0, var(--split-b, 32fr));
+  }
   .chart-area { border-right: 0; border-bottom: 1px solid var(--border); }
   .legend-bar { display: none; }
   .chart-toolbar { padding: 5px 8px; gap: 6px; }
@@ -532,6 +563,7 @@ body.panel-max .workspace { grid-template-rows: 1fr; grid-template-columns: 1fr;
   .tabs button { padding: 10px 11px; font-size: 12.5px; }
   .only-mobile { display: grid; }
   .only-mobile-inline { display: grid; }
+  .only-mobile-flex { display: flex; }
 
   .form-row { grid-template-columns: 1fr; gap: 4px; }
   .kv-grid { grid-template-columns: 1fr 1fr; }
@@ -543,6 +575,7 @@ body.panel-max .workspace { grid-template-rows: 1fr; grid-template-columns: 1fr;
 /* 橫向持握：圖表佔滿高度，側欄回到右側 */
 @media (max-width: 900px) and (orientation: landscape) {
   .workspace { grid-template-columns: minmax(0, 1fr) 300px; grid-template-rows: 1fr; }
+  .split-bar { display: none; }
   .chart-area { border-right: 1px solid var(--border); border-bottom: 0; }
   .topbar { flex-wrap: nowrap; }
   .ticker-strip { order: 0; width: auto; }

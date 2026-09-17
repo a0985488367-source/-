@@ -65,6 +65,7 @@
           <button class="btn btn--sm" id="replayBtn" title="回放模式">⏯ <span data-i18n="replay">回放</span></button>
           <button class="btn btn--icon" id="zoomInBtn" title="放大">＋</button>
           <button class="btn btn--icon" id="zoomOutBtn" title="縮小">－</button>
+          <button class="btn btn--sm" id="presetBtn" title="圖層精簡度">標準</button>
           <button class="btn btn--icon" id="fitBtn" title="重設視圖">⤢</button>
           <button class="btn btn--icon" id="snapBtn" title="截圖 PNG">⤓</button>
           <button class="btn btn--icon only-mobile-inline" id="chartFsBtn" title="展開圖表">⛶</button>
@@ -86,6 +87,8 @@
         <button class="btn btn--sm" id="replayExit">離開回放</button>
       </div>
 
+      <div class="quickbar only-mobile-flex" id="quickBar"></div>
+
       <div class="chart-host">
         <canvas id="chart"></canvas>
         <div id="tip" class="tip" hidden></div>
@@ -94,6 +97,10 @@
 
       <div class="legend-bar" id="legendBar"></div>
     </section>
+
+    <div class="split-bar only-mobile-flex" id="splitBar" title="拖曳調整高度，點一下切換">
+      <span class="split-bar__grip"></span>
+    </div>
 
     <aside class="sidebar" id="sidebar">
       <nav class="tabs" id="tabs">
