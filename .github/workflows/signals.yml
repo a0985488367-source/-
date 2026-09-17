@@ -5,7 +5,7 @@
 #
 # 使用前只要做一件事：
 #   Repo → Settings → Secrets and variables → Actions → New repository secret
-#   Name: DISCORD_WEBHOOK_URL
+#   Name: DISCORD_WEBHOOK_URL（或 SMC，兩個名稱都接受）
 #   Secret: 你的 Discord webhook 網址
 name: SMC 訊號推播
 
@@ -47,7 +47,7 @@ jobs:
       - name: 檢查 webhook 是否已設定
         id: check
         env:
-          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL || secrets.SMC }}
         run: |
           if [ -z "$WEBHOOK" ]; then
             echo "configured=false" >> "$GITHUB_OUTPUT"
@@ -64,14 +64,14 @@ jobs:
         run: |
           echo "::warning::尚未設定 DISCORD_WEBHOOK_URL，略過推播。"
           echo "設定方式：Repo → Settings → Secrets and variables → Actions → New repository secret"
-          echo "  Name:   DISCORD_WEBHOOK_URL"
+          echo "  Name:   DISCORD_WEBHOOK_URL（或 SMC）"
           echo "  Secret: 你的 Discord webhook 網址"
           node scripts/discord-notify.mjs --dry-run
 
       - name: 推播訊號
         if: ${{ inputs.mode != 'probe' && steps.check.outputs.configured == 'true' }}
         env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL || secrets.SMC }}
         run: |
           case "${{ inputs.mode || 'run' }}" in
             test)    node scripts/discord-notify.mjs --test ;;
