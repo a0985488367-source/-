@@ -13,6 +13,8 @@ export const DEFAULT_STATE = {
   theme: 'dark',
   timezone: 'UTC',
   chartType: 'candles',
+  split: 68,
+  layerPreset: 'standard',
   candleCount: 500,
   live: true,
   watchlist: ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT'],

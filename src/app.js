@@ -67,6 +67,18 @@ const LAYER_DEFS = [
   { id: 'setup', zh: '交易計畫', en: 'Trade plan', color: '#3aa0ff' },
 ];
 
+/** 圖層精簡度：手機上「線太擠」時一鍵切到精簡 */
+const LAYER_PRESETS = {
+  lean: ['orderBlocks', 'breakers', 'fvg', 'structure', 'liquidity', 'setup'],
+  standard: [
+    'orderBlocks', 'breakers', 'fvg', 'liquidity', 'sweeps', 'structure', 'swingLabels',
+    'inducement', 'premiumDiscount', 'ote', 'keyLevels', 'sessions', 'ema', 'setup',
+  ],
+  full: LAYER_DEFS.map((l) => l.id),
+};
+const PRESET_ORDER = ['lean', 'standard', 'full'];
+const PRESET_LABEL = { lean: { zh: '精簡', en: 'Lean' }, standard: { zh: '標準', en: 'Standard' }, full: { zh: '完整', en: 'Full' }, custom: { zh: '自訂', en: 'Custom' } };
+
 const T = {
   zh: { tabs: ['分析', '多週期', '掃描', '回測', '風險', '警報', '教學', '設定'] },
   en: { tabs: ['Analysis', 'MTF', 'Scanner', 'Backtest', 'Risk', 'Alerts', 'Learn', 'Settings'] },
@@ -90,10 +102,13 @@ function init() {
   });
 
   buildSegments();
+  buildQuickBar();
   buildLayerChips();
+  syncPresetButton();
   buildLegend();
   buildMtfChips();
   bindTopbar();
+  bindSplit();
   bindTabs();
   bindChartTools();
   bindScanner();
@@ -190,11 +205,7 @@ function buildSegments() {
   seg.innerHTML = INTERVALS.map((i) => `<button data-iv="${i}" class="${i === state.interval ? 'active' : ''}">${i}</button>`).join('');
   seg.onclick = (e) => {
     const iv = e.target.dataset?.iv;
-    if (!iv) return;
-    state.interval = iv;
-    saveState(state);
-    $$('#intervalSeg button').forEach((b) => b.classList.toggle('active', b.dataset.iv === iv));
-    loadData();
+    if (iv) setInterval_(iv);
   };
 
   const ct = $('#chartTypeSeg');
@@ -209,6 +220,106 @@ function buildSegments() {
   };
 }
 
+/** 切換分析週期（頂部按鈕與手機快速列共用） */
+function setInterval_(iv) {
+  if (iv === state.interval) return;
+  state.interval = iv;
+  saveState(state);
+  $$('#intervalSeg button').forEach((b) => b.classList.toggle('active', b.dataset.iv === iv));
+  buildQuickBar();
+  loadData();
+}
+
+/** 手機快速切換列：自選幣種 + 常用週期，免去開下拉選單 */
+function buildQuickBar() {
+  const host = $('#quickBar');
+  if (!host) return;
+  const syms = state.watchlist.slice(0, 8);
+  const ivs = ['5m', '15m', '1h', '4h', '1d'];
+  host.innerHTML =
+    `<div class="quickbar__group">${syms
+      .map((s) => `<button data-qsym="${s}" class="${s === state.symbol ? 'active' : ''}">${s.replace('USDT', '')}</button>`)
+      .join('')}</div>` +
+    `<span class="quickbar__sep"></span>` +
+    `<div class="quickbar__group">${ivs
+      .map((i) => `<button data-qiv="${i}" class="${i === state.interval ? 'active' : ''}">${i}</button>`)
+      .join('')}</div>`;
+  host.onclick = (e) => {
+    const sym = e.target.dataset?.qsym;
+    const iv = e.target.dataset?.qiv;
+    if (sym) selectSymbol(sym);
+    else if (iv) setInterval_(iv);
+  };
+}
+
+/** 圖表與分析面板的高度分割：可拖曳，也可點一下循環三段 */
+function bindSplit() {
+  const bar = $('#splitBar');
+  const ws = $('.workspace');
+  if (!bar || !ws) return;
+  const SNAPS = [45, 68, 85];
+  const apply = (pct, save = true) => {
+    state.split = Math.max(30, Math.min(88, pct));
+    ws.style.setProperty('--split-a', `${state.split}fr`);
+    ws.style.setProperty('--split-b', `${100 - state.split}fr`);
+    if (save) saveState(state);
+    chart.resize();
+  };
+  apply(state.split ?? 68, false);
+
+  let dragging = false;
+  let moved = false;
+  let startY = 0;
+  let startPct = 50;
+
+  bar.addEventListener('pointerdown', (e) => {
+    dragging = true;
+    moved = false;
+    startY = e.clientY;
+    startPct = state.split;
+    bar.setPointerCapture(e.pointerId);
+    bar.classList.add('split-bar--dragging');
+  });
+  bar.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const dy = e.clientY - startY;
+    if (Math.abs(dy) > 4) moved = true;
+    apply(startPct + (dy / window.innerHeight) * 100, false);
+  });
+  const end = () => {
+    if (!dragging) return;
+    dragging = false;
+    bar.classList.remove('split-bar--dragging');
+    if (!moved) {
+      // 點一下 → 往下一個段位循環（小 → 中 → 大 → 小）
+      apply(SNAPS.find((s) => s > state.split + 2) ?? SNAPS[0]);
+    } else {
+      const near = SNAPS.reduce((a, b) => (Math.abs(b - state.split) < Math.abs(a - state.split) ? b : a));
+      apply(Math.abs(near - state.split) < 7 ? near : state.split);
+    }
+  };
+  bar.addEventListener('pointerup', end);
+  bar.addEventListener('pointercancel', end);
+}
+
+/** 套用圖層精簡度 */
+function applyPreset(name) {
+  const ids = LAYER_PRESETS[name];
+  if (ids) {
+    for (const l of LAYER_DEFS) state.layers[l.id] = ids.includes(l.id);
+  }
+  state.layerPreset = name;
+  saveState(state);
+  chart.setLayers(state.layers);
+  buildLayerChips();
+  syncPresetButton();
+}
+
+function syncPresetButton() {
+  const btn = $('#presetBtn');
+  if (btn) btn.textContent = (PRESET_LABEL[state.layerPreset] || PRESET_LABEL.custom)[isZh() ? 'zh' : 'en'];
+}
+
 function buildLayerChips() {
   const host = $('#layerChips');
   host.innerHTML = LAYER_DEFS.map(
@@ -221,6 +332,8 @@ function buildLayerChips() {
     const id = btn.dataset.layer;
     state.layers[id] = !state.layers[id];
     btn.classList.toggle('on', state.layers[id]);
+    state.layerPreset = 'custom';
+    syncPresetButton();
     saveState(state);
     chart.setLayers(state.layers);
   };
@@ -300,6 +413,8 @@ function bindTopbar() {
     chart.setLang(state.lang);
     applyLang();
     buildLayerChips();
+    buildQuickBar();
+    syncPresetButton();
     buildLegend();
     renderAll();
   };
@@ -326,6 +441,11 @@ function bindChartTools() {
   $('#zoomInBtn').onclick = () => chart.zoom(1 / 1.25);
   $('#zoomOutBtn').onclick = () => chart.zoom(1.25);
   $('#fitBtn').onclick = () => chart.resetView();
+  $('#presetBtn').onclick = () => {
+    const i = PRESET_ORDER.indexOf(state.layerPreset);
+    applyPreset(PRESET_ORDER[(i + 1) % PRESET_ORDER.length]);
+    toast(isZh() ? `圖層：${PRESET_LABEL[state.layerPreset].zh}` : `Layers: ${PRESET_LABEL[state.layerPreset].en}`, 'info', 1400);
+  };
   $('#snapBtn').onclick = () => {
     const a = document.createElement('a');
     a.href = chart.toDataURL();
@@ -588,6 +708,7 @@ function renderSymbolList(query) {
 function selectSymbol(sym) {
   state.symbol = sym;
   saveState(state);
+  buildQuickBar();
   $('#symbolPanel').hidden = true;
   toggleReplay(false);
   loadData(true);
