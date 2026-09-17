@@ -1,5 +1,5 @@
 import numpy as np, pandas as pd, json, itertools, importlib.util, contextlib, io
-spec=importlib.util.spec_from_file_location('ev','/mnt/data/XAUUSD_ONE_SHOT_V2_VALIDATED/exit_variants.py')
+spec=importlib.util.spec_from_file_location('ev','./exit_variants.py')
 ev=importlib.util.module_from_spec(spec)
 with contextlib.redirect_stdout(io.StringIO()):
     spec.loader.exec_module(ev)
@@ -44,4 +44,4 @@ for f in [.03,.05,.07,.10]:
     t=[(float('inf'),f)]
     out['fixed'][str(f)]={k:apply(v,t) for k,v in R.items()}
 print(json.dumps(out,indent=2,ensure_ascii=False))
-json.dump(out,open('/mnt/data/XAUUSD_ONE_SHOT_V2_VALIDATED/capital_ladder_results.json','w'),indent=2)
+json.dump(out,open('./capital_ladder_results.json','w'),indent=2)

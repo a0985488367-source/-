@@ -1,5 +1,5 @@
 import pandas as pd,numpy as np,importlib.util,contextlib,io,json
-spec=importlib.util.spec_from_file_location('ev','/mnt/data/xau_one_shot_work/exit_variants.py');ev=importlib.util.module_from_spec(spec)
+spec=importlib.util.spec_from_file_location('ev','./exit_variants.py');ev=importlib.util.module_from_spec(spec)
 with contextlib.redirect_stdout(io.StringIO()):spec.loader.exec_module(ev)
 d=ev.d;q=ev.q;qpos=ev.qpos;o=ev.o;hi=ev.hi;lo=ev.lo;cl=ev.cl;sp=ev.sp;atr=ev.atr;times=ev.times;sig=ev.sig
 
@@ -46,4 +46,4 @@ out={}
 for hours in [24,36,48]:
  for fri in ['none','late','all']:
   key=f'{hours}cal_{fri}';out[key]={k:st(run(a,b,hours,fri)) for k,(a,b) in periods.items()};out[key]['FINAL90_x2']=st(run('2026-06-19','2026-09-17',hours,fri,2))
-print(json.dumps(out,indent=2));json.dump(out,open('/mnt/data/xau_one_shot_work/calendar_hold_results.json','w'),indent=2)
+print(json.dumps(out,indent=2));json.dump(out,open('./calendar_hold_results.json','w'),indent=2)

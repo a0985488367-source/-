@@ -1,5 +1,5 @@
 import importlib.util,contextlib,io,json,numpy as np
-spec=importlib.util.spec_from_file_location('ev','/mnt/data/XAUUSD_ONE_SHOT_V2_VALIDATED/exit_variants.py'); ev=importlib.util.module_from_spec(spec)
+spec=importlib.util.spec_from_file_location('ev','./exit_variants.py'); ev=importlib.util.module_from_spec(spec)
 with contextlib.redirect_stdout(io.StringIO()): spec.loader.exec_module(ev)
 periods={'2024':('2024-01-01','2025-01-01'),'2025':('2025-01-01','2026-01-01'),'2026H1':('2026-01-01','2026-06-19'),'FINAL90':('2026-06-19','2026-09-17')}
 R={k:ev.run(a,b,'BE15_TP5') for k,(a,b) in periods.items()}
@@ -24,4 +24,4 @@ out={}
 for b in [.05,.07,.08,.09,.10,.12,.15]:
  out[str(b)]={k:ratchet(v,b) for k,v in R.items()}
 print(json.dumps(out,indent=2))
-json.dump(out,open('/mnt/data/XAUUSD_ONE_SHOT_V2_VALIDATED/ratchet_results.json','w'),indent=2)
+json.dump(out,open('./ratchet_results.json','w'),indent=2)

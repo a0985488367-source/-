@@ -1,7 +1,7 @@
 import pandas as pd, numpy as np, json, warnings
 warnings.filterwarnings('ignore')
 # setup copied compactly from exit_variants by executing before run(); disable numba cache
-src=open('/mnt/data/xau_one_shot_work/exit_variants.py').read(); prefix=src.split('def run(',1)[0]
+src=open('./exit_variants.py').read(); prefix=src.split('def run(',1)[0]
 ns={}; exec(prefix,ns)
 d=ns['d']; q=ns['q']; qpos=ns['qpos']; o=ns['o']; hi=ns['hi']; lo=ns['lo']; cl=ns['cl']; sp=ns['sp']; atr=ns['atr']; sig=ns['sig']; times=d.index
 
@@ -95,4 +95,4 @@ for name,kw in variants.items():
   for x in r:
    bal*=max(0,1+f*x);peak=max(peak,bal);dd=max(dd,(peak-bal)/peak);hit=hit or bal>=10000
   out[name]['eq'][str(f)]={'final':float(bal),'dd':float(dd),'hit':bool(hit)}
-print(json.dumps(out,indent=2));json.dump(out,open('/mnt/data/xau_one_shot_work/pyramid_results.json','w'),indent=2)
+print(json.dumps(out,indent=2));json.dump(out,open('./pyramid_results.json','w'),indent=2)

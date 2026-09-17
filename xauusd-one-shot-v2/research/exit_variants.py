@@ -1,7 +1,7 @@
 import pandas as pd, numpy as np, json, warnings
 warnings.filterwarnings('ignore')
 # import prepared feature objects by executing safe setup portion from final_validation until periods
-src=open('/mnt/data/xau_one_shot_work/final_validation.py').read(); prefix=src.split("periods={'2024'",1)[0].replace('@njit(cache=True)','@njit(cache=False)')
+src=open('./final_validation.py').read(); prefix=src.split("periods={'2024'",1)[0].replace('@njit(cache=True)','@njit(cache=False)')
 ns={}; exec(prefix,ns)
 d=ns['d']; q=ns['q']; qpos=ns['qpos']; o=ns['o']; hi=ns['hi']; lo=ns['lo']; cl=ns['cl']; sp=ns['sp']; atr=ns['atr']; times_ns=ns['times_ns']; sig=ns['sig_for'](); times=d.index
 
@@ -68,4 +68,4 @@ for v in vars:
   for x in r:
    bal*=max(0,1+f*x); peak=max(peak,bal); dd=max(dd,(peak-bal)/peak); hit=hit or bal>=10000
   out[v]['eq'][str(f)]={'final':bal,'dd':dd,'hit':bool(hit)}
-print(json.dumps(out,indent=2)); json.dump(out,open('/mnt/data/xau_one_shot_work/exit_variant_results.json','w'),indent=2)
+print(json.dumps(out,indent=2)); json.dump(out,open('./exit_variant_results.json','w'),indent=2)

@@ -1,7 +1,7 @@
 import pandas as pd, numpy as np, json, warnings
 from numba import njit
 warnings.filterwarnings('ignore')
-P='/mnt/data/xau_one_shot_work/data/XAUUSD_M5.csv.gz'
+P='./data/XAUUSD_M5.csv.gz'
 d=pd.read_csv(P); d['time']=pd.to_datetime(d.time,utc=True); d=d.set_index('time').sort_index()
 q=d.resample('15min',label='left',closed='left').agg(open=('open','first'),high=('high','max'),low=('low','min'),close=('close','last'),spread=('spread','median')).dropna()
 prev=q.close.shift(); tr=pd.concat([q.high-q.low,(q.high-prev).abs(),(q.low-prev).abs()],axis=1).max(axis=1); q['atr']=tr.ewm(alpha=1/14,adjust=False,min_periods=14).mean()
@@ -102,4 +102,4 @@ for rank,cand in enumerate(cands[:30]):
  for name,x,y in [('2026_H1','2026-01-01','2026-06-19'),('FINAL90','2026-06-19','2026-09-17'),('2026_ALL','2026-01-01','2026-09-17')]: rec[name]=stat(rr_all[(tt>=pd.Timestamp(x,tz='UTC'))&(tt<pd.Timestamp(y,tz='UTC'))])
  out.append(rec)
 print(json.dumps(out[:15],indent=2))
-json.dump(out,open('/mnt/data/xau_one_shot_work/rule_scan_results.json','w'),indent=2)
+json.dump(out,open('./rule_scan_results.json','w'),indent=2)

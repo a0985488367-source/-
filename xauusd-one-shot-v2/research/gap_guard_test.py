@@ -1,6 +1,6 @@
 import pandas as pd, numpy as np, importlib.util, contextlib, io, json
 # load prefix from exit_variants through its module
-spec=importlib.util.spec_from_file_location('ev','/mnt/data/xau_one_shot_work/exit_variants.py'); ev=importlib.util.module_from_spec(spec)
+spec=importlib.util.spec_from_file_location('ev','./exit_variants.py'); ev=importlib.util.module_from_spec(spec)
 with contextlib.redirect_stdout(io.StringIO()): spec.loader.exec_module(ev)
 d=ev.d;q=ev.q;qpos=ev.qpos;o=ev.o;hi=ev.hi;lo=ev.lo;cl=ev.cl;sp=ev.sp;atr=ev.atr;times=ev.times;sig=ev.sig
 
@@ -47,4 +47,4 @@ out={}
 for mode in ['base','friclose','banfri','banfri_friclose']:
  out[mode]={k:st(run(a,b,mode)) for k,(a,b) in periods.items()}
  out[mode]['FINAL90_x2']=st(run('2026-06-19','2026-09-17',mode,2.0))
-print(json.dumps(out,indent=2));json.dump(out,open('/mnt/data/xau_one_shot_work/gap_guard_results.json','w'),indent=2)
+print(json.dumps(out,indent=2));json.dump(out,open('./gap_guard_results.json','w'),indent=2)

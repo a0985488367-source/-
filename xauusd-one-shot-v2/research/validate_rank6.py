@@ -1,6 +1,6 @@
 # Reuse feature construction from rule_scan without executing its scan by exec prefix
 import pandas as pd, numpy as np, json
-P='/mnt/data/xau_one_shot_work/data/XAUUSD_M5.csv.gz'
+P='./data/XAUUSD_M5.csv.gz'
 d=pd.read_csv(P); d['time']=pd.to_datetime(d.time,utc=True); d=d.set_index('time').sort_index()
 q=d.resample('15min',label='left',closed='left').agg(open=('open','first'),high=('high','max'),low=('low','min'),close=('close','last'),spread=('spread','median')).dropna()
 prev=q.close.shift(); tr=pd.concat([q.high-q.low,(q.high-prev).abs(),(q.low-prev).abs()],axis=1).max(axis=1); q['atr']=tr.ewm(alpha=1/14,adjust=False,min_periods=14).mean()
@@ -53,7 +53,7 @@ def st(t):
 periods={'2024':('2024-01-01','2025-01-01'),'2025':('2025-01-01','2026-01-01'),'2026H1':('2026-01-01','2026-06-19'),'FINAL90':('2026-06-19','2026-09-17')}
 out={}
 for k,(a,b) in periods.items():
- t=backtest(a,b); out[k]=st(t); t.to_csv(f'/mnt/data/xau_one_shot_work/rank6_{k}_trades.csv',index=False)
+ t=backtest(a,b); out[k]=st(t); t.to_csv(f'./rank6_{k}_trades.csv',index=False)
 # cost double final
 out['FINAL90_double_cost']=st(backtest('2026-06-19','2026-09-17',2.0))
 # equity compounding on final / 2026 all for risk fractions, non-overlap trades
@@ -64,4 +64,4 @@ def eqstats(t,risk):
  return {'final':bal,'maxDD':dd,'hit10000':hit}
 for k,(a,b) in {'FINAL90':periods['FINAL90'],'2026ALL':('2026-01-01','2026-09-17')}.items():
  t=backtest(a,b); out[k+'_equity']={str(r):eqstats(t,r) for r in [.03,.05,.07,.10,.15,.20]}
-print(json.dumps(out,indent=2)); json.dump(out,open('/mnt/data/xau_one_shot_work/rank6_validation.json','w'),indent=2)
+print(json.dumps(out,indent=2)); json.dump(out,open('./rank6_validation.json','w'),indent=2)

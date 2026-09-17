@@ -300,7 +300,9 @@ int LoadClosedRates(const ENUM_TIMEFRAMES tf,const int count,MqlRates &out[])
 int BuildH4FromH1(const MqlRates &h1[],const int n1,MqlRates &h4[])
 {
    if(n1<=0) return 0;
-   int cap=(n1/4)+2;
+   //--- 上限取 n1：週末與收盤造成的不完整區塊會讓區塊數超過 n1/4，
+   //--- 估太小會在迴圈中截斷「最新」的區塊，h4_macro 就會取到過舊的值
+   int cap=n1;
    if(ArrayResize(h4,cap)!=cap) return 0;
    int cnt=0;
    long cur=-1;
@@ -750,6 +752,15 @@ void TryEntry(const datetime bar_time,const bool m15_just_closed)
    if(s.side==0)
    {
       if(InpLogRejects) LogSkip(s,"NO_SIGNAL",sz,0.0);
+      return;
+   }
+
+   //--- 只在「M15 收盤時點的那一根 M5」進場。資料缺口、週末或終端重啟後
+   //--- 第一根 M5 可能已經離訊號很遠，研究回測不會接這種單，EA 也不追。
+   if(bar_time!=s.close_time)
+   {
+      LogSkip(s,StringFormat("SKIP_STALE_SIGNAL: entry bar %s != signal close %s",
+              FmtUTC(bar_time),FmtUTC(s.close_time)),sz,0.0);
       return;
    }
 

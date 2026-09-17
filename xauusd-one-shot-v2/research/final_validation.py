@@ -1,7 +1,7 @@
 import pandas as pd, numpy as np, json, math, warnings
 from numba import njit
 warnings.filterwarnings('ignore')
-P='/mnt/data/xau_one_shot_work/data/XAUUSD_M5.csv.gz'
+P='./data/XAUUSD_M5.csv.gz'
 d=pd.read_csv(P); d['time']=pd.to_datetime(d.time,utc=True); d=d.set_index('time').sort_index()
 q=d.resample('15min',label='left',closed='left').agg(open=('open','first'),high=('high','max'),low=('low','min'),close=('close','last'),spread=('spread','median')).dropna()
 prev=q.close.shift(); tr=pd.concat([q.high-q.low,(q.high-prev).abs(),(q.low-prev).abs()],axis=1).max(axis=1); q['atr']=tr.ewm(alpha=1/14,adjust=False,min_periods=14).mean()
@@ -118,4 +118,4 @@ for f in risks:
   bal*=max(0,1+f*x);peak=max(peak,bal);dd=max(dd,(peak-bal)/peak);hit |= bal>=10000
  eq[str(f)]={'final':bal,'maxDD':dd,'hit10000':bool(hit)}
 out['actual_FINAL90_equity']=eq
-print(json.dumps(out,indent=2)); json.dump(out,open('/mnt/data/xau_one_shot_work/final_validation_results.json','w'),indent=2)
+print(json.dumps(out,indent=2)); json.dump(out,open('./final_validation_results.json','w'),indent=2)
