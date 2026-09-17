@@ -80,7 +80,7 @@ jobs:
           esac
 
       - name: 儲存訊號狀態
-        if: ${{ always() && inputs.mode != 'probe' }}
+        if: ${{ always() && inputs.mode != 'probe' && hashFiles('.signals-state.json') != '' }}
         uses: actions/cache/save@v4
         with:
           path: .signals-state.json

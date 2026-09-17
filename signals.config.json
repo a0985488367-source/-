@@ -17,7 +17,7 @@
   },
 
   "freshBars": 2,
-  "providers": ["binance", "bybit", "okx"],
+  "providers": ["binance", "okx", "bybit"],
   "siteUrl": "https://a0985488367-source.github.io/-/",
   "lang": "zh"
 }

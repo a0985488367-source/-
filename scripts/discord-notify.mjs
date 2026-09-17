@@ -147,10 +147,15 @@ function collectSignals({ symbol, interval, analysis, cfg, providerId, htf }) {
     });
   }
 
-  // 2) 價格進入高分 POI
+  // 2) 價格進入高分 POI（只推與當前偏向一致的區塊，否則每次盤整都會叫）
   if (cfg.notify.poiTouch) {
     const hit = a.pois.find(
-      (p) => a.price <= p.top && a.price >= p.bottom && p.score >= cfg.minScore && p.state !== 'mitigated',
+      (p) =>
+        a.price <= p.top &&
+        a.price >= p.bottom &&
+        p.score >= cfg.minScore &&
+        p.state !== 'mitigated' &&
+        p.aligned !== false,
     );
     if (hit) {
       out.push({
