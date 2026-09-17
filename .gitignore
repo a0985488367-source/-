@@ -3,4 +3,3 @@ node_modules/
 *.log
 .cache/
 dist/
-.signals-state.json

@@ -1,6 +1,6 @@
-# SMC 訊號 → Discord
+# SMC 訊號 → Discord（含模擬盤追蹤與每日晨報）
 #
-# 每 15 分鐘掃描一次 signals.config.json 裡的幣種，有新訊號就推到 Discord。
+# 每 15 分鐘掃描一次；每天台灣時間 08:00 推一份晨報。
 # 因為跑在 GitHub 的機器上，所以「手機關著、網頁沒開」也會通知。
 #
 # 使用前只要做一件事：
@@ -11,15 +11,18 @@ name: SMC 訊號推播
 
 on:
   schedule:
-    # 每 15 分鐘（UTC）。GitHub 的排程可能延遲幾分鐘，屬正常現象。
-    - cron: '*/15 * * * *'
+    - cron: '*/15 * * * *'   # 每 15 分鐘掃描（UTC；GitHub 排程可能延遲幾分鐘）
+    - cron: '0 0 * * *'      # 每日晨報（UTC 00:00 = 台灣 08:00）
   workflow_dispatch:
     inputs:
       mode:
         description: 執行模式
         type: choice
         default: run
-        options: [run, probe, test, dry-run]
+        options: [run, brief, probe, test, dry-run]
+
+permissions:
+  contents: write   # 需要把模擬盤帳本寫回倉庫
 
 concurrency:
   group: smc-signals
@@ -36,13 +39,15 @@ jobs:
         with:
           node-version: '22'
 
-      # 訊號去重狀態：用滾動快取保存，避免同一個訊號重複通知
-      - name: 取回上次的訊號狀態
-        uses: actions/cache/restore@v4
-        with:
-          path: .signals-state.json
-          key: signals-state-${{ github.run_id }}
-          restore-keys: signals-state-
+      - name: 決定執行模式
+        id: mode
+        run: |
+          MODE="${{ inputs.mode }}"
+          if [ -z "$MODE" ]; then
+            if [ "${{ github.event.schedule }}" = "0 0 * * *" ]; then MODE=brief; else MODE=run; fi
+          fi
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "執行模式：$MODE"
 
       - name: 檢查 webhook 是否已設定
         id: check
@@ -56,11 +61,11 @@ jobs:
           fi
 
       - name: 探測交易所連線（不需要 webhook）
-        if: ${{ inputs.mode == 'probe' }}
+        if: ${{ steps.mode.outputs.mode == 'probe' }}
         run: node scripts/discord-notify.mjs --probe
 
       - name: 尚未設定 webhook
-        if: ${{ inputs.mode != 'probe' && steps.check.outputs.configured != 'true' }}
+        if: ${{ steps.mode.outputs.mode != 'probe' && steps.check.outputs.configured != 'true' }}
         run: |
           echo "::warning::尚未設定 DISCORD_WEBHOOK_URL，略過推播。"
           echo "設定方式：Repo → Settings → Secrets and variables → Actions → New repository secret"
@@ -68,20 +73,36 @@ jobs:
           echo "  Secret: 你的 Discord webhook 網址"
           node scripts/discord-notify.mjs --dry-run
 
-      - name: 推播訊號
-        if: ${{ inputs.mode != 'probe' && steps.check.outputs.configured == 'true' }}
+      - name: 執行
+        if: ${{ steps.mode.outputs.mode != 'probe' && steps.check.outputs.configured == 'true' }}
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL || secrets.SMC }}
         run: |
-          case "${{ inputs.mode || 'run' }}" in
+          case "${{ steps.mode.outputs.mode }}" in
             test)    node scripts/discord-notify.mjs --test ;;
+            brief)   node scripts/discord-notify.mjs --brief ;;
             dry-run) node scripts/discord-notify.mjs --dry-run ;;
             *)       node scripts/discord-notify.mjs ;;
           esac
 
-      - name: 儲存訊號狀態
-        if: ${{ always() && inputs.mode != 'probe' && hashFiles('.signals-state.json') != '' }}
-        uses: actions/cache/save@v4
-        with:
-          path: .signals-state.json
-          key: signals-state-${{ github.run_id }}
+      # 帳本存回倉庫：紀錄永久保留，也可以直接在 GitHub 上瀏覽 data/journal.md
+      - name: 保存模擬盤帳本
+        if: ${{ always() && steps.mode.outputs.mode != 'probe' && steps.mode.outputs.mode != 'test' && steps.mode.outputs.mode != 'dry-run' }}
+        run: |
+          if [ -z "$(git status --porcelain data)" ]; then
+            echo "帳本沒有變化，不需要提交"
+            exit 0
+          fi
+          git config user.name "smc-signals[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data
+          git commit -m "chore(data): 更新模擬盤帳本 [skip ci]"
+          for i in 1 2 3; do
+            if git pull --rebase --autostash origin main && git push; then
+              echo "已提交"
+              exit 0
+            fi
+            echo "推送失敗，5 秒後重試（$i/3）"
+            sleep 5
+          done
+          echo "::warning::帳本推送失敗，下次執行會再試"

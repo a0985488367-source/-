@@ -8,6 +8,7 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches: ['main', 'claude/smc-crypto-trading-app-6p37v9']
+    paths-ignore: ['data/**']
   workflow_dispatch:
 
 permissions:
