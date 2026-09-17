@@ -13,8 +13,17 @@
     "plan": true,
     "poiTouch": true,
     "choch": false,
-    "sweep": false
+    "sweep": false,
+    "outcomes": true
   },
+
+  "tracking": {
+    "enabled": true,
+    "entryWindowBars": 24,
+    "maxHoldBars": 200
+  },
+
+  "timezone": "Asia/Taipei",
 
   "freshBars": 2,
   "providers": ["binance", "okx", "bybit"],
