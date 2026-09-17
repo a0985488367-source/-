@@ -148,3 +148,70 @@ export function propFirmPayoff({
     expectedMultiple: (pAny * grossPerPass * payoutRate) / (fee * attempts),
   };
 }
+
+/* ------------------------------------------------- 里程碑：多久到得了 */
+
+/**
+ * 單一路徑上依序記錄「第幾筆交易首次達到每個里程碑」。
+ * 與 simulateTargetRun 不同：不設最終目標、不 capStake，
+ * 純粹讓資金按固定比例複利成長，直到跑完或跌破實質陣亡線。
+ *
+ * @returns {{ hits: (number|null)[], ruinedAt: number|null, balance: number }}
+ *   hits[i] = 首次達到 targets[i] 的交易序號（1 起算），未達到為 null
+ */
+export function simulateMilestones(cfg, rng, targets) {
+  const c = { ...TARGET_DEFAULTS, ...cfg };
+  const floor = c.balance * c.ruinFloor;
+  const hits = targets.map(() => null);
+  let balance = c.balance;
+  let next = 0;                                  // 目標由小到大，只需追蹤下一個
+
+  for (let i = 1; i <= c.trades; i++) {
+    const stake = c.fraction * balance;
+    const cost = stake * c.costPerTrade;
+    balance += rng() < c.winProb ? stake * c.payoff - cost : -stake - cost;
+
+    while (next < targets.length && balance >= targets[next]) {
+      hits[next] = i;
+      next += 1;
+    }
+    if (next >= targets.length) break;
+    if (balance <= floor) return { hits, ruinedAt: i, balance: 0 };
+  }
+  return { hits, ruinedAt: null, balance };
+}
+
+/**
+ * 批次跑里程碑，回傳每個目標的達成率與所需交易筆數分位數。
+ * 只統計「有達成的路徑」的時間；達成率本身另外回報，避免倖存者偏差被隱藏。
+ */
+export function runMilestones(cfg, targets, { runs = 20000, seed = 20260917 } = {}) {
+  const c = { ...TARGET_DEFAULTS, ...cfg };
+  const perTarget = targets.map(() => []);
+  let ruined = 0;
+
+  for (let i = 0; i < runs; i++) {
+    const r = simulateMilestones(c, makeRng(seed + i * 2654435761), targets);
+    if (r.ruinedAt !== null) ruined += 1;
+    r.hits.forEach((h, k) => { if (h !== null) perTarget[k].push(h); });
+  }
+
+  return {
+    config: c,
+    runs,
+    ruinRate: ruined / runs,
+    targets: targets.map((target, k) => {
+      const hits = perTarget[k].sort((a, b) => a - b);
+      const q = (p) => (hits.length ? hits[Math.floor((hits.length - 1) * p)] : NaN);
+      return {
+        target,
+        multiple: target / c.balance,
+        reachRate: hits.length / runs,
+        medianTrades: q(0.5),
+        p25Trades: q(0.25),
+        p75Trades: q(0.75),
+        fastestTrades: hits.length ? hits[0] : NaN,
+      };
+    }),
+  };
+}

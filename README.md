@@ -39,7 +39,10 @@
 `docs/hundred-x.md` 則回答另一個問題：**三個月翻一百倍，數學上限是多少？**
 答案是 1%——由 Optional Stopping Theorem 給出，與標的、槓桿、策略複雜度無關。
 
-執行 `npm run backtest` 與 `npm run hundred-x` 可重現（固定種子）。
+`docs/time-to-target.md` 則是時間表：從 $100 出發到各個金額，
+在不同勝率假設下的中位數時間與達成率。
+
+執行 `npm run backtest`、`npm run hundred-x`、`npm run time-to-target` 可重現（固定種子）。
 模擬引擎在 `src/sim/microlot.js` 與 `src/sim/target.js`，可獨立 import，皆附單元測試。
 
 摘要：在完全複製該倉位模型的情況下，10,000 個帳戶的破產率為 **100%**，

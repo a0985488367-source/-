@@ -5,6 +5,7 @@ import { makeRng } from '../src/sim/microlot.js';
 import {
   kellyFraction, logGrowth, tradesToTarget, fairGameCeiling,
   simulateTargetRun, runTargetMonteCarlo, sweepFraction, propFirmPayoff,
+  simulateMilestones, runMilestones,
 } from '../src/sim/target.js';
 
 /* -------------------------------------------------------- 理論錨點 */
@@ -108,4 +109,42 @@ test('propFirmPayoff 的倍數與期望值計算正確', () => {
   const three = propFirmPayoff({ fee: 250, accountSize: 100000, passRate: 0.08, attempts: 3, payoutRate: 1 });
   assert.ok(three.pAtLeastOnePass > r.pAtLeastOnePass);
   assert.ok(three.multipleOnTotalCost < r.multiplePerPass);
+});
+
+/* -------------------------------------------------------- 里程碑 */
+
+test('全凱利的回撤性質：P(曾跌到初始的 x 倍) ≈ x', () => {
+  // 已知結果，與優勢大小無關。用來把關里程碑模擬的正確性。
+  for (const p of [0.55, 0.60, 0.65]) {
+    const res = runMilestones(
+      { balance: 100, winProb: p, fraction: kellyFraction(p, 1), costPerTrade: 0, trades: 4000, ruinFloor: 0.2 },
+      [1e9],                                    // 遙不可及的目標 → 只量回撤
+      { runs: 8000, seed: 2468 },
+    );
+    assert.ok(Math.abs(res.ruinRate - 0.2) < 0.05, `p=${p} ruinRate=${res.ruinRate}，理論 0.2`);
+  }
+});
+
+test('里程碑依序記錄，且時間隨目標單調遞增', () => {
+  const res = runMilestones(
+    { balance: 100, winProb: 0.6, fraction: 0.2, costPerTrade: 0.002, trades: 2000, ruinFloor: 0.1 },
+    [200, 500, 1000, 10000],
+    { runs: 3000, seed: 1357 },
+  );
+  const t = res.targets;
+  for (let i = 1; i < t.length; i++) {
+    assert.ok(t[i].medianTrades >= t[i - 1].medianTrades, '較遠的目標不可能較早達成');
+    assert.ok(t[i].reachRate <= t[i - 1].reachRate, '較遠的目標達成率不可能較高');
+  }
+  assert.ok(t[0].reachRate > 0.8);
+});
+
+test('必勝路徑上，里程碑時間與複利公式相符', () => {
+  // 勝率 100%、比例 100%、無成本 → 每筆剛好翻倍
+  const { hits } = simulateMilestones(
+    { balance: 100, winProb: 1, fraction: 1, costPerTrade: 0, trades: 20, ruinFloor: 0 },
+    makeRng(1),
+    [200, 400, 800, 1600],
+  );
+  assert.deepEqual(hits, [1, 2, 3, 4]);
 });

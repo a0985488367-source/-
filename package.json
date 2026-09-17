@@ -10,6 +10,7 @@
     "build:single": "node scripts/build-single.mjs",
     "build:preview": "node scripts/build-single.mjs dist/preview.html --artifact",
     "check": "node --check src/app.js",
+    "time-to-target": "node scripts/time-to-target.mjs --runs 20000 --md docs/time-to-target.md",
     "hundred-x": "node scripts/hundred-x.mjs --runs 100000 --md docs/hundred-x.md",
     "backtest": "node scripts/microlot-montecarlo.mjs --runs 10000 --json docs/microlot-backtest.json --md docs/microlot-backtest.md"
   },
