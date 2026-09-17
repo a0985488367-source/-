@@ -1,0 +1,87 @@
+# SMC 訊號 → Discord
+#
+# 每 15 分鐘掃描一次 signals.config.json 裡的幣種，有新訊號就推到 Discord。
+# 因為跑在 GitHub 的機器上，所以「手機關著、網頁沒開」也會通知。
+#
+# 使用前只要做一件事：
+#   Repo → Settings → Secrets and variables → Actions → New repository secret
+#   Name: DISCORD_WEBHOOK_URL
+#   Secret: 你的 Discord webhook 網址
+name: SMC 訊號推播
+
+on:
+  schedule:
+    # 每 15 分鐘（UTC）。GitHub 的排程可能延遲幾分鐘，屬正常現象。
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 執行模式
+        type: choice
+        default: run
+        options: [run, probe, test, dry-run]
+
+concurrency:
+  group: smc-signals
+  cancel-in-progress: false
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # 訊號去重狀態：用滾動快取保存，避免同一個訊號重複通知
+      - name: 取回上次的訊號狀態
+        uses: actions/cache/restore@v4
+        with:
+          path: .signals-state.json
+          key: signals-state-${{ github.run_id }}
+          restore-keys: signals-state-
+
+      - name: 檢查 webhook 是否已設定
+        id: check
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          if [ -z "$WEBHOOK" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 探測交易所連線（不需要 webhook）
+        if: ${{ inputs.mode == 'probe' }}
+        run: node scripts/discord-notify.mjs --probe
+
+      - name: 尚未設定 webhook
+        if: ${{ inputs.mode != 'probe' && steps.check.outputs.configured != 'true' }}
+        run: |
+          echo "::warning::尚未設定 DISCORD_WEBHOOK_URL，略過推播。"
+          echo "設定方式：Repo → Settings → Secrets and variables → Actions → New repository secret"
+          echo "  Name:   DISCORD_WEBHOOK_URL"
+          echo "  Secret: 你的 Discord webhook 網址"
+          node scripts/discord-notify.mjs --dry-run
+
+      - name: 推播訊號
+        if: ${{ inputs.mode != 'probe' && steps.check.outputs.configured == 'true' }}
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          case "${{ inputs.mode || 'run' }}" in
+            test)    node scripts/discord-notify.mjs --test ;;
+            dry-run) node scripts/discord-notify.mjs --dry-run ;;
+            *)       node scripts/discord-notify.mjs ;;
+          esac
+
+      - name: 儲存訊號狀態
+        if: ${{ always() && inputs.mode != 'probe' }}
+        uses: actions/cache/save@v4
+        with:
+          path: .signals-state.json
+          key: signals-state-${{ github.run_id }}
