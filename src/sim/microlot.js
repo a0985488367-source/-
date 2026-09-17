@@ -10,20 +10,36 @@
 
 /* ------------------------------------------------------------ 亂數 */
 
-/** xoshiro128** — 快速且可重現的 PRNG，回傳 [0,1) */
+/**
+ * xoshiro128** — 快速且可重現的 PRNG，回傳 [0,1)。
+ *
+ * 種子必須先用 splitmix32 展開成四個狀態字並預熱，否則相鄰種子
+ * （例如 seed + i·k 這種每次模擬換一個種子的用法）會產生彼此相關的序列，
+ * 使統計結果嚴重失真。此性質有單元測試把關。
+ */
 export function makeRng(seed = 1) {
-  let s0 = seed >>> 0 || 1;
-  let s1 = (seed * 0x9e3779b9) >>> 0 || 2;
-  let s2 = (seed ^ 0x85ebca6b) >>> 0 || 3;
-  let s3 = (seed + 0xc2b2ae35) >>> 0 || 4;
+  let z = (seed >>> 0) || 0x9e3779b9;
+  const splitmix32 = () => {
+    z = (z + 0x9e3779b9) >>> 0;
+    let t = z;
+    t = Math.imul(t ^ (t >>> 16), 0x21f0aaad) >>> 0;
+    t = Math.imul(t ^ (t >>> 15), 0x735a2d97) >>> 0;
+    return (t ^ (t >>> 15)) >>> 0;
+  };
+  let s0 = splitmix32() || 1;
+  let s1 = splitmix32() || 2;
+  let s2 = splitmix32() || 3;
+  let s3 = splitmix32() || 4;
   const rotl = (x, k) => ((x << k) | (x >>> (32 - k))) >>> 0;
-  return function next() {
+  function next() {
     const r = (Math.imul(rotl((Math.imul(s1, 5) >>> 0), 7), 9) >>> 0);
     const t = (s1 << 9) >>> 0;
     s2 ^= s0; s3 ^= s1; s1 ^= s2; s0 ^= s3; s2 ^= t;
     s3 = rotl(s3, 11);
     return r / 4294967296;
-  };
+  }
+  for (let i = 0; i < 20; i++) next();   // 預熱，抹除種子結構
+  return next;
 }
 
 /** 標準常態（Box–Muller，快取備用值） */

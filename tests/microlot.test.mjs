@@ -19,6 +19,26 @@ test('makeRng 同種子可重現、異種子不同', () => {
   assert.ok(seqA.every((x) => x >= 0 && x < 1));
 });
 
+test('相鄰種子產生的序列彼此獨立（迴歸測試）', () => {
+  // 每次模擬開一個新種子是本專案的用法；若種子未經 splitmix32 展開，
+  // seed + i·k 這種序列會高度相關，曾使公平賭局的達標率從 1.0% 灌水到 3.4%。
+  const N = 40000, k = 2654435761;
+  // 邊際分布
+  const firsts = Array.from({ length: N }, (_, i) => makeRng(12345 + i * k)());
+  const heads = firsts.filter((x) => x < 0.5).length / N;
+  assert.ok(Math.abs(heads - 0.5) < 0.01, `marginal=${heads}`);
+  // 聯合分布：連續 7 次 < 0.5 的比例應接近 1/128
+  let runs7 = 0;
+  for (let i = 0; i < N; i++) {
+    const r = makeRng(999 + i * k);
+    let ok = true;
+    for (let j = 0; j < 7; j++) if (!(r() < 0.5)) { ok = false; break; }
+    if (ok) runs7 += 1;
+  }
+  const rate = runs7 / N;
+  assert.ok(Math.abs(rate - 1 / 128) < 0.004, `7連續=${rate}，理論 ${1 / 128}`);
+});
+
 test('makeGaussian 的均值與變異數接近 0 / 1', () => {
   const g = makeGaussian(makeRng(7));
   const n = 200000;

@@ -1,7 +1,7 @@
 {
   "runs": 10000,
   "seed": 20260915,
-  "generatedAt": "2026-09-16T14:18:53.532Z",
+  "generatedAt": "2026-09-17T11:25:12.938Z",
   "base": {
     "price": 4385,
     "balance": 7.2,
@@ -62,40 +62,40 @@
       },
       "peakBalance": {
         "median": 7.2,
-        "p95": 161.6455032506273,
-        "max": 129537.98640507241
+        "p95": 144.11381655235226,
+        "max": 91336.58802547633
       },
       "tradesToRuin": {
         "median": 1,
         "p25": 1,
         "p75": 2,
-        "mean": 1.9576
+        "mean": 1.9562
       },
       "minutesToRuin": {
-        "median": 5,
-        "mean": 7.654
+        "median": 6,
+        "mean": 8.8134
       },
-      "everDoubled": 0.4139,
+      "everDoubled": 0.3992,
       "doubledThenRuined": 1,
-      "everTripled": 0.2737,
-      "hitLotCapRate": 0.0005,
-      "firstTradeWinRate": 0.488,
-      "firstTradeRuinRate": 0.512,
+      "everTripled": 0.2625,
+      "hitLotCapRate": 0.0004,
+      "firstTradeWinRate": 0.4834,
+      "firstTradeRuinRate": 0.5166,
       "profitable": 0,
-      "totalTrades": 19576,
-      "realizedWinRate": 0.4891704127503065,
+      "totalTrades": 19562,
+      "realizedWinRate": 0.48880482568244554,
       "survival": [
         {
           "trades": 1,
-          "alive": 0.488
+          "alive": 0.4834
         },
         {
           "trades": 5,
-          "alive": 0.0288
+          "alive": 0.028
         },
         {
           "trades": 10,
-          "alive": 0.0007
+          "alive": 0.0009
         },
         {
           "trades": 20,
@@ -140,69 +140,69 @@
         "ruinBalance": 1
       },
       "runs": 10000,
-      "ruinRate": 0.9996,
-      "stopOutRate": 0.9996,
+      "ruinRate": 0.9989,
+      "stopOutRate": 0.9989,
       "endBalance": {
-        "mean": 2486.819415879656,
+        "mean": 6993.588515995723,
         "p05": 0,
         "p25": 0,
         "median": 0,
         "p75": 0,
         "p95": 0,
-        "max": 7038023.848112316
+        "max": 7246039.439971251
       },
       "peakBalance": {
-        "median": 14.569410286711522,
-        "p95": 447.14086310726117,
-        "max": 7038023.848112316
+        "median": 14.12612927755701,
+        "p95": 401.03371107544683,
+        "max": 7246039.439971251
       },
       "tradesToRuin": {
         "median": 2,
         "p25": 1,
         "p75": 3,
-        "mean": 2.379451780712285
+        "mean": 2.347482230453499
       },
       "minutesToRuin": {
-        "median": 6,
-        "mean": 9.520508203281313
+        "median": 7,
+        "mean": 10.475422965261789
       },
-      "everDoubled": 0.5059,
-      "doubledThenRuined": 0.9992093299070962,
-      "everTripled": 0.3722,
-      "hitLotCapRate": 0.002,
-      "firstTradeWinRate": 0.5778,
-      "firstTradeRuinRate": 0.4222,
-      "profitable": 0.0004,
-      "totalTrades": 24585,
-      "realizedWinRate": 0.5925971120601993,
+      "everDoubled": 0.4872,
+      "doubledThenRuined": 0.9977422003284072,
+      "everTripled": 0.3542,
+      "hitLotCapRate": 0.0033,
+      "firstTradeWinRate": 0.5711,
+      "firstTradeRuinRate": 0.4289,
+      "profitable": 0.0011,
+      "totalTrades": 25649,
+      "realizedWinRate": 0.6089516160474092,
       "survival": [
         {
           "trades": 1,
-          "alive": 0.5778
+          "alive": 0.5711
         },
         {
           "trades": 5,
-          "alive": 0.0669
+          "alive": 0.0661
         },
         {
           "trades": 10,
-          "alive": 0.004
+          "alive": 0.0047
         },
         {
           "trades": 20,
-          "alive": 0.0006
+          "alive": 0.0011
         },
         {
           "trades": 50,
-          "alive": 0.0004
+          "alive": 0.0011
         },
         {
           "trades": 100,
-          "alive": 0.0004
+          "alive": 0.0011
         },
         {
           "trades": 200,
-          "alive": 0.0004
+          "alive": 0.0011
         }
       ]
     },
@@ -231,69 +231,69 @@
         "ruinBalance": 1
       },
       "runs": 10000,
-      "ruinRate": 0.9932,
-      "stopOutRate": 0.9932,
+      "ruinRate": 0.992,
+      "stopOutRate": 0.992,
       "endBalance": {
-        "mean": 49697.28504954781,
+        "mean": 58384.23507963562,
         "p05": 0,
         "p25": 0,
         "median": 0,
         "p75": 0,
         "p95": 0,
-        "max": 8270494.844197238
+        "max": 7906190.045146583
       },
       "peakBalance": {
-        "median": 19.226183198856916,
-        "p95": 2125.806713416196,
-        "max": 8270494.844197238
+        "median": 17.215845546522424,
+        "p95": 1764.0405082040816,
+        "max": 7906190.045146583
       },
       "tradesToRuin": {
         "median": 2,
         "p25": 1,
         "p75": 4,
-        "mean": 2.9038461538461537
+        "mean": 2.8465725806451614
       },
       "minutesToRuin": {
-        "median": 7,
-        "mean": 11.440092629883205
+        "median": 9,
+        "mean": 12.51945564516129
       },
-      "everDoubled": 0.6025,
-      "doubledThenRuined": 0.988713692946058,
-      "everTripled": 0.4802,
-      "hitLotCapRate": 0.0129,
-      "firstTradeWinRate": 0.6613,
-      "firstTradeRuinRate": 0.3387,
-      "profitable": 0.0068,
-      "totalTrades": 42441,
-      "realizedWinRate": 0.7650620861902405,
+      "everDoubled": 0.5859,
+      "doubledThenRuined": 0.9863457927974058,
+      "everTripled": 0.4567,
+      "hitLotCapRate": 0.013,
+      "firstTradeWinRate": 0.6535,
+      "firstTradeRuinRate": 0.3465,
+      "profitable": 0.008,
+      "totalTrades": 44238,
+      "realizedWinRate": 0.774876802748768,
       "survival": [
         {
           "trades": 1,
-          "alive": 0.6613
+          "alive": 0.6535
         },
         {
           "trades": 5,
-          "alive": 0.1313
+          "alive": 0.1243
         },
         {
           "trades": 10,
-          "alive": 0.0168
+          "alive": 0.0182
         },
         {
           "trades": 20,
-          "alive": 0.0068
+          "alive": 0.008
         },
         {
           "trades": 50,
-          "alive": 0.0068
+          "alive": 0.008
         },
         {
           "trades": 100,
-          "alive": 0.0068
+          "alive": 0.008
         },
         {
           "trades": 200,
-          "alive": 0.0068
+          "alive": 0.008
         }
       ]
     },
@@ -322,69 +322,69 @@
         "ruinBalance": 1
       },
       "runs": 10000,
-      "ruinRate": 0.9233,
-      "stopOutRate": 0.9233,
+      "ruinRate": 0.9164,
+      "stopOutRate": 0.9164,
       "endBalance": {
-        "mean": 579369.8798188696,
+        "mean": 631228.2151467375,
         "p05": 0,
         "p25": 0,
         "median": 0,
         "p75": 0,
-        "p95": 7440933.425751601,
-        "max": 8462543.664897839
+        "p95": 7481620.193273638,
+        "max": 8509508.647576395
       },
       "peakBalance": {
-        "median": 70.80941168252853,
-        "p95": 7440933.425751601,
-        "max": 8462543.664897839
+        "median": 62.641959900393616,
+        "p95": 7481620.193273638,
+        "max": 8509508.647576395
       },
       "tradesToRuin": {
         "median": 3,
         "p25": 2,
         "p75": 6,
-        "mean": 4.108090544785011
+        "mean": 4.052924487123527
       },
       "minutesToRuin": {
-        "median": 11,
-        "mean": 14.939456298061302
+        "median": 12,
+        "mean": 16.060672195547795
       },
-      "everDoubled": 0.7707,
-      "doubledThenRuined": 0.9004800830413909,
-      "everTripled": 0.6852,
-      "hitLotCapRate": 0.0936,
-      "firstTradeWinRate": 0.8052,
-      "firstTradeRuinRate": 0.1948,
-      "profitable": 0.0767,
-      "totalTrades": 191330,
-      "realizedWinRate": 0.9517012491506821,
+      "everDoubled": 0.752,
+      "doubledThenRuined": 0.8888297872340426,
+      "everTripled": 0.6584,
+      "hitLotCapRate": 0.1,
+      "firstTradeWinRate": 0.7995,
+      "firstTradeRuinRate": 0.2005,
+      "profitable": 0.0836,
+      "totalTrades": 204341,
+      "realizedWinRate": 0.9550848826226749,
       "survival": [
         {
           "trades": 1,
-          "alive": 0.8052
+          "alive": 0.7995
         },
         {
           "trades": 5,
-          "alive": 0.3353
+          "alive": 0.333
         },
         {
           "trades": 10,
-          "alive": 0.1069
+          "alive": 0.1162
         },
         {
           "trades": 20,
-          "alive": 0.0767
+          "alive": 0.0836
         },
         {
           "trades": 50,
-          "alive": 0.0767
+          "alive": 0.0836
         },
         {
           "trades": 100,
-          "alive": 0.0767
+          "alive": 0.0836
         },
         {
           "trades": 200,
-          "alive": 0.0767
+          "alive": 0.0836
         }
       ]
     },
@@ -413,69 +413,69 @@
         "ruinBalance": 1
       },
       "runs": 10000,
-      "ruinRate": 0.7597,
-      "stopOutRate": 0.7597,
+      "ruinRate": 0.7684,
+      "stopOutRate": 0.7683,
       "endBalance": {
-        "mean": 412.40086202170005,
+        "mean": 397.76017215891824,
         "p05": 0,
         "p25": 0,
         "median": 0,
         "p75": 0,
-        "p95": 1838.3176484893934,
-        "max": 2135.1579820641223
+        "p95": 1837.362628168981,
+        "max": 2112.7765767785268
       },
       "peakBalance": {
-        "median": 15.514664640442646,
-        "p95": 1842.124443353945,
-        "max": 2135.1579820641223
+        "median": 14.7996945270565,
+        "p95": 1839.0874981479544,
+        "max": 2112.7765767785268
       },
       "tradesToRuin": {
         "median": 1,
         "p25": 1,
         "p75": 3,
-        "mean": 2.2818217717520075
+        "mean": 2.282274856845393
       },
       "minutesToRuin": {
-        "median": 6,
-        "mean": 26.770830591022772
+        "median": 7,
+        "mean": 28.06051535658511
       },
-      "everDoubled": 0.5253,
-      "doubledThenRuined": 0.5425471159337522,
-      "everTripled": 0.4318,
+      "everDoubled": 0.5121,
+      "doubledThenRuined": 0.5477445811364968,
+      "everTripled": 0.4155,
       "hitLotCapRate": 0,
-      "firstTradeWinRate": 0.5778,
-      "firstTradeRuinRate": 0.4222,
-      "profitable": 0.2403,
-      "totalTrades": 497935,
-      "realizedWinRate": 0.9659774870213984,
+      "firstTradeWinRate": 0.5711,
+      "firstTradeRuinRate": 0.4289,
+      "profitable": 0.2316,
+      "totalTrades": 480737,
+      "realizedWinRate": 0.9657026607063738,
       "survival": [
         {
           "trades": 1,
-          "alive": 0.5778
+          "alive": 0.5711
         },
         {
           "trades": 5,
-          "alive": 0.2983
+          "alive": 0.2915
         },
         {
           "trades": 10,
-          "alive": 0.2533
+          "alive": 0.2458
         },
         {
           "trades": 20,
-          "alive": 0.2425
+          "alive": 0.2331
         },
         {
           "trades": 50,
-          "alive": 0.2403
+          "alive": 0.2317
         },
         {
           "trades": 100,
-          "alive": 0.2403
+          "alive": 0.2316
         },
         {
           "trades": 200,
-          "alive": 0.2403
+          "alive": 0.2316
         }
       ]
     },
@@ -505,64 +505,64 @@
       },
       "runs": 10000,
       "ruinRate": 0.9999,
-      "stopOutRate": 0.6912,
+      "stopOutRate": 0.6686,
       "endBalance": {
-        "mean": 94.50433720872608,
+        "mean": 136.63521369490306,
         "p05": 0,
         "p25": 0,
         "median": 0,
-        "p75": 0.21947531383001034,
-        "p95": 0.8418107755532038,
-        "max": 943434.7542157571
+        "p75": 0.294719307971668,
+        "p95": 0.8630555215932357,
+        "max": 1364589.155249137
       },
       "peakBalance": {
-        "median": 12.954206743817297,
-        "p95": 214.18320612727072,
-        "max": 943434.7542157571
+        "median": 10.202449009364933,
+        "p95": 189.43865192359135,
+        "max": 1395809.3165964915
       },
       "tradesToRuin": {
         "median": 3,
-        "p25": 1,
+        "p25": 2,
         "p75": 5,
-        "mean": 4.078807880788079
+        "mean": 4.21042104210421
       },
       "minutesToRuin": {
-        "median": 6,
-        "mean": 10.325332533253325
+        "median": 7,
+        "mean": 11.143714371437143
       },
-      "everDoubled": 0.4369,
-      "doubledThenRuined": 0.9997711146715496,
-      "everTripled": 0.2988,
+      "everDoubled": 0.4155,
+      "doubledThenRuined": 0.9997593261131167,
+      "everTripled": 0.283,
       "hitLotCapRate": 0.0013,
-      "firstTradeWinRate": 0.4414,
-      "firstTradeRuinRate": 0.1977,
+      "firstTradeWinRate": 0.4197,
+      "firstTradeRuinRate": 0.1758,
       "profitable": 0.0001,
-      "totalTrades": 40984,
-      "realizedWinRate": 0.42704470037087644,
+      "totalTrades": 42300,
+      "realizedWinRate": 0.4229078014184397,
       "survival": [
         {
           "trades": 1,
-          "alive": 0.7433
+          "alive": 0.7677
         },
         {
           "trades": 5,
-          "alive": 0.2331
+          "alive": 0.2443
         },
         {
           "trades": 10,
-          "alive": 0.0665
+          "alive": 0.0688
         },
         {
           "trades": 20,
-          "alive": 0.0065
+          "alive": 0.0069
         },
         {
           "trades": 50,
-          "alive": 0.0004
+          "alive": 0.0002
         },
         {
           "trades": 100,
-          "alive": 0.0001
+          "alive": 0.0002
         },
         {
           "trades": 200,
@@ -598,18 +598,18 @@
       "ruinRate": 0,
       "stopOutRate": 0,
       "endBalance": {
-        "mean": 568.217755145059,
-        "p05": 415.2481231844538,
-        "p25": 502.88197999666664,
-        "median": 567.845667855285,
-        "p75": 631.695384212305,
-        "p95": 725.0093251665347,
-        "max": 921.5256545463847
+        "mean": 569.3229579190913,
+        "p05": 413.9533282710908,
+        "p25": 504.61061794466116,
+        "median": 568.9406623990428,
+        "p75": 633.9568744198593,
+        "p95": 724.3886825778652,
+        "max": 1019.80624721362
       },
       "peakBalance": {
-        "median": 604.8303682113985,
-        "p95": 744.4578766380766,
-        "max": 927.0160718627294
+        "median": 604.9217600545142,
+        "p95": 742.7782917109548,
+        "max": 1019.80624721362
       },
       "tradesToRuin": {
         "median": null,
@@ -621,15 +621,15 @@
         "median": null,
         "mean": 0
       },
-      "everDoubled": 0,
+      "everDoubled": 0.0001,
       "doubledThenRuined": 0,
       "everTripled": 0,
       "hitLotCapRate": 0,
-      "firstTradeWinRate": 0.3878,
+      "firstTradeWinRate": 0.3924,
       "firstTradeRuinRate": 0,
-      "profitable": 0.7598,
+      "profitable": 0.7654,
       "totalTrades": 2000000,
-      "realizedWinRate": 0.3922545,
+      "realizedWinRate": 0.3926385,
       "survival": [
         {
           "trades": 1,
@@ -699,44 +699,44 @@
       },
       "peakBalance": {
         "median": 7.2,
-        "p95": 104.40243942975435,
-        "max": 315034.18282548897
+        "p95": 105.05209237215045,
+        "max": 80323.5873491472
       },
       "tradesToRuin": {
         "median": 1,
         "p25": 1,
         "p75": 2,
-        "mean": 1.9414
+        "mean": 1.9464
       },
       "minutesToRuin": {
-        "median": 12,
-        "mean": 19.709
+        "median": 15,
+        "mean": 23.1661
       },
-      "everDoubled": 0.3618,
+      "everDoubled": 0.3446,
       "doubledThenRuined": 1,
-      "everTripled": 0.2441,
+      "everTripled": 0.24,
       "hitLotCapRate": 0.0001,
-      "firstTradeWinRate": 0.4816,
-      "firstTradeRuinRate": 0.5184,
+      "firstTradeWinRate": 0.4787,
+      "firstTradeRuinRate": 0.5213,
       "profitable": 0,
-      "totalTrades": 19414,
-      "realizedWinRate": 0.48480478005562994,
+      "totalTrades": 19464,
+      "realizedWinRate": 0.4860254829428689,
       "survival": [
         {
           "trades": 1,
-          "alive": 0.4816
+          "alive": 0.4787
         },
         {
           "trades": 5,
-          "alive": 0.0272
+          "alive": 0.0286
         },
         {
           "trades": 10,
-          "alive": 0.0007
+          "alive": 0.0008
         },
         {
           "trades": 20,
-          "alive": 0.0001
+          "alive": 0
         },
         {
           "trades": 50,
@@ -790,40 +790,40 @@
       },
       "peakBalance": {
         "median": 7.2,
-        "p95": 161.6455032506273,
-        "max": 129537.98640507241
+        "p95": 144.11381655235226,
+        "max": 91336.58802547633
       },
       "tradesToRuin": {
         "median": 1,
         "p25": 1,
         "p75": 2,
-        "mean": 1.9576
+        "mean": 1.9562
       },
       "minutesToRuin": {
-        "median": 5,
-        "mean": 7.654
+        "median": 6,
+        "mean": 8.8134
       },
-      "everDoubled": 0.4139,
+      "everDoubled": 0.3992,
       "doubledThenRuined": 1,
-      "everTripled": 0.2737,
-      "hitLotCapRate": 0.0005,
-      "firstTradeWinRate": 0.488,
-      "firstTradeRuinRate": 0.512,
+      "everTripled": 0.2625,
+      "hitLotCapRate": 0.0004,
+      "firstTradeWinRate": 0.4834,
+      "firstTradeRuinRate": 0.5166,
       "profitable": 0,
-      "totalTrades": 19576,
-      "realizedWinRate": 0.4891704127503065,
+      "totalTrades": 19562,
+      "realizedWinRate": 0.48880482568244554,
       "survival": [
         {
           "trades": 1,
-          "alive": 0.488
+          "alive": 0.4834
         },
         {
           "trades": 5,
-          "alive": 0.0288
+          "alive": 0.028
         },
         {
           "trades": 10,
-          "alive": 0.0007
+          "alive": 0.0009
         },
         {
           "trades": 20,
@@ -868,69 +868,69 @@
         "ruinBalance": 1
       },
       "runs": 10000,
-      "ruinRate": 1,
-      "stopOutRate": 1,
+      "ruinRate": 0.9999,
+      "stopOutRate": 0.9999,
       "endBalance": {
-        "mean": 0,
+        "mean": 509.30705374515367,
         "p05": 0,
         "p25": 0,
         "median": 0,
         "p75": 0,
         "p95": 0,
-        "max": 0
+        "max": 5093070.537451536
       },
       "peakBalance": {
         "median": 7.2,
-        "p95": 299.06073668249525,
-        "max": 119148.95749456558
+        "p95": 274.3343789795112,
+        "max": 5219834.480105224
       },
       "tradesToRuin": {
         "median": 1,
         "p25": 1,
         "p75": 2,
-        "mean": 1.9715
+        "mean": 2.007100710071007
       },
       "minutesToRuin": {
         "median": 3,
-        "mean": 4.249
+        "mean": 5.1946194619461945
       },
-      "everDoubled": 0.4532,
-      "doubledThenRuined": 1,
-      "everTripled": 0.3208,
-      "hitLotCapRate": 0.0007,
-      "firstTradeWinRate": 0.4922,
-      "firstTradeRuinRate": 0.5078,
-      "profitable": 0,
-      "totalTrades": 19715,
-      "realizedWinRate": 0.492772001014456,
+      "everDoubled": 0.4337,
+      "doubledThenRuined": 0.9997694258704174,
+      "everTripled": 0.3041,
+      "hitLotCapRate": 0.0023,
+      "firstTradeWinRate": 0.4861,
+      "firstTradeRuinRate": 0.5139,
+      "profitable": 0.0001,
+      "totalTrades": 20269,
+      "realizedWinRate": 0.50579702994721,
       "survival": [
         {
           "trades": 1,
-          "alive": 0.4922
+          "alive": 0.4861
         },
         {
           "trades": 5,
-          "alive": 0.0294
+          "alive": 0.0324
         },
         {
           "trades": 10,
-          "alive": 0.0006
+          "alive": 0.0018
         },
         {
           "trades": 20,
-          "alive": 0
+          "alive": 0.0006
         },
         {
           "trades": 50,
-          "alive": 0
+          "alive": 0.0004
         },
         {
           "trades": 100,
-          "alive": 0
+          "alive": 0.0001
         },
         {
           "trades": 200,
-          "alive": 0
+          "alive": 0.0001
         }
       ]
     }

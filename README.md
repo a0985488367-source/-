@@ -36,8 +36,11 @@
 `docs/microlot-backtest.md` 是一份獨立的統計報告，回答「小本金 + 極高槓桿疊單 + 不設停損」
 這種社群媒體上常見的操作方式，跑一萬次之後的結果分布。
 
-執行 `npm run backtest` 可重現（固定種子）。模擬引擎在 `src/sim/microlot.js`，
-可獨立 import，也附有單元測試。
+`docs/hundred-x.md` 則回答另一個問題：**三個月翻一百倍，數學上限是多少？**
+答案是 1%——由 Optional Stopping Theorem 給出，與標的、槓桿、策略複雜度無關。
+
+執行 `npm run backtest` 與 `npm run hundred-x` 可重現（固定種子）。
+模擬引擎在 `src/sim/microlot.js` 與 `src/sim/target.js`，可獨立 import，皆附單元測試。
 
 摘要：在完全複製該倉位模型的情況下，10,000 個帳戶的破產率為 **100%**，
 存活時間中位數 **5 分鐘**；其中 41% 的帳戶「曾經」帳面翻倍，而這些帳戶最後全數歸零。
