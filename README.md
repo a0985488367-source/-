@@ -84,6 +84,71 @@
 
 ---
 
+## 🔔 訊號推播到 Discord
+
+每 15 分鐘自動掃描，有符合條件的訊號就推到你的 Discord 頻道。
+**跑在 GitHub 的伺服器上，所以手機關著、網頁沒開也會通知。**
+
+### 設定（只要做一次）
+
+1. **在 Discord 建立 webhook**
+   你的伺服器 → 選一個頻道 → 齒輪「編輯頻道」→ **整合** → **Webhook** → **新增 Webhook**
+   → **複製 Webhook 網址**
+2. **把網址存進 GitHub**
+   Repo → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**
+   - Name：`DISCORD_WEBHOOK_URL`
+   - Secret：剛剛複製的網址
+3. **測試**
+   Repo → **Actions** → **SMC 訊號推播** → **Run workflow** → 模式選 **test** → 執行
+   Discord 收到「連線測試」訊息就代表成功。
+
+> ⚠️ Webhook 網址等同於「可以在你頻道發言的鑰匙」，只放在 GitHub Secrets，**絕對不要寫進程式碼**（這個倉庫是公開的）。
+
+### 會推播什麼
+
+| 類型 | 觸發條件 | 預設 |
+|---|---|---|
+| **交易計畫** | 出現有效計畫且評分 ≥ 68、風報比 ≥ 2 | ✅ 開 |
+| **進入 POI** | 價格進入品質 ≥ 68 的訂單塊／FVG | ✅ 開 |
+| **CHoCH** | 剛出現性質轉變（趨勢可能反轉） | ❌ 關 |
+| **流動性掃除** | 剛掃過前高／前低 | ❌ 關 |
+
+訊息內含方向、進場區、停損、三段目標與各自 R 值、匯流檢查通過項目、高週期偏向、失效條件。
+
+### 調整設定
+
+編輯根目錄的 `signals.config.json`，推到 `main` 就生效：
+
+```jsonc
+{
+  "symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT"],  // 要監控的幣種
+  "interval": "15m",        // 主要分析週期
+  "htfInterval": "4h",      // 高週期偏向參考
+  "minScore": 68,           // 評分門檻（越高訊號越少、品質越嚴）
+  "minRR": 2,               // 最低風報比
+  "notify": { "plan": true, "poiTouch": true, "choch": false, "sweep": false }
+}
+```
+
+覺得太吵就把 `minScore` 調到 75、或把 `poiTouch` 關掉；覺得太安靜就調到 60。
+
+### 本機測試
+
+```bash
+node scripts/discord-notify.mjs --probe                        # 測試交易所連線
+node scripts/discord-notify.mjs --dry-run --providers=demo     # 用離線資料看會推什麼
+DISCORD_WEBHOOK_URL=... node scripts/discord-notify.mjs --test # 送測試訊息
+```
+
+### 注意事項
+
+- 只分析**已收盤**的 K 棒，同一個訊號不會重複通知（狀態存在 Actions 快取）
+- GitHub 的排程可能延遲幾分鐘，這是平台特性，不是故障
+- **倉庫連續 60 天沒有任何活動，GitHub 會自動停用排程**；到時候進 Actions 頁面按一下重新啟用即可
+- 這是**研究與提醒工具，不是自動交易機器人**，不會也不能幫你下單
+
+---
+
 ## 快速開始（電腦）
 
 ```bash
@@ -192,7 +257,8 @@ src/
   ui/        panels / scanner / alerts / glossary / dom
   i18n/      繁體中文 / English
 tests/       30 項單元測試（node --test）
-scripts/     零依賴靜態伺服器
+scripts/     零依賴靜態伺服器、單檔打包器、Discord 訊號推播
+signals.config.json  訊號推播設定（監控幣種、門檻、通知類型）
 docs/        方法論與架構文件
 ```
 
