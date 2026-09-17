@@ -7,7 +7,7 @@
  *  - 跨來源請求（交易所 API / WebSocket）：完全不攔截，直接走網路
  */
 
-const VERSION = 'smc-terminal-v1';
+const VERSION = 'smc-terminal-v2';
 const SHELL = [
   './',
   'index.html',
