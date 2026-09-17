@@ -54,20 +54,3 @@ export function randomWalkCandles({
   }
   return candles;
 }
-
-/** 從 CSV 載入真實 K 線（欄位：time,open,high,low,close[,volume]，允許表頭） */
-export function parseCandleCsv(text) {
-  const rows = text.trim().split(/\r?\n/);
-  const out = [];
-  for (const line of rows) {
-    const parts = line.split(/[,;\t]/).map((s) => s.trim());
-    if (parts.length < 5) continue;
-    const nums = parts.map(Number);
-    if (nums.slice(0, 5).some((n) => !Number.isFinite(n))) continue;  // 跳過表頭
-    let [time, open, high, low, close, volume] = nums;
-    if (time < 1e12) time *= 1000;                                    // 秒 → 毫秒
-    out.push({ time, open, high, low, close, volume: Number.isFinite(volume) ? volume : 100 });
-  }
-  out.sort((a, b) => a.time - b.time);
-  return out;
-}

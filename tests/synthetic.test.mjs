@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { randomWalkCandles, parseCandleCsv } from '../src/sim/synthetic.js';
+import { randomWalkCandles } from '../src/sim/synthetic.js';
+import { parseCandleCsv, parseBybitKline, candlesToCsv, validateCandles } from '../src/sim/candle-io.js';
 import { generateDemoCandles } from '../src/data/providers.js';
 import { backtest } from '../src/smc/backtest.js';
 
@@ -80,4 +81,57 @@ test('generateDemoCandles 不因 endTime 而改變（偽複製來源）', () => 
   const a = generateDemoCandles('BTCUSDT', '15m', 1200, Date.UTC(2024, 0, 1));
   const b = generateDemoCandles('BTCUSDT', '15m', 1200, Date.UTC(2024, 5, 1));
   assert.deepEqual(a.map((k) => k.close), b.map((k) => k.close));
+});
+
+/* ------------------------------------------------------------ 資料 I/O */
+
+test('parseBybitKline 反轉「新到舊」的順序並處理三種輸入形狀', () => {
+  // Bybit v5 回傳 [startTime, open, high, low, close, volume, turnover]，新的在前
+  const list = [
+    ['1700000120000', '11', '13', '10', '12', '5', '60'],
+    ['1700000060000', '10', '12', '9', '11', '4', '44'],
+    ['1700000000000', '9', '11', '8', '10', '3', '30'],
+  ];
+  const full = parseBybitKline({ retCode: 0, result: { list } });
+  assert.deepEqual(full.map((k) => k.time), [1700000000000, 1700000060000, 1700000120000]);
+  assert.equal(full[0].open, 9);
+  assert.equal(full[2].close, 12);
+  assert.equal(full[1].volume, 4);
+  // 也接受 result 物件、裸陣列、JSON 字串
+  assert.deepEqual(parseBybitKline({ list }), full);
+  assert.deepEqual(parseBybitKline(list), full);
+  assert.deepEqual(parseBybitKline(JSON.stringify({ result: { list } })), full);
+  assert.throws(() => parseBybitKline({ nope: 1 }), /找不到 result.list/);
+});
+
+test('candlesToCsv 與 parseCandleCsv 可來回轉換', () => {
+  const a = randomWalkCandles({ seed: 77, count: 50 });
+  const b = parseCandleCsv(candlesToCsv(a));
+  assert.equal(b.length, a.length);
+  b.forEach((k, i) => {
+    assert.equal(k.time, a[i].time);
+    for (const f of ['open', 'high', 'low', 'close']) assert.ok(Math.abs(k[f] - a[i][f]) < 1e-6);
+  });
+});
+
+test('validateCandles 檢出重複、缺口與不自洽的 OHLC', () => {
+  const base = randomWalkCandles({ seed: 9, count: 200, stepMs: 900000 });
+  const withGap = [...base.slice(0, 100), ...base.slice(110)];        // 缺 10 根
+  const withDupes = [...withGap, withGap[5], withGap[6]];
+  const res = validateCandles(withDupes);
+  assert.equal(res.stepMs, 900000);
+  assert.equal(res.candles.length, withGap.length, '重複應被移除');
+  assert.ok(res.issues.some((m) => m.includes('重複')));
+  assert.equal(res.gaps.length, 1);
+  assert.equal(res.gaps[0].missingBars, 10);
+
+  const broken = [...base];
+  broken[3] = { ...broken[3], high: broken[3].low - 1 };
+  assert.ok(validateCandles(broken).issues.some((m) => m.includes('OHLC 不自洽')));
+});
+
+test('validateCandles 在乾淨資料上不報任何問題', () => {
+  const res = validateCandles(randomWalkCandles({ seed: 21, count: 300 }));
+  assert.deepEqual(res.issues, []);
+  assert.equal(res.gaps.length, 0);
 });

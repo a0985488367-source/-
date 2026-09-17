@@ -12,7 +12,8 @@
  */
 import { readFileSync } from 'node:fs';
 import { backtest } from '../src/smc/backtest.js';
-import { randomWalkCandles, parseCandleCsv } from '../src/sim/synthetic.js';
+import { randomWalkCandles } from '../src/sim/synthetic.js';
+import { parseCandleCsv, parseBybitKline, validateCandles } from '../src/sim/candle-io.js';
 import { generateDemoCandles } from '../src/data/providers.js';
 
 const args = process.argv.slice(2);
@@ -53,8 +54,32 @@ function requiredN(effect, stdev) {
 function loadSeries() {
   if (SOURCE === 'csv') {
     if (!FILE) throw new Error('--source csv 需要 --file <路徑>');
-    const candles = parseCandleCsv(readFileSync(FILE, 'utf8'));
-    if (candles.length < 400) throw new Error(`CSV 只有 ${candles.length} 根 K 棒，至少需要 400 根`);
+    const text = readFileSync(FILE, 'utf8');
+    // 自動辨識：Bybit v5 kline JSON 或一般 OHLC CSV
+    const raw = text.trimStart().startsWith('{') || text.trimStart().startsWith('[')
+      ? parseBybitKline(text)
+      : parseCandleCsv(text);
+    const { candles, issues, stepMs, gaps } = validateCandles(raw);
+    console.log(`  載入 ${candles.length} 根 K 棒，間隔 ${stepMs / 60000} 分鐘`);
+    console.log(`  期間 ${new Date(candles[0].time).toISOString().slice(0, 16)} → ${new Date(candles[candles.length - 1].time).toISOString().slice(0, 16)}`);
+    for (const m of issues) console.log(`  · ${m}`);
+    if (!issues.length) console.log('  · 資料品質檢查：無缺口、無重複、OHLC 自洽');
+    if (gaps.length) {
+      // 缺口處切成獨立區段，避免把「跨越缺口」當成連續價格走勢
+      const segs = [];
+      let start = 0;
+      for (const g of gaps) {
+        const idx = candles.findIndex((k) => k.time === g.afterTime);
+        if (idx - start >= 400) segs.push(candles.slice(start, idx + 1));
+        start = idx + 1;
+      }
+      if (candles.length - start >= 400) segs.push(candles.slice(start));
+      if (segs.length > 1) {
+        console.log(`  · 依缺口切成 ${segs.length} 個連續區段分別回測`);
+        return segs.map((c, i) => ({ label: `${FILE}#${i}`, candles: c }));
+      }
+    }
+    if (candles.length < 400) throw new Error(`只有 ${candles.length} 根 K 棒，至少需要 400 根`);
     return [{ label: FILE, candles }];
   }
   if (SOURCE === 'demo') {
