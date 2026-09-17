@@ -96,7 +96,7 @@
    → **複製 Webhook 網址**
 2. **把網址存進 GitHub**
    Repo → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**
-   - Name：`DISCORD_WEBHOOK_URL`
+   - Name：`DISCORD_WEBHOOK_URL`（也接受 `SMC` 這個名稱）
    - Secret：剛剛複製的網址
 3. **測試**
    Repo → **Actions** → **SMC 訊號推播** → **Run workflow** → 模式選 **test** → 執行

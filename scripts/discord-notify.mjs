@@ -275,8 +275,22 @@ function buildEmbed(sig, cfg) {
   };
 }
 
-async function postDiscord(payload) {
+/** 檢查是不是 Discord webhook 網址（只看格式，永遠不印出內容） */
+function assertWebhookLooksValid() {
   if (!WEBHOOK) throw new Error('缺少環境變數 DISCORD_WEBHOOK_URL');
+  const ok = /^https:\/\/(canary\.|ptb\.)?discord(app)?\.com\/api\/webhooks\/\d+\/[\w-]+/.test(WEBHOOK.trim());
+  if (!ok) {
+    throw new Error(
+      'Secret 的內容看起來不是 Discord webhook 網址。\n' +
+      '  正確格式：https://discord.com/api/webhooks/<一串數字>/<一串英數字>\n' +
+      '  取得方式：Discord 頻道 → 編輯頻道 → 整合 → Webhook → 新增 Webhook → 複製 Webhook 網址\n' +
+      '  （不是頻道網址、不是邀請連結、也不是伺服器網址）',
+    );
+  }
+}
+
+async function postDiscord(payload) {
+  assertWebhookLooksValid();
   for (let attempt = 0; attempt < 3; attempt++) {
     const res = await fetch(WEBHOOK, {
       method: 'POST',
