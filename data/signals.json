@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "open": [],
+  "closed": [],
+  "updatedAt": "2026-09-17T17:09:54.736Z",
+  "stats": {
+    "count": 0,
+    "expired": 0,
+    "wins": 0,
+    "losses": 0,
+    "winRate": 0,
+    "totalR": 0,
+    "expectancy": 0,
+    "byGrade": [],
+    "bySymbol": []
+  }
+}
