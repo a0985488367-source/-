@@ -9,7 +9,7 @@ EA   路徑 : 每根 M15 收盤時，只用「當下可取得的最後 N 根已�
 import gzip, csv, random, statistics
 from datetime import datetime, timezone
 
-CSV = "/home/user/-/xauusd-one-shot-v2/research/data/XAUUSD_M5.csv.gz"
+CSV = "./data/XAUUSD_M5.csv.gz"
 
 # ---- 凍結參數 -------------------------------------------------------------
 H4_MIN, H1_MIN = 1.00, 0.25

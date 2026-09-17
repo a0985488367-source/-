@@ -568,8 +568,12 @@ void HandleClosedPosition(const string forced_reason)
    double net=0.0, exit_price=0.0;
    datetime exit_time=0;
 
-   if(g_pos_id>0 && HistorySelectByPosition(g_pos_id))
+   //--- 同步平倉後成交不保證已寫入歷史；先試一次，沒有 OUT 成交就刷新整段歷史再試
+   for(int attempt=0;attempt<2 && exit_time==0;attempt++)
    {
+      if(attempt==1) HistorySelect(0,TimeTradeServer()+60);
+      if(g_pos_id==0 || !HistorySelectByPosition(g_pos_id)) continue;
+      net=0.0;
       int total=HistoryDealsTotal();
       for(int i=0;i<total;i++)
       {
@@ -585,6 +589,8 @@ void HandleClosedPosition(const string forced_reason)
             row.exit_reason=DealReasonText(HistoryDealGetInteger(d,DEAL_REASON));
       }
    }
+   if(exit_time==0)
+      Print("WARN: closing deal not found in history; net P/L in log may be incomplete");
    if(row.exit_reason=="") row.exit_reason="UNKNOWN";
 
    row.exit_time=exit_time;
@@ -906,7 +912,6 @@ int OnInit()
    g_trade.SetExpertMagicNumber(InpMagic);
    g_trade.SetDeviationInPoints(InpSlippagePoints);
    g_trade.SetTypeFillingBySymbol(g_symbol);
-   g_trade.LogLevel(LOG_LEVEL_ERRORS);
 
    RefreshUTCOffset();
    EnsureLogHeader();
