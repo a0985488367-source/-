@@ -25,6 +25,11 @@
 //|    算不出合法手數 → 記錄 SKIP_MIN_VOLUME_RISK，不下單               |
 //|    禁止 Martingale、禁止虧損加倉、禁止強制抬到 0.01 lot             |
 //|                                                                  |
+//| 預設為「翻身模式」：單筆風險 10%，權益碰到 10000U 後自動降到 2%。    |
+//| 60U 起始的自助法實測：達標率 45.1%，但有 31.3% 的路徑會掉到 20U      |
+//| 以下。想要保守得多的走法，把 InpRiskPct 設 5、InpTargetEquity 設     |
+//| 1000——達標率 75.1%，掉到 20U 以下只有 3.8%。                        |
+//|                                                                  |
 //| 注意：策略尚未通過真實 Bid/Ask external holdout，請先跑             |
 //|       Strategy Tester / Demo，不要直接接真實資金。                  |
 //+------------------------------------------------------------------+
@@ -58,17 +63,32 @@ input group             "=== 凍結 Exit 參數 ==="
 input double            InpStopATRMult         = 2.00;      // 初始停損 = N x M15 ATR
 input double            InpTakeProfitR         = 5.00;      // 目標（R）
 input double            InpBreakevenR          = 1.50;      // 觸發保本的浮盈（R，收盤確認）
-input double            InpBreakevenOffsetR    = 0.10;      // 保本停損墊高幅度（R）；0 = 剛好進場價
+input double            InpBreakevenOffsetR    = 0.00;      // 保本停損墊高幅度（R）；0 = 剛好進場價（原始凍結版）
 input int               InpMaxHoldHours        = 48;        // 最長持有（真曆時小時）
 
 //--- 風險
 input group             "=== 風險與倉位 ==="
-input double            InpRiskPct             = 6.0;       // 單筆名義風險（% 權益）
+input double            InpRiskPct             = 10.0;      // 單筆名義風險（% 權益）；翻身模式實測最佳點
 input double            InpMaxMarginFraction   = 0.50;      // 保證金上限（可用保證金比例）
 input int               InpSlippagePoints      = 50;        // 允許滑點（point）
 
-//--- 里程碑鎖底（小資金翻身模式；預設關閉，研究報告已列明其高回撤風險）
-input group             "=== 里程碑鎖底 ratchet（預設關閉） ==="
+//--- 翻身模式：高風險衝到目標，達標後自動降風險
+//    2000~4000 條自助法路徑（60U 起始、目標 10000U、達標即停）實測：
+//      風險  5% -> 達標 20.2%，掉到<20U  3.8%
+//      風險 10% -> 達標 45.1%，掉到<20U 31.3%   <-- 最高點
+//      風險 15% -> 達標 30.3%，掉到<20U 62.2%
+//      風險 30% -> 達標  5.6%，掉到<20U 94.4%
+//    超過 10% 之後倉位放大殺死帳戶的速度比複利更快。歷史最糟單筆 -2.60R
+//    （跳空穿過停損），單筆風險超過 38.5% 時那一筆會直接打穿本金。
+input group             "=== 翻身模式（達標後自動降風險） ==="
+input double            InpTargetEquity        = 10000.0;   // 目標權益（U）；0 = 停用
+input double            InpPostTargetRiskPct   = 2.0;       // 達標後的單筆風險（%）；0 = 完全停止交易
+
+//--- 里程碑鎖底（研究報告的資金模型；實測反而拉低達標率，預設關閉）
+//    同樣 60U/目標 10000U，10% 風險下：鎖底達標 8.8% vs 固定比例 45.1%。
+//    底線會變成吸收壁——權益貼近底線時 (權益-底線)/1.15 趨近 0，倉位縮到
+//    無法交易，路徑就卡在底線上。
+input group             "=== 里程碑鎖底 ratchet（不建議，預設關閉） ==="
 input bool              InpUseRatchet          = false;     // 啟用里程碑鎖底
 input double            InpRatchetFloor0       = 20.0;      // 初始底線（U）
 input double            InpRatchetBuffer       = 1.15;      // 成本/超額虧損緩衝係數
@@ -113,6 +133,9 @@ datetime g_be_time      = 0;
 //--- ratchet
 double   g_floor        = 0.0;
 bool     g_ratchet_done = false;
+
+//--- 翻身模式：達標後閂住，權益之後回落也不再切回高風險
+bool     g_target_hit   = false;
 
 //+------------------------------------------------------------------+
 //| 訊號                                                              |
@@ -455,6 +478,7 @@ void SaveState()
    GlobalVariableSet(GV("last_exit"),    (double)g_last_exit_bar);
    GlobalVariableSet(GV("floor"),        g_floor);
    GlobalVariableSet(GV("ratchet_done"), g_ratchet_done?1.0:0.0);
+   GlobalVariableSet(GV("target_hit"),   g_target_hit?1.0:0.0);
 }
 
 double GVGet(const string key,const double def)
@@ -482,6 +506,7 @@ void LoadState()
    g_last_exit_bar= (datetime)(long)GVGet("last_exit",0.0);
    g_floor        = GVGet("floor",InpRatchetFloor0);
    g_ratchet_done = (GVGet("ratchet_done",0.0)>0.5);
+   g_target_hit   = (GVGet("target_hit",0.0)>0.5);
 }
 
 void ClearPositionState()
@@ -529,7 +554,26 @@ double RiskBudget(string &reason)
 {
    reason="";
    double eq=AccountInfoDouble(ACCOUNT_EQUITY);
-   double base=eq*InpRiskPct/100.0;
+   double pct=InpRiskPct;
+
+   //--- 翻身模式：碰到目標就閂住，之後一律用降級後的風險，不因回落而切回
+   if(InpTargetEquity>0.0)
+   {
+      if(!g_target_hit && eq>=InpTargetEquity)
+      {
+         g_target_hit=true; SaveState();
+         PrintFormat("TARGET REACHED: equity %.2f >= %.2f — switching risk %.2f%% -> %.2f%%",
+                     eq,InpTargetEquity,InpRiskPct,InpPostTargetRiskPct);
+      }
+      if(g_target_hit)
+      {
+         if(InpPostTargetRiskPct<=0.0)
+         { reason="TARGET_REACHED: post-target risk is 0, trading stopped"; return 0.0; }
+         pct=InpPostTargetRiskPct;
+      }
+   }
+
+   double base=eq*pct/100.0;
    if(!InpUseRatchet) return base;
 
    UpdateRatchetFloor(eq);
@@ -915,6 +959,11 @@ int OnInit()
    { Print("FATAL: invalid exit parameters"); return INIT_PARAMETERS_INCORRECT; }
    if(InpRiskPct<=0.0 || InpRiskPct>100.0)
    { Print("FATAL: invalid risk percent"); return INIT_PARAMETERS_INCORRECT; }
+   if(InpTargetEquity<0.0 || InpPostTargetRiskPct<0.0 || InpPostTargetRiskPct>100.0)
+   { Print("FATAL: invalid turnaround-mode parameters"); return INIT_PARAMETERS_INCORRECT; }
+   if(InpRiskPct>38.0)
+   { Print("FATAL: risk above 38% — one historical -2.60R gap trade would wipe the account");
+     return INIT_PARAMETERS_INCORRECT; }
    if(InpUseRatchet && InpRatchetBuffer<1.0)
    { Print("FATAL: ratchet buffer must be >= 1.0"); return INIT_PARAMETERS_INCORRECT; }
 
@@ -955,6 +1004,9 @@ int OnInit()
                InpStopATRMult,InpTakeProfitR,InpBreakevenR,InpBreakevenOffsetR,InpMaxHoldHours);
    PrintFormat("Risk: %.2f%% per trade, ratchet=%s, maxMarginFraction=%.2f",
                InpRiskPct,(InpUseRatchet?"ON":"OFF"),InpMaxMarginFraction);
+   if(InpTargetEquity>0.0)
+      PrintFormat("Turnaround mode: target=%.2f, post-target risk=%.2f%%, already reached=%s",
+                  InpTargetEquity,InpPostTargetRiskPct,(g_target_hit?"YES":"no"));
    Print("NOTE: external true Bid/Ask holdout NOT completed — run Strategy Tester / Demo only.");
 
    if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED))
