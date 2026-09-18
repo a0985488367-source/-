@@ -36,8 +36,14 @@ const PROVIDER_IDS = opt('providers', 'binance,okx,bybit').split(',');
 const MIN_SCORE = Number(opt('min-score', 50));
 const DETAIL_TOP = Number(opt('detail', 30));
 
-/** 排除穩定幣對與槓桿代幣：這些的 SMC 結構沒有參考價值 */
-const EXCLUDE = /(USDC|FDUSD|TUSD|BUSD|DAI|USDP|EUR|TRY|BRL|ARS|UP|DOWN|BULL|BEAR)USDT$/;
+/**
+ * 排除穩定幣對與槓桿代幣：這些的 SMC 結構沒有參考價值。
+ * 名稱黑名單擋得掉大部分，但新的穩定幣一直出現（BFUSD、XUSD…），
+ * 所以另外用「波動度過低」當第二道防線。
+ */
+const EXCLUDE = /(USDC|FDUSD|TUSD|BUSD|DAI|USDP|USDE|USD1|USDF|PYUSD|AEUR|EURI|XUSD|BFUSD|EUR|GBP|TRY|BRL|ARS|JPY|UP|DOWN|BULL|BEAR)USDT$/;
+/** 近期波動度低於此值（相對價格）就視為穩定幣或殭屍幣，直接跳過 */
+const MIN_ATR_PCT = 0.15;
 
 const log = (...a) => console.log(...a);
 const digitsFor = (p) => (Math.abs(p) >= 10000 ? 1 : Math.abs(p) >= 100 ? 2 : Math.abs(p) >= 1 ? 4 : Math.abs(p) >= 0.01 ? 5 : 7);
@@ -143,13 +149,17 @@ async function main() {
     done++;
     if (done % 20 === 0) log(`  已掃描 ${done}/${universe.length}`);
     if (a.empty) return null;
+    // 第二道防線：波動度太低（穩定幣、殭屍幣）的訊號沒有意義
+    const atrPct = (a.atrValue / a.price) * 100;
+    if (atrPct < MIN_ATR_PCT) return { skipped: 'low-volatility', symbol: t.symbol };
     return toRow(t.symbol, a, provider, t.quoteVolume);
   });
 
+  const skipped = stage1.filter((r) => r?.skipped).length;
   const candidates = stage1
-    .filter((r) => r && !r.error && r.score >= MIN_SCORE)
+    .filter((r) => r && !r.error && !r.skipped && r.score >= MIN_SCORE)
     .sort((a, b) => b.score - a.score);
-  log(`\n粗篩完成：${candidates.length} 個達到 ${MIN_SCORE} 分`);
+  log(`\n粗篩完成：${candidates.length} 個達到 ${MIN_SCORE} 分（另有 ${skipped} 個因波動度過低被排除）`);
 
   // ── 第二階段：對前段補抓高週期偏向，重新精算 ──
   const htfInterval = tfSuite(INTERVAL).htf;
@@ -184,7 +194,8 @@ async function main() {
     interval: INTERVAL,
     htfInterval,
     universe: universe.length,
-    scanned: stage1.filter(Boolean).length,
+    scanned: stage1.filter((r) => r && !r.skipped).length,
+    skippedLowVolatility: skipped,
     minScore: MIN_SCORE,
     counts: { ready: ready.length, waiting: waiting.length, total: rows.length },
     rows,
