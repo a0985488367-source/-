@@ -76,7 +76,13 @@ jobs:
       # 全市場掃描：成交量前 N 名跑一遍，產生「可進場 / 等待回測」清單供網站與推播使用
       - name: 全市場掃描
         if: ${{ steps.mode.outputs.mode == 'run' || steps.mode.outputs.mode == 'market' || steps.mode.outputs.mode == 'brief' }}
-        run: node scripts/market-scan.mjs --if-stale=45
+        run: |
+          # 手動選 market 模式時強制重掃，其餘情況沿用 45 分鐘內的結果
+          if [ "${{ steps.mode.outputs.mode }}" = "market" ]; then
+            node scripts/market-scan.mjs
+          else
+            node scripts/market-scan.mjs --if-stale=45
+          fi
 
       - name: 執行
         if: ${{ steps.mode.outputs.mode != 'probe' && steps.check.outputs.configured == 'true' }}
