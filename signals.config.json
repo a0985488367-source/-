@@ -22,6 +22,15 @@
     "maxHoldBars": 200
   },
 
+  "market": {
+    "notify": true,
+    "minScore": 72,
+    "maxPerRun": 3,
+    "maxAgeMin": 120,
+    "top": 120,
+    "interval": "1h"
+  },
+
   "timezone": "Asia/Taipei",
 
   "freshBars": 2,

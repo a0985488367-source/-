@@ -74,6 +74,7 @@ async function loadConfig() {
     minRR: cfg.minRR ?? 2,
     notify: { plan: true, poiTouch: true, choch: false, sweep: false, outcomes: true, ...(cfg.notify ?? {}) },
     tracking: { enabled: true, entryWindowBars: 24, maxHoldBars: 200, ...(cfg.tracking ?? {}) },
+    market: { notify: true, minScore: 72, maxPerRun: 3, maxAgeMin: 120, ...(cfg.market ?? {}) },
     timezone: cfg.timezone ?? 'Asia/Taipei',
     freshBars: cfg.freshBars ?? 2,
     providers: cfg.providers ?? ['binance', 'bybit', 'okx'],
@@ -380,6 +381,60 @@ function assertWebhookLooksValid() {
   }
 }
 
+/**
+ * 全市場掃描的機會：讀取 market-scan.mjs 產生的結果，
+ * 挑出「現在可進場」且分數夠高、又不在固定監控清單裡的標的。
+ */
+async function marketOpportunities(cfg, state) {
+  if (!cfg.market.notify) return [];
+  let data;
+  try {
+    data = JSON.parse(await readFile(`${DATA_DIR}/market.json`, 'utf8'));
+  } catch {
+    return [];
+  }
+  const ageMin = (Date.now() - new Date(data.generatedAt).getTime()) / 60000;
+  if (ageMin > cfg.market.maxAgeMin) {
+    log(`  全市場掃描結果已是 ${ageMin.toFixed(0)} 分鐘前，不推播`);
+    return [];
+  }
+  return data.rows
+    .filter(
+      (r) =>
+        r.valid &&
+        r.status === 'ready' &&
+        r.score >= cfg.market.minScore &&
+        !cfg.symbols.includes(r.symbol) &&
+        !state[`market:${r.symbol}:${r.interval}:${r.dir}:${r.entry}`],
+    )
+    .slice(0, cfg.market.maxPerRun)
+    .map((r) => ({ id: `market:${r.symbol}:${r.interval}:${r.dir}:${r.entry}`, kind: 'market', row: r, interval: r.interval, symbol: r.symbol }));
+}
+
+function buildMarketEmbed(sig, cfg) {
+  const r = sig.row;
+  const base = r.symbol.replace(/USDT$/, '');
+  const long = r.dir === 'long';
+  const tps = r.targets.map((t) => `**${t.name}** ${price(t.price)} · ${t.rr.toFixed(2)}R　*${t.label}*`).join('\n');
+  return {
+    title: `${long ? '🟢 做多' : '🔴 做空'} ${base}/USDT · ${r.interval} · ${r.grade} 級　🔎 全市場掃描`,
+    url: cfg.siteUrl || undefined,
+    color: long ? COLORS.bull : COLORS.bear,
+    description: `**${r.poiType}** ${price(r.entry)}　(價格已在區間內)`,
+    fields: [
+      { name: '進場', value: price(r.entry), inline: true },
+      { name: '停損', value: `${price(r.stop)}　(${r.riskPct.toFixed(2)}%)`, inline: true },
+      { name: '風報比', value: `${r.rr.toFixed(2)}R`, inline: true },
+      { name: '目標', value: tps || '—' },
+      { name: '現價', value: price(r.price), inline: true },
+      { name: '區間位置', value: r.pd ? `${zhZone(r.pd.zone)} ${r.pd.pct.toFixed(0)}%` : '—', inline: true },
+      { name: '匯流', value: `${r.checksPassed}/${r.checksTotal} · 評分 ${r.score}`, inline: true },
+    ],
+    footer: { text: `${r.symbol} · ${r.interval} · 全市場掃描（前 ${cfg.market.top ?? '—'} 名）· 僅供研究，非投資建議` },
+    timestamp: new Date(r.updatedAt).toISOString(),
+  };
+}
+
 /** 模擬單狀態變化 → Discord 訊息 */
 function buildOutcomeEmbed(trade, event, stats, cfg) {
   const base = trade.symbol.replace(/USDT$/, '');
@@ -564,9 +619,12 @@ async function main() {
   const snapshots = [];
   const bests = [];
 
+  const processed = new Set();
+
   for (const symbol of cfg.symbols) {
     for (const interval of cfg.intervals) {
       const isPrimary = interval === cfg.intervals[0];
+      processed.add(`${symbol}|${interval}`);
       try {
         const { candles, provider } = await fetchCandles(symbol, interval, cfg.candles, cfg.providers);
         // 丟掉最後一根（尚未收盤），只用已確定的 K 棒判斷
@@ -620,6 +678,32 @@ async function main() {
     }
   }
 
+  // 補推進：來自全市場掃描的模擬單不在固定監控清單裡，這裡單獨抓資料推進，
+  // 否則那些單永遠不會結算
+  if (cfg.tracking.enabled) {
+    const pending = [...new Set(
+      journal.open
+        .map((t) => `${t.symbol}|${t.interval}`)
+        .filter((k) => !processed.has(k)),
+    )];
+    for (const key of pending) {
+      const [symbol, interval] = key.split('|');
+      try {
+        const { candles } = await fetchCandles(symbol, interval, 300, cfg.providers);
+        const closed = candles.slice(0, -1);
+        for (const trade of journal.open) {
+          if (trade.symbol !== symbol || trade.interval !== interval) continue;
+          const updated = advanceTrade(trade, closed, cfg.tracking);
+          Object.assign(trade, updated);
+          for (const ev of updated.events || []) outcomes.push({ trade, event: ev });
+        }
+        log(`  追蹤中（非固定清單）：${symbol} ${interval} 已更新`);
+      } catch (e) {
+        log(`  追蹤中的 ${symbol} ${interval} 更新失敗：${e.message}`);
+      }
+    }
+  }
+
   // 已結束的模擬單移到歷史
   const stillOpen = [];
   for (const t of journal.open) {
@@ -656,8 +740,35 @@ async function main() {
     await sleep(600);
   }
 
+  // ── 全市場掃描的機會 ──
+  const opportunities = await marketOpportunities(cfg, state);
+  if (opportunities.length) {
+    log(`\n全市場掃描機會 ${opportunities.length} 則：`);
+    for (const sig of opportunities) {
+      const embed = buildMarketEmbed(sig, cfg);
+      if (DRY) { log(`  [dry-run] ${embed.title}`); continue; }
+      await postDiscord({ embeds: [embed] });
+      log(`  已推播：${embed.title}`);
+      state[sig.id] = new Date().toISOString();
+      const r = sig.row;
+      if (cfg.tracking.enabled && !journal.open.some((t) => t.id === sig.id)) {
+        journal.open.push({
+          id: sig.id, symbol: r.symbol, interval: r.interval, dir: r.dir,
+          entry: r.entry, stop: r.stop,
+          targets: r.targets.map((t) => ({ name: t.name, price: t.price, rr: t.rr, label: t.label })),
+          grade: r.grade, score: r.score, poiType: r.poiType,
+          status: 'active', filledTime: r.updatedAt, openTime: r.updatedAt,
+          lastCheckedTime: r.updatedAt, barsSinceOpen: 0, barsSinceFill: 0,
+          hitTargets: [], maxFavorableR: 0, maxAdverseR: 0, source: 'market',
+        });
+        log(`    ↳ 已加入模擬盤追蹤`);
+      }
+      await sleep(600);
+    }
+  }
+
   // ── 再推新訊號 ──
-  if (!found.length && !outcomes.length) return finish();
+  if (!found.length && !outcomes.length && !opportunities.length) return finish();
   if (found.length) log(`\n共 ${found.length} 則新訊號：`);
 
   for (const sig of found) {
