@@ -15,6 +15,7 @@ import { backtest } from './smc/backtest.js';
 import { Chart } from './chart/chart.js';
 import * as P from './ui/panels.js';
 import { runScan, renderScanTable } from './ui/scanner.js';
+import { fetchMarket, renderMarket } from './ui/market.js';
 import { AlertEngine, createAlert, renderAlerts } from './ui/alerts.js';
 import { renderGlossary } from './ui/glossary.js';
 import { fmtPrice, fmtNum, fmtTime, fmtAgo, debounce, throttle, escapeHtml } from './core/utils.js';
@@ -112,6 +113,7 @@ function init() {
   bindTabs();
   bindChartTools();
   bindScanner();
+  bindMarket();
   bindBacktest();
   bindRisk();
   bindAlerts();
@@ -434,6 +436,7 @@ function bindTabs() {
     $$('#tabs button').forEach((b) => b.classList.toggle('active', b === btn));
     $$('.tab-panel').forEach((p) => p.classList.toggle('active', p.dataset.panel === btn.dataset.tab));
     if (btn.dataset.tab === 'learn') renderGloss();
+    if (btn.dataset.tab === 'scanner') loadMarket();
   };
 }
 
@@ -770,6 +773,57 @@ function playReplay() {
     }
     stepReplay(1);
   }, replay.speed);
+}
+
+/* ------------------------------------------------------------ 全市場掃描 */
+
+let marketData = null;
+
+async function loadMarket({ force = false } = {}) {
+  const host = $('#marketResult');
+  if (!host) return;
+  if (marketData && !force) return renderMarketPane();
+  host.innerHTML = `<p class="dim pad">${isZh() ? '載入掃描結果…' : 'Loading…'}</p>`;
+  try {
+    marketData = await fetchMarket();
+    renderMarketPane();
+  } catch (e) {
+    host.innerHTML = `<p class="dim pad">${isZh()
+      ? '還沒有掃描結果。伺服器每小時會掃描一次全市場，稍後再試。'
+      : 'No scan results yet — the server scans hourly.'}<br><span class="tiny">${escapeHtml(e.message)}</span></p>`;
+  }
+}
+
+function renderMarketPane() {
+  if (!marketData) return;
+  setHTML('#marketResult', renderMarket(marketData, state.lang, {
+    minScore: +$('#marketMinScore').value || 0,
+    dir: $('#marketDir').value,
+  }));
+  $('#marketResult').onclick = (e) => {
+    const row = e.target.closest('[data-symbol]');
+    if (!row) return;
+    const iv = row.dataset.interval;
+    if (iv && iv !== state.interval) {
+      state.interval = iv;
+      $$('#intervalSeg button').forEach((b) => b.classList.toggle('active', b.dataset.iv === iv));
+    }
+    selectSymbol(row.dataset.symbol);
+  };
+}
+
+function bindMarket() {
+  $('#scanModeSeg').onclick = (e) => {
+    const mode = e.target.dataset?.mode;
+    if (!mode) return;
+    $$('#scanModeSeg button').forEach((b) => b.classList.toggle('active', b.dataset.mode === mode));
+    $('#marketPane').hidden = mode !== 'market';
+    $('#localPane').hidden = mode !== 'local';
+    if (mode === 'market') loadMarket();
+  };
+  $('#marketRefresh').onclick = () => loadMarket({ force: true });
+  $('#marketMinScore').onchange = renderMarketPane;
+  $('#marketDir').onchange = renderMarketPane;
 }
 
 /* ---------------------------------------------------------------- 掃描器 */

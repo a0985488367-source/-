@@ -19,7 +19,7 @@ on:
         description: 執行模式
         type: choice
         default: run
-        options: [run, brief, probe, test, dry-run]
+        options: [run, brief, market, probe, test, dry-run]
 
 permissions:
   contents: write   # 需要把模擬盤帳本寫回倉庫
@@ -73,6 +73,11 @@ jobs:
           echo "  Secret: 你的 Discord webhook 網址"
           node scripts/discord-notify.mjs --dry-run
 
+      # 全市場掃描：成交量前 N 名跑一遍，產生「可進場 / 等待回測」清單供網站與推播使用
+      - name: 全市場掃描
+        if: ${{ steps.mode.outputs.mode == 'run' || steps.mode.outputs.mode == 'market' || steps.mode.outputs.mode == 'brief' }}
+        run: node scripts/market-scan.mjs --if-stale=45
+
       - name: 執行
         if: ${{ steps.mode.outputs.mode != 'probe' && steps.check.outputs.configured == 'true' }}
         env:
@@ -81,6 +86,7 @@ jobs:
           case "${{ steps.mode.outputs.mode }}" in
             test)    node scripts/discord-notify.mjs --test ;;
             brief)   node scripts/discord-notify.mjs --brief ;;
+            market)  echo "（僅執行全市場掃描）" ;;
             dry-run) node scripts/discord-notify.mjs --dry-run ;;
             *)       node scripts/discord-notify.mjs ;;
           esac

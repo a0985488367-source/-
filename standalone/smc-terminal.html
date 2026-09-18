@@ -228,6 +228,11 @@ sup { font-size: 8px; color: var(--accent); margin-left: 2px; }
 .seg button:hover { color: var(--text); background: var(--bg-elev); }
 .seg button.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .seg--sm button { padding: 4px 7px; font-size: 11px; }
+.seg--full { width: 100%; margin-bottom: 10px; }
+.seg--full button { flex: 1; padding: 8px; font-size: 12.5px; }
+
+.market-head { font-size: 11px; padding: 0 2px 8px; }
+.pad-x { padding-left: 10px; padding-right: 10px; }
 
 /* -------------------------------------------------------------- Chart tools */
 
@@ -717,21 +722,45 @@ body.panel-max .workspace { grid-template-rows: 1fr; grid-template-columns: 1fr;
         <div class="tab-panel" data-panel="mtf" id="panelMtf"></div>
 
         <div class="tab-panel" data-panel="scanner">
-          <div class="form-row">
-            <label>掃描清單</label>
-            <select id="scanScope" class="input">
-              <option value="watchlist">自選清單</option>
-              <option value="top20" selected>成交量前 20</option>
-              <option value="top50">成交量前 50</option>
-            </select>
+          <div class="seg seg--full" id="scanModeSeg">
+            <button data-mode="market" class="active">全市場</button>
+            <button data-mode="local">自選清單</button>
           </div>
-          <div class="form-row">
-            <label>最低評分</label>
-            <input id="scanMinScore" class="input" type="number" value="0" min="0" max="100" step="5" />
+
+          <div id="marketPane">
+            <div class="form-row">
+              <label>最低評分</label>
+              <input id="marketMinScore" class="input" type="number" value="55" min="0" max="100" step="5" />
+            </div>
+            <div class="form-row">
+              <label>方向</label>
+              <select id="marketDir" class="input">
+                <option value="all">全部</option>
+                <option value="long">只看做多</option>
+                <option value="short">只看做空</option>
+              </select>
+            </div>
+            <button class="btn btn--primary btn--block" id="marketRefresh">重新載入掃描結果</button>
+            <div id="marketResult"></div>
           </div>
-          <button class="btn btn--primary btn--block" id="scanBtn">開始掃描</button>
-          <div class="progress" id="scanProgress" hidden><i></i></div>
-          <div id="scanResult" class="scroll-x"></div>
+
+          <div id="localPane" hidden>
+            <div class="form-row">
+              <label>掃描清單</label>
+              <select id="scanScope" class="input">
+                <option value="watchlist">自選清單</option>
+                <option value="top20" selected>成交量前 20</option>
+                <option value="top50">成交量前 50</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label>最低評分</label>
+              <input id="scanMinScore" class="input" type="number" value="0" min="0" max="100" step="5" />
+            </div>
+            <button class="btn btn--primary btn--block" id="scanBtn">開始掃描</button>
+            <div class="progress" id="scanProgress" hidden><i></i></div>
+            <div id="scanResult" class="scroll-x"></div>
+          </div>
         </div>
 
         <div class="tab-panel" data-panel="backtest">
@@ -5134,6 +5163,104 @@ function renderScanTable(rows, lang) {
 }
 
 
+/* ===== src/ui/market.js ===== */
+/**
+ * 全市場掃描結果的讀取與呈現
+ *
+ * 掃描本身跑在 GitHub Actions 上（scripts/market-scan.mjs），結果寫成 data/market.json。
+ * 網站只負責讀檔與顯示，所以打開就有上百個交易對的分析，瀏覽器不必自己去打 API。
+ */
+
+/**
+ * 掃描結果的位置：
+ *  - GitHub Pages 上改讀 raw.githubusercontent.com，因為資料更新不會觸發網站重新部署，
+ *    Pages 上那份會是舊的
+ *  - 其他情況（本機開發）直接讀相對路徑
+ */
+function marketDataUrl() {
+  const bust = `?t=${Math.floor(Date.now() / 60000)}`;
+  const { hostname, pathname } = location;
+  if (hostname.endsWith('github.io')) {
+    const owner = hostname.split('.')[0];
+    const repo = pathname.split('/').filter(Boolean)[0];
+    if (owner && repo) {
+      return `https://raw.githubusercontent.com/${owner}/${repo}/main/data/market.json${bust}`;
+    }
+  }
+  return `data/market.json${bust}`;
+}
+async function fetchMarket() {
+  const res = await fetch(marketDataUrl(), { cache: 'no-store' });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+const dirCls = (d) => (d === 'long' ? 'up' : 'down');
+const gradeCls = (g) => (g === 'A+' || g === 'A' ? 'up' : g === 'B' ? 'warn' : 'dim');
+
+function rowHtml(r, lang) {
+  const base = r.symbol.replace(/USDT$/, '');
+  const dist = r.distancePct;
+  return `<tr class="scan-row" data-symbol="${r.symbol}" data-interval="${r.interval}">
+    <td><b>${base}</b></td>
+    <td><span class="pill pill--sm pill--${r.grade === 'A+' || r.grade === 'A' ? 'up' : r.grade === 'B' ? 'warn' : 'flat'}">${r.grade}</span><span class="dim"> ${r.score}</span></td>
+    <td class="${dirCls(r.dir)}">${r.dir === 'long' ? (lang === 'zh' ? '多' : 'L') : (lang === 'zh' ? '空' : 'S')}</td>
+    <td class="mono">${fmtPrice(r.entry)}</td>
+    <td class="mono down">${fmtPrice(r.stop)}</td>
+    <td class="mono">${r.rr.toFixed(1)}R</td>
+    <td class="tiny dim">${escapeHtml(r.poiType ?? '—')}</td>
+    <td class="mono tiny ${Math.abs(dist) < 0.5 ? 'up' : 'dim'}">${dist >= 0 ? '+' : ''}${dist.toFixed(2)}%</td>
+  </tr>`;
+}
+function renderMarket(data, lang, filter = {}) {
+  if (!data) return '';
+  const zh = lang === 'zh';
+  const minScore = filter.minScore ?? 0;
+  const dirFilter = filter.dir ?? 'all';
+  const pick = (status) =>
+    data.rows.filter(
+      (r) => r.status === status && r.valid && r.score >= minScore && (dirFilter === 'all' || r.dir === dirFilter),
+    );
+  const ready = pick('ready');
+  const waiting = pick('waiting');
+
+  const head = `<thead><tr>
+    <th>${zh ? '幣種' : 'Symbol'}</th><th>${zh ? '評級' : 'Grade'}</th><th>${zh ? '方向' : 'Dir'}</th>
+    <th>${zh ? '進場' : 'Entry'}</th><th>${zh ? '停損' : 'Stop'}</th><th>R:R</th>
+    <th>POI</th><th>${zh ? '距現價' : 'Dist'}</th>
+  </tr></thead>`;
+
+  const table = (rows) =>
+    rows.length
+      ? `<div class="scroll-x"><table class="table table--compact table--scan">${head}<tbody>${rows.map((r) => rowHtml(r, lang)).join('')}</tbody></table></div>`
+      : `<p class="dim pad">${zh ? '目前沒有符合條件的標的。' : 'Nothing matches right now.'}</p>`;
+
+  return `
+    <div class="market-head">
+      <span class="dim">${zh ? '掃描' : 'Scanned'} ${data.universe} ${zh ? '個交易對' : 'pairs'} · ${data.interval}
+        · ${zh ? '更新於' : 'updated'} ${fmtAgo(new Date(data.generatedAt).getTime())} ${zh ? '前' : 'ago'}</span>
+    </div>
+
+    <section class="card">
+      <header class="card__head">
+        <h3>🟢 ${zh ? '現在可進場' : 'Ready now'}</h3>
+        <span class="pill pill--up">${ready.length}</span>
+      </header>
+      <p class="hint pad-x">${zh ? '價格已經在 POI 區間內，可以直接執行。' : 'Price is inside the POI — executable now.'}</p>
+      ${table(ready)}
+    </section>
+
+    <section class="card">
+      <header class="card__head">
+        <h3>⏳ ${zh ? '等待回測' : 'Waiting'}</h3>
+        <span class="pill pill--warn">${waiting.length}</span>
+      </header>
+      <p class="hint pad-x">${zh ? '計畫成立但價格還沒回到進場區 —— 掛限價單或設價格提醒。' : 'Plan is valid but price has not returned to the entry zone yet.'}</p>
+      ${table(waiting.slice(0, 40))}
+    </section>`;
+}
+
+
 /* ===== src/ui/alerts.js ===== */
 /**
  * 警報系統：價格穿越、進入 POI、結構事件。
@@ -5463,6 +5590,7 @@ const P = { stateLabel, renderBias, renderStructure, renderPois, renderLiquidity
 
 
 
+
 /* ------------------------------------------------------------------ 狀態 */
 
 const state = loadState();
@@ -5556,6 +5684,7 @@ function init() {
   bindTabs();
   bindChartTools();
   bindScanner();
+  bindMarket();
   bindBacktest();
   bindRisk();
   bindAlerts();
@@ -5878,6 +6007,7 @@ function bindTabs() {
     $$('#tabs button').forEach((b) => b.classList.toggle('active', b === btn));
     $$('.tab-panel').forEach((p) => p.classList.toggle('active', p.dataset.panel === btn.dataset.tab));
     if (btn.dataset.tab === 'learn') renderGloss();
+    if (btn.dataset.tab === 'scanner') loadMarket();
   };
 }
 
@@ -6214,6 +6344,57 @@ function playReplay() {
     }
     stepReplay(1);
   }, replay.speed);
+}
+
+/* ------------------------------------------------------------ 全市場掃描 */
+
+let marketData = null;
+
+async function loadMarket({ force = false } = {}) {
+  const host = $('#marketResult');
+  if (!host) return;
+  if (marketData && !force) return renderMarketPane();
+  host.innerHTML = `<p class="dim pad">${isZh() ? '載入掃描結果…' : 'Loading…'}</p>`;
+  try {
+    marketData = await fetchMarket();
+    renderMarketPane();
+  } catch (e) {
+    host.innerHTML = `<p class="dim pad">${isZh()
+      ? '還沒有掃描結果。伺服器每小時會掃描一次全市場，稍後再試。'
+      : 'No scan results yet — the server scans hourly.'}<br><span class="tiny">${escapeHtml(e.message)}</span></p>`;
+  }
+}
+
+function renderMarketPane() {
+  if (!marketData) return;
+  setHTML('#marketResult', renderMarket(marketData, state.lang, {
+    minScore: +$('#marketMinScore').value || 0,
+    dir: $('#marketDir').value,
+  }));
+  $('#marketResult').onclick = (e) => {
+    const row = e.target.closest('[data-symbol]');
+    if (!row) return;
+    const iv = row.dataset.interval;
+    if (iv && iv !== state.interval) {
+      state.interval = iv;
+      $$('#intervalSeg button').forEach((b) => b.classList.toggle('active', b.dataset.iv === iv));
+    }
+    selectSymbol(row.dataset.symbol);
+  };
+}
+
+function bindMarket() {
+  $('#scanModeSeg').onclick = (e) => {
+    const mode = e.target.dataset?.mode;
+    if (!mode) return;
+    $$('#scanModeSeg button').forEach((b) => b.classList.toggle('active', b.dataset.mode === mode));
+    $('#marketPane').hidden = mode !== 'market';
+    $('#localPane').hidden = mode !== 'local';
+    if (mode === 'market') loadMarket();
+  };
+  $('#marketRefresh').onclick = () => loadMarket({ force: true });
+  $('#marketMinScore').onchange = renderMarketPane;
+  $('#marketDir').onchange = renderMarketPane;
 }
 
 /* ---------------------------------------------------------------- 掃描器 */

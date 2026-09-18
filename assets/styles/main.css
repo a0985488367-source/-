@@ -207,6 +207,11 @@ sup { font-size: 8px; color: var(--accent); margin-left: 2px; }
 .seg button:hover { color: var(--text); background: var(--bg-elev); }
 .seg button.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .seg--sm button { padding: 4px 7px; font-size: 11px; }
+.seg--full { width: 100%; margin-bottom: 10px; }
+.seg--full button { flex: 1; padding: 8px; font-size: 12.5px; }
+
+.market-head { font-size: 11px; padding: 0 2px 8px; }
+.pad-x { padding-left: 10px; padding-right: 10px; }
 
 /* -------------------------------------------------------------- Chart tools */
 
