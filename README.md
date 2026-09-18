@@ -165,6 +165,57 @@
 掃描採兩階段：先用 1h 粗篩全部交易對，再對前 30 名補抓日線偏向精算，
 這樣 API 用量與執行時間都能壓在合理範圍。
 
+### ⚡ 即時進場提醒（Cloudflare Worker）
+
+「等待回測」的標的可能在任何時候碰到進場區，但 GitHub 的排程不保證準時
+（實測每 15 分鐘的設定可能變成 2–3 小時一次）。因此把工作拆成兩半：
+
+| 工作 | 在哪跑 | 頻率 | 為什麼 |
+|---|---|---|---|
+| 全市場 SMC 分析（重運算） | GitHub Actions | 每小時 | 結構不會 5 分鐘就變，算得慢沒關係 |
+| **價格到了沒（輕運算）** | **Cloudflare Worker** | **每 2 分鐘** | 只比對現價與已算好的進場區，CPU 幾乎不用 |
+
+Worker 只做一件事：讀最新的 `market.json`，比對現價，
+**價格一回到進場區就立刻推 Discord**，並記住已通知過的標的避免洗頻。
+如果價格已經穿過停損，或掃描結果太舊（> 4 小時），它會安靜不叫。
+
+#### 設定（一次就好）
+
+1. 註冊 [Cloudflare](https://dash.cloudflare.com)（免費方案就夠）
+2. 右上角 **My Profile → API Tokens → Create Token → Create Custom Token**
+   - 權限加兩條：**Account · Workers Scripts · Edit**、**Account · Workers KV Storage · Edit**
+   - 建立後複製 Token
+3. 回主控台首頁，右側複製 **Account ID**
+4. 到 GitHub Repo → **Settings → Secrets and variables → Actions**，新增兩個 secret：
+   - `CLOUDFLARE_API_TOKEN`
+   - `CLOUDFLARE_ACCOUNT_ID`
+5. 到 **Actions → 部署 Cloudflare Worker → Run workflow** 執行一次
+
+部署流程會自動建立 KV 命名空間、部署 Worker，並把既有的 Discord webhook
+同步過去 —— 不需要在 Cloudflare 那邊再貼一次。
+
+#### 確認有在運作
+
+Worker 部署後會有一個網址（在 Cloudflare 主控台 Workers 頁面可以看到）：
+
+```
+https://smc-signals.<你的子網域>.workers.dev/status   檢查設定與資料新鮮度
+https://smc-signals.<你的子網域>.workers.dev/run?dry=1 立刻試跑一次（不推播）
+```
+
+#### 調整
+
+`worker/wrangler.toml` 的 `[vars]`：
+
+| 變數 | 預設 | 意思 |
+|---|---|---|
+| `MIN_SCORE` | 65 | 只盯幾分以上的計畫 |
+| `NEAR_PCT` | 0.08 | 距離進場區多近算「到了」（%） |
+| `ALERT_TTL_SEC` | 21600 | 同一個進場區多久內不重複通知（秒） |
+| `MAX_MARKET_AGE_MIN` | 240 | 掃描結果超過多久就不再據以提醒（分） |
+
+改完推到 `main` 會自動重新部署。
+
 ### 每日晨報
 
 每天台灣時間 08:00 推一份總結：各幣種現價與偏向、關鍵時間價位（PDH/PDL/PWH/PWL）、
@@ -321,7 +372,8 @@ src/
   ui/        panels / scanner / alerts / glossary / dom
   i18n/      繁體中文 / English
 tests/       30 項單元測試（node --test）
-scripts/     零依賴靜態伺服器、單檔打包器、Discord 訊號推播
+scripts/     零依賴靜態伺服器、單檔打包器、Discord 訊號推播、全市場掃描
+worker/      Cloudflare Worker（每 2 分鐘的即時進場提醒）
 signals.config.json  訊號推播設定（監控幣種、門檻、通知類型、追蹤參數）
 data/                模擬盤帳本（由 Actions 自動維護）
 docs/        方法論與架構文件

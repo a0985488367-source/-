@@ -1,0 +1,30 @@
+# Cloudflare Worker 設定
+#
+# 部署方式（二選一）：
+#   A. GitHub Actions 自動部署 —— 在倉庫加入 CLOUDFLARE_API_TOKEN 與 CLOUDFLARE_ACCOUNT_ID 兩個 secret
+#   B. Cloudflare 主控台手動貼上 worker/index.js 的內容
+#
+# 兩種方式都需要在 Worker 上設定：
+#   Secret        DISCORD_WEBHOOK_URL
+#   KV binding    SMC_KV（用來記住已通知過的標的）
+
+name = "smc-signals"
+main = "index.js"
+compatibility_date = "2024-11-01"
+
+# 每 2 分鐘檢查一次價格是否進入進場區
+[triggers]
+crons = ["*/2 * * * *"]
+
+[vars]
+MARKET_URL = "https://raw.githubusercontent.com/a0985488367-source/-/main/data/market.json"
+MIN_SCORE = "65"
+MAX_MARKET_AGE_MIN = "240"
+ALERT_TTL_SEC = "21600"
+NEAR_PCT = "0.08"
+
+# KV 命名空間：部署前請先建立，並把 id 填在這裡
+# （wrangler kv namespace create SMC_KV，或在主控台 Storage → KV 建立）
+[[kv_namespaces]]
+binding = "SMC_KV"
+id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
