@@ -1,0 +1,83 @@
+# 部署 Cloudflare Worker（即時進場守門員）
+#
+# 需要在 Repo → Settings → Secrets and variables → Actions 加入兩個 secret：
+#   CLOUDFLARE_API_TOKEN   權限：Workers Scripts 編輯 + Workers KV Storage 編輯
+#   CLOUDFLARE_ACCOUNT_ID  Cloudflare 主控台右側的 Account ID
+#
+# Discord webhook 會沿用既有的 DISCORD_WEBHOOK_URL（或 SMC）secret，自動同步到 Worker，
+# 不必在 Cloudflare 那邊再設定一次。
+name: 部署 Cloudflare Worker
+
+on:
+  push:
+    branches: ['main']
+    paths: ['worker/**', '.github/workflows/deploy-worker.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-worker
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 檢查 Cloudflare 金鑰
+        id: check
+        env:
+          TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$TOKEN" ] || [ -z "$ACCOUNT" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::尚未設定 CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID，略過部署。"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 建立 KV 命名空間（若不存在）並部署
+        if: ${{ steps.check.outputs.ready == 'true' }}
+        working-directory: worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -e
+          find_id() {
+            npx --yes wrangler@3 kv namespace list 2>/dev/null \
+              | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);const hit=j.find(n=>String(n.title).includes("SMC_KV"));process.stdout.write(hit?hit.id:"")}catch{process.stdout.write("")}})'
+          }
+          ID="$(find_id)"
+          if [ -z "$ID" ]; then
+            echo "建立 KV 命名空間 SMC_KV…"
+            npx --yes wrangler@3 kv namespace create SMC_KV || true
+            ID="$(find_id)"
+          fi
+          if [ -z "$ID" ]; then
+            echo "::error::無法取得 KV 命名空間 ID，請確認 API Token 有 Workers KV Storage 的編輯權限"
+            exit 1
+          fi
+          echo "KV 命名空間 ID：$ID"
+          sed -i "s/REPLACE_WITH_YOUR_KV_NAMESPACE_ID/$ID/" wrangler.toml
+          npx --yes wrangler@3 deploy
+
+      - name: 同步 Discord webhook 到 Worker
+        if: ${{ steps.check.outputs.ready == 'true' }}
+        working-directory: worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL || secrets.SMC }}
+        run: |
+          if [ -z "$WEBHOOK" ]; then
+            echo "::warning::沒有 Discord webhook secret，Worker 將無法推播"
+            exit 0
+          fi
+          printf '%s' "$WEBHOOK" | npx --yes wrangler@3 secret put DISCORD_WEBHOOK_URL
+          echo "已同步 webhook 到 Worker"
