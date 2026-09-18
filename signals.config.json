@@ -1,9 +1,8 @@
 {
   "_說明": "Discord 訊號推播設定。改完推到 main 就會生效；webhook 網址請放在 GitHub Secrets 的 DISCORD_WEBHOOK_URL，不要寫在這裡。",
 
-  "symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT"],
-  "interval": "15m",
-  "htfInterval": "4h",
+  "symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT"],
+  "intervals": ["15m", "1h"],
   "candles": 400,
 
   "minScore": 68,

@@ -18,7 +18,7 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { PROVIDERS } from '../src/data/providers.js';
 import { analyze } from '../src/smc/engine.js';
-import { aggregateBias } from '../src/smc/mtf.js';
+import { aggregateBias, tfSuite } from '../src/smc/mtf.js';
 import { advanceTrade, computeStats, tradeFromSetup } from './lib/tracker.mjs';
 
 const ARGS = new Set(process.argv.slice(2));
@@ -62,10 +62,13 @@ const price = (v) => fmt(v, digitsFor(v));
 async function loadConfig() {
   const raw = await readFile(new URL('../signals.config.json', import.meta.url), 'utf8');
   const cfg = JSON.parse(raw);
+  // 支援多週期掃描；舊設定只寫 interval 時自動沿用
+  const intervals = cfg.intervals ?? [cfg.interval ?? '15m'];
   return {
     symbols: cfg.symbols ?? ['BTCUSDT'],
-    interval: cfg.interval ?? '15m',
-    htfInterval: cfg.htfInterval ?? '4h',
+    intervals,
+    interval: intervals[0],
+    htfOverride: cfg.htfInterval ?? null,
     candles: cfg.candles ?? 400,
     minScore: cfg.minScore ?? 68,
     minRR: cfg.minRR ?? 2,
@@ -80,6 +83,7 @@ async function loadConfig() {
     ...(opt('providers') ? { providers: opt('providers').split(',') } : {}),
     ...(opt('min-score') ? { minScore: Number(opt('min-score')) } : {}),
     ...(opt('symbols') ? { symbols: opt('symbols').split(',') } : {}),
+    ...(opt('intervals') ? { intervals: opt('intervals').split(','), interval: opt('intervals').split(',')[0] } : {}),
   };
 }
 
@@ -200,7 +204,7 @@ async function probe(cfg) {
     if (!provider) { log(`  ${id.padEnd(8)} ✗ 沒有這個資料源`); continue; }
     const t0 = Date.now();
     try {
-      const c = await provider.fetchKlines('BTCUSDT', cfg.interval, { limit: 5 });
+      const c = await provider.fetchKlines('BTCUSDT', cfg.intervals[0], { limit: 5 });
       log(`  ${id.padEnd(8)} ✓ ${c.length} 根 K 棒，最新收盤 ${price(c.at(-1).close)}（${Date.now() - t0} ms）`);
     } catch (e) {
       log(`  ${id.padEnd(8)} ✗ ${String(e?.message || e).slice(0, 120)}`);
@@ -217,7 +221,7 @@ function poiSignature(poi) {
   return `p${poi.bottom.toPrecision(8)}-${poi.top.toPrecision(8)}`;
 }
 
-function collectSignals({ symbol, interval, analysis, cfg, providerId, htf }) {
+function collectSignals({ symbol, interval, analysis, cfg, providerId, htf, isPrimary }) {
   const out = [];
   const a = analysis;
   const s = a.setup;
@@ -232,8 +236,8 @@ function collectSignals({ symbol, interval, analysis, cfg, providerId, htf }) {
     });
   }
 
-  // 2) 價格進入高分 POI（只推與當前偏向一致的區塊，否則每次盤整都會叫）
-  if (cfg.notify.poiTouch) {
+  // 2) 價格進入高分 POI（只在主要週期、且與當前偏向一致，否則多週期會洗頻）
+  if (cfg.notify.poiTouch && isPrimary) {
     const hit = a.pois.find(
       (p) =>
         a.price <= p.top &&
@@ -461,6 +465,27 @@ const KILLZONES_TPE = [
   ['紐約午盤殺區', '01:30 – 04:00（隔日）'],
 ];
 
+/** 過去 24 小時的掃描摘要：達標數與最接近的幾次，讓「今天沒訊號」也有交代 */
+function summarize24h(journal, cfg) {
+  const bests = journal.bests ?? [];
+  if (!bests.length) return '尚無掃描紀錄';
+  const qualified = bests.filter((b) => b.score >= cfg.minScore && b.rr >= cfg.minRR);
+  // 每個幣種／週期取最高分
+  const top = new Map();
+  for (const b of bests) {
+    const k = `${b.symbol}|${b.interval}`;
+    if (!top.has(k) || b.score > top.get(k).score) top.set(k, b);
+  }
+  const lines = [...top.values()]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5)
+    .map((b) => {
+      const ok = b.score >= cfg.minScore && b.rr >= cfg.minRR;
+      return `${ok ? '✅' : '▫️'} ${b.symbol.replace(/USDT$/, '')} ${b.interval}　${b.grade}/${b.score} 分　${b.dir === 'long' ? '多' : '空'}　${b.rr.toFixed(1)}R`;
+    });
+  return `掃描 ${bests.length} 次 · 達標 ${qualified.length} 次（門檻 ${cfg.minScore} 分 / ${cfg.minRR}R）\n**各幣種最高分**\n${lines.join('\n')}`;
+}
+
 function buildBriefEmbed(snapshots, journal, cfg) {
   const st = journal.stats ?? computeStats(journal.closed);
   const rows = snapshots.map(({ symbol, analysis: a }) => {
@@ -497,6 +522,7 @@ function buildBriefEmbed(snapshots, journal, cfg) {
       { name: '關鍵時間價位', value: levels.join('\n') || '—' },
       { name: '流動性目標（最近的未觸及）', value: draws.join('\n') || '—' },
       { name: '進行中的模擬單', value: open },
+      { name: '過去 24 小時掃描摘要', value: summarize24h(journal, cfg) },
       {
         name: '模擬盤累計成效',
         value: st.count
@@ -522,7 +548,7 @@ async function main() {
       embeds: [{
         title: '✅ SMC 終端連線測試',
         color: COLORS.info,
-        description: `Webhook 設定成功，之後有訊號就會推到這個頻道。\n\n**監控中**：${cfg.symbols.join('、')}\n**週期**：${cfg.interval}（高週期參考 ${cfg.htfInterval}）\n**門檻**：評分 ≥ ${cfg.minScore}、風報比 ≥ ${cfg.minRR}`,
+        description: `Webhook 設定成功，之後有訊號就會推到這個頻道。\n\n**監控中**：${cfg.symbols.join('、')}\n**週期**：${cfg.intervals.join('、')}\n**門檻**：評分 ≥ ${cfg.minScore}、風報比 ≥ ${cfg.minRR}`,
         url: cfg.siteUrl || undefined,
         footer: { text: '僅供研究，非投資建議' },
         timestamp: new Date().toISOString(),
@@ -536,46 +562,61 @@ async function main() {
   const found = [];
   const outcomes = [];
   const snapshots = [];
+  const bests = [];
 
   for (const symbol of cfg.symbols) {
-    try {
-      const { candles, provider } = await fetchCandles(symbol, cfg.interval, cfg.candles, cfg.providers);
-      // 丟掉最後一根（尚未收盤），只用已確定的 K 棒判斷
-      const closed = candles.slice(0, -1);
-
-      // ── 推進這個幣種的模擬單 ──
-      if (cfg.tracking.enabled) {
-        for (const trade of journal.open) {
-          if (trade.symbol !== symbol || trade.interval !== cfg.interval) continue;
-          const updated = advanceTrade(trade, closed, cfg.tracking);
-          Object.assign(trade, updated);
-          for (const ev of updated.events || []) outcomes.push({ trade, event: ev });
-        }
-      }
-
-      let htf = null;
+    for (const interval of cfg.intervals) {
+      const isPrimary = interval === cfg.intervals[0];
       try {
-        const h = await fetchCandles(symbol, cfg.htfInterval, 300, [provider, ...cfg.providers]);
-        const ha = analyze(h.candles.slice(0, -1));
-        if (!ha.empty) htf = aggregateBias([{ interval: cfg.htfInterval, bias: ha.bias }]);
+        const { candles, provider } = await fetchCandles(symbol, interval, cfg.candles, cfg.providers);
+        // 丟掉最後一根（尚未收盤），只用已確定的 K 棒判斷
+        const closed = candles.slice(0, -1);
+
+        // ── 推進這個幣種／週期的模擬單 ──
+        if (cfg.tracking.enabled) {
+          for (const trade of journal.open) {
+            if (trade.symbol !== symbol || trade.interval !== interval) continue;
+            const updated = advanceTrade(trade, closed, cfg.tracking);
+            Object.assign(trade, updated);
+            for (const ev of updated.events || []) outcomes.push({ trade, event: ev });
+          }
+        }
+
+        // 高週期偏向：依進場週期自動對應（15m→4h、1h→1d…）
+        const htfInterval = cfg.htfOverride && isPrimary ? cfg.htfOverride : tfSuite(interval).htf;
+        let htf = null;
+        try {
+          const h = await fetchCandles(symbol, htfInterval, 300, [provider, ...cfg.providers]);
+          const ha = analyze(h.candles.slice(0, -1));
+          if (!ha.empty) htf = aggregateBias([{ interval: htfInterval, bias: ha.bias }]);
+        } catch (e) {
+          log(`  ${symbol} ${interval} 高週期(${htfInterval})取得失敗：${e.message}`);
+        }
+
+        const a = analyze(closed, { htfBias: htf });
+        if (a.empty) { log(`  ${symbol} ${interval} K 棒不足，略過`); continue; }
+        if (isPrimary) snapshots.push({ symbol, analysis: a, provider, htf });
+
+        const signals = collectSignals({ symbol, interval, analysis: a, cfg, providerId: provider, htf, isPrimary });
+        const fresh = signals.filter((s) => !state[s.id]);
+
+        // 記錄這次掃到的最佳計畫分數（即使沒達標），晨報用來說明「為什麼沒訊號」
+        if (a.setup && !a.setup.none) {
+          bests.push({
+            time: a.candles.at(-1).time, symbol, interval,
+            score: a.setup.score, grade: a.setup.grade, dir: a.setup.dir, rr: a.setup.rrFinal,
+          });
+        }
+
+        log(
+          `  ${symbol.padEnd(9)} ${interval.padEnd(4)} 收盤 ${price(a.price).padStart(12)} · 偏向 ${String(a.bias.score).padStart(4)} · ` +
+          `計畫 ${a.setup && !a.setup.none ? `${a.setup.grade}/${a.setup.score}` : '無'} · ` +
+          `訊號 ${signals.length}（新 ${fresh.length}）`,
+        );
+        found.push(...fresh);
       } catch (e) {
-        log(`  ${symbol} 高週期資料取得失敗（略過）：${e.message}`);
+        log(`  ${symbol} ${interval} 失敗：${e.message}`);
       }
-
-      const a = analyze(closed, { htfBias: htf });
-      if (a.empty) { log(`  ${symbol} K 棒不足，略過`); continue; }
-      snapshots.push({ symbol, analysis: a, provider, htf });
-
-      const signals = collectSignals({ symbol, interval: cfg.interval, analysis: a, cfg, providerId: provider, htf });
-      const fresh = signals.filter((s) => !state[s.id]);
-      log(
-        `  ${symbol.padEnd(9)} 收盤 ${price(a.price).padStart(12)} · 偏向 ${String(a.bias.score).padStart(4)} · ` +
-        `計畫 ${a.setup && !a.setup.none ? `${a.setup.grade}/${a.setup.score}` : '無'} · ` +
-        `訊號 ${signals.length}（新 ${fresh.length}）`,
-      );
-      found.push(...fresh);
-    } catch (e) {
-      log(`  ${symbol} 失敗：${e.message}`);
     }
   }
 
@@ -588,6 +629,12 @@ async function main() {
   journal.open = stillOpen;
   const stats = computeStats(journal.closed);
   journal.stats = stats;
+
+  // 保留最近 24 小時的「最高分計畫」紀錄，供晨報說明近失情況
+  const DAY = 24 * 60 * 60 * 1000;
+  journal.bests = [...(journal.bests ?? []), ...bests]
+    .filter((b) => Date.now() - b.time < DAY)
+    .slice(-400);
 
   if (BRIEF) {
     if (!snapshots.length) return log('沒有可用資料，晨報略過。');

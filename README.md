@@ -158,14 +158,15 @@
 
 ```jsonc
 {
-  "symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT"],  // 要監控的幣種
-  "interval": "15m",        // 主要分析週期
-  "htfInterval": "4h",      // 高週期偏向參考
-  "minScore": 68,           // 評分門檻（越高訊號越少、品質越嚴）
-  "minRR": 2,               // 最低風報比
+  "symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT"],
+  "intervals": ["15m", "1h"],   // 多週期掃描，高週期偏向會自動對應（15m→4h、1h→1d）
+  "minScore": 68,               // 評分門檻（越高訊號越少、品質越嚴）
+  "minRR": 2,                   // 最低風報比
   "notify": { "plan": true, "poiTouch": true, "choch": false, "sweep": false }
 }
 ```
+
+「進入 POI」只在**第一個週期**通知，避免多週期洗頻；交易計畫則每個週期都會掃。
 
 覺得太吵就把 `minScore` 調到 75、或把 `poiTouch` 關掉；覺得太安靜就調到 60。
 
@@ -185,7 +186,9 @@ SMC_DATA_DIR=/tmp/smc SMC_ALLOW_ANY_WEBHOOK=1 \
 ### 注意事項
 
 - 只分析**已收盤**的 K 棒，同一個訊號不會重複通知（狀態存在 Actions 快取）
-- GitHub 的排程可能延遲幾分鐘，這是平台特性，不是故障
+- **GitHub 的排程不保證準時**：設定每 15 分鐘，實測可能變成 2–3 小時一次（免費方案的已知行為）。
+  因此掃描範圍刻意做寬（多幣種 × 多週期），讓每次掃描都能覆蓋更多機會；
+  若要穩定的高頻掃描，需要改用 Cloudflare Workers 之類的專用排程服務
 - **倉庫連續 60 天沒有任何活動，GitHub 會自動停用排程**；到時候進 Actions 頁面按一下重新啟用即可
 - 這是**研究與提醒工具，不是自動交易機器人**，不會也不能幫你下單
 - 實測（GitHub 美國機房）：Binance ✓、OKX ✓、Bybit ✗ 403 —— 已設定為自動備援，不影響運作
