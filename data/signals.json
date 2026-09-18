@@ -28,9 +28,9 @@
       "status": "active",
       "filledTime": 1789673400000,
       "openTime": 1789673400000,
-      "lastCheckedTime": 1789683300000,
-      "barsSinceOpen": 11,
-      "barsSinceFill": 11,
+      "lastCheckedTime": 1789691400000,
+      "barsSinceOpen": 20,
+      "barsSinceFill": 20,
       "hitTargets": [],
       "maxFavorableR": 0.5157125714747987,
       "maxAdverseR": -0.1942120623638524,
@@ -38,7 +38,7 @@
     }
   ],
   "closed": [],
-  "updatedAt": "2026-09-17T22:37:35.708Z",
+  "updatedAt": "2026-09-18T00:47:04.557Z",
   "stats": {
     "count": 0,
     "expired": 0,
