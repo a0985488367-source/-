@@ -28,17 +28,17 @@
       "status": "active",
       "filledTime": 1789673400000,
       "openTime": 1789673400000,
-      "lastCheckedTime": 1789691400000,
-      "barsSinceOpen": 20,
-      "barsSinceFill": 20,
+      "lastCheckedTime": 1789696800000,
+      "barsSinceOpen": 26,
+      "barsSinceFill": 26,
       "hitTargets": [],
       "maxFavorableR": 0.5157125714747987,
-      "maxAdverseR": -0.1942120623638524,
+      "maxAdverseR": -0.32148550045080226,
       "events": []
     }
   ],
   "closed": [],
-  "updatedAt": "2026-09-18T00:47:04.557Z",
+  "updatedAt": "2026-09-18T02:26:35.323Z",
   "stats": {
     "count": 0,
     "expired": 0,
