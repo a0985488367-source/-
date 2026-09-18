@@ -12,6 +12,11 @@ import sys, importlib.util, contextlib, io
 import numpy as np, pandas as pd
 
 STRICT = "--strict-entry-bar" in sys.argv
+# 保本停損墊高幅度（R）。0 = 原始凍結版（剛好進場價）；EA 預設 0.10。
+BE_OFF = 0.0
+for _a in sys.argv:
+    if _a.startswith("--be-offset="):
+        BE_OFF = float(_a.split("=", 1)[1])
 
 spec = importlib.util.spec_from_file_location("ev", "./exit_variants.py")
 ev = importlib.util.module_from_spec(spec)
@@ -73,7 +78,7 @@ def research_trades(start, end):
                 if ll <= target: fill = target; break
             exc = side * ((cl[j] + (sp[j] if side == -1 else 0)) - entry) / dist
             peak = max(peak, exc)
-            if peak >= BE_R: pending = entry
+            if peak >= BE_R: pending = entry + side * BE_OFF * dist
         if fill is None:
             fill = (cl[j] + (sp[j] if side == -1 else 0)) - side * SLIP
         days = max(0, (times[j].normalize() - times[i].normalize()).days)
@@ -140,7 +145,7 @@ def ea_trades(start, end):
                 mark = cl[k] + (sp[k] if side == -1 else 0)
                 pos["peak"] = max(pos["peak"], side * (mark - entry) / dist)
                 if not pos["be"] and pos["peak"] >= BE_R:
-                    pos["stop"] = entry; pos["be"] = True
+                    pos["stop"] = entry + side * BE_OFF * dist; pos["be"] = True
 
             # 2 真 48 曆時小時逾時 → 本根開盤出場；否則 3 交給券商的 SL/TP
             if j > pos["i"] and times[j] >= pos["deadline"]:
@@ -174,16 +179,20 @@ def ea_trades(start, end):
 periods = {"2024": ("2024-01-01", "2025-01-01"), "2025": ("2025-01-01", "2026-01-01"),
            "2026H1": ("2026-01-01", "2026-06-19"), "FINAL90": ("2026-06-19", "2026-09-17")}
 
-print(f"進場模式：{'嚴格（只在 M15 收盤時點的 M5 進場）' if STRICT else '寬鬆（新 M15 後的第一根 M5 就進）'}\n")
-print(f"{'區段':<10}{'研究':>6}{'EA':>6}{'逐筆相同':>10}{'研究sumR':>11}{'EA sumR':>11}")
+print(f"進場模式：{'嚴格（只在 M15 收盤時點的 M5 進場）' if STRICT else '寬鬆（新 M15 後的第一根 M5 就進）'}"
+      f"　保本墊高：{BE_OFF:.2f}R\n")
+print(f"{'區段':<10}{'研究':>6}{'EA':>6}{'逐筆相同':>10}{'研究sumR':>11}{'EA sumR':>11}{'勝率':>8}{'平均R':>9}")
 tot_r = tot_e = tot_same = 0
 for k, (a, b) in periods.items():
     R, E = research_trades(a, b), ea_trades(a, b)
     same = sum(1 for x, y in zip(R, E)
                if x[0] == y[0] and x[1] == y[1] and x[2] == y[2] and abs(x[3] - y[3]) < 1e-9)
     tot_r += len(R); tot_e += len(E); tot_same += same
+    er = [t[3] for t in E]
+    wr = (sum(1 for x in er if x > 0) / len(er) * 100) if er else 0.0
+    mr = (sum(er) / len(er)) if er else 0.0
     print(f"{k:<10}{len(R):>6}{len(E):>6}{same:>10}"
-          f"{sum(t[3] for t in R):>11.4f}{sum(t[3] for t in E):>11.4f}")
+          f"{sum(t[3] for t in R):>11.4f}{sum(er):>11.4f}{wr:>7.1f}%{mr:>+9.4f}")
 print(f"\n{'合計':<10}{tot_r:>6}{tot_e:>6}{tot_same:>10}")
 print("\n" + ("EA 事件迴圈與研究回測逐筆一致 ✓" if tot_r == tot_e == tot_same
               else f"*** 有 {max(tot_r, tot_e) - tot_same} 筆落差 ***"))

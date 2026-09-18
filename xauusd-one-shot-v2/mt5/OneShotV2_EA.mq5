@@ -15,6 +15,8 @@
 //|  Exit                                                            |
 //|    初始停損 = 2 x M15 ATR ; TP = 5R                                |
 //|    M5 收盤確認浮盈 >= +1.5R 後，「下一根」才把停損移到進場價         |
+//|    + InpBreakevenOffsetR（預設 0.10R）。移到剛好進場價會讓這些單    |
+//|    子以 -0.01R 出場而被計為虧損；設 0 即還原為原始凍結版。          |
 //|    真 48 個「曆時」小時逾時（不是 576 根 M5），到期後第一個可取得    |
 //|    報價出場                                                       |
 //|                                                                  |
@@ -56,6 +58,7 @@ input group             "=== 凍結 Exit 參數 ==="
 input double            InpStopATRMult         = 2.00;      // 初始停損 = N x M15 ATR
 input double            InpTakeProfitR         = 5.00;      // 目標（R）
 input double            InpBreakevenR          = 1.50;      // 觸發保本的浮盈（R，收盤確認）
+input double            InpBreakevenOffsetR    = 0.10;      // 保本停損墊高幅度（R）；0 = 剛好進場價
 input int               InpMaxHoldHours        = 48;        // 最長持有（真曆時小時）
 
 //--- 風險
@@ -656,19 +659,23 @@ void ManagePosition(const datetime bar_time)
 
       if(!g_be_done && g_peak_r>=InpBreakevenR && PositionSelectByTicket(ticket))
       {
+         //--- 停損移到「進場價 + 墊高幅度」。移到剛好進場價會讓這些單子以
+         //--- -0.01R（付掉成本）出場而被計為虧損；墊高一點才真正打平。
+         double be_price=NP(g_entry+g_side*InpBreakevenOffsetR*g_dist);
          double tp=PositionGetDouble(POSITION_TP);
-         if(g_trade.PositionModify(ticket,NP(g_entry),tp))
+         if(g_trade.PositionModify(ticket,be_price,tp))
          {
             g_be_done=true; g_be_time=bar_time;
             OS_LogRow row; OS_ClearLog(row);
             row.event="BE"; row.signal_utc=g_signal_time; row.side=g_side;
-            row.entry_bar=g_entry_bar; row.entry_price=g_entry; row.stop_price=NP(g_entry);
+            row.entry_bar=g_entry_bar; row.entry_price=g_entry; row.stop_price=be_price;
             row.tp_price=tp; row.stop_dist=g_dist; row.risk_money=g_risk_money;
             row.volume=g_volume; row.be_time=g_be_time; row.deadline_utc=g_deadline;
             row.equity=AccountInfoDouble(ACCOUNT_EQUITY);
             WriteLog(row);
-            PrintFormat("BE: stop moved to entry %s (peak %.2fR)",
-                        DoubleToString(g_entry,g_digits),g_peak_r);
+            PrintFormat("BE: stop moved to %s (entry %s + %.2fR, peak %.2fR)",
+                        DoubleToString(be_price,g_digits),DoubleToString(g_entry,g_digits),
+                        InpBreakevenOffsetR,g_peak_r);
          }
          else
             PrintFormat("WARN: breakeven modify failed err=%d, will retry next bar",
@@ -706,8 +713,8 @@ void AdoptPosition(const ulong ticket)
 
    double sl=PositionGetDouble(POSITION_SL);
    double tp=PositionGetDouble(POSITION_TP);
-   //--- 停損已在進場價 → 視為保本已觸發；否則用 |進場 - 停損| 回推 1R
-   if(sl>0.0 && MathAbs(sl-g_entry)<=g_point) { g_be_done=true; g_be_time=open_time; }
+   //--- 停損已在進場價「之上（多）/之下（空）」→ 視為保本已觸發
+   if(sl>0.0 && g_side*(sl-g_entry)>=-g_point) { g_be_done=true; g_be_time=open_time; }
    if(!g_be_done && sl>0.0)      g_dist=MathAbs(g_entry-sl);
    else if(tp>0.0)               g_dist=MathAbs(tp-g_entry)/InpTakeProfitR;
    g_risk_money=0.0;             // 無法可靠回推，R(money) 於日誌留 0
@@ -902,6 +909,8 @@ int OnInit()
 
    if(InpHourFromUTC<0 || InpHourToUTC>23 || InpHourFromUTC>InpHourToUTC)
    { Print("FATAL: invalid UTC session window"); return INIT_PARAMETERS_INCORRECT; }
+   if(InpBreakevenOffsetR<0.0 || InpBreakevenOffsetR>=InpBreakevenR)
+   { Print("FATAL: breakeven offset must be >= 0 and < breakeven trigger"); return INIT_PARAMETERS_INCORRECT; }
    if(InpStopATRMult<=0.0 || InpTakeProfitR<=0.0 || InpMaxHoldHours<=0)
    { Print("FATAL: invalid exit parameters"); return INIT_PARAMETERS_INCORRECT; }
    if(InpRiskPct<=0.0 || InpRiskPct>100.0)
@@ -942,8 +951,8 @@ int OnInit()
    PrintFormat("Entry(locked): H4|%.2f H1|%.2f pos32 %.2f/%.2f body %.2f atrRel %.2f-%.2f UTC %02d-%02d",
                InpH4MacroMin,InpH1TrendMin,InpPos32Long,InpPos32Short,InpBodyMin,
                InpAtrRelLo,InpAtrRelHi,InpHourFromUTC,InpHourToUTC);
-   PrintFormat("Exit(locked): stop=%.2fxATR tp=%.1fR be=%.1fR hold=%dh(calendar)",
-               InpStopATRMult,InpTakeProfitR,InpBreakevenR,InpMaxHoldHours);
+   PrintFormat("Exit: stop=%.2fxATR tp=%.1fR be=%.1fR(+%.2fR) hold=%dh(calendar)",
+               InpStopATRMult,InpTakeProfitR,InpBreakevenR,InpBreakevenOffsetR,InpMaxHoldHours);
    PrintFormat("Risk: %.2f%% per trade, ratchet=%s, maxMarginFraction=%.2f",
                InpRiskPct,(InpUseRatchet?"ON":"OFF"),InpMaxMarginFraction);
    Print("NOTE: external true Bid/Ask holdout NOT completed — run Strategy Tester / Demo only.");
