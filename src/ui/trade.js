@@ -10,7 +10,7 @@
  */
 
 import { $, setHTML, toast } from './dom.js';
-import { createClient, explainError, planToOrder, roundTick } from '../exchange/bybit.js';
+import { createClient, explainError, planToOrder, roundTick, MODE_LABELS, isRealMoney } from '../exchange/bybit.js';
 
 const KEY_STORE = 'smc-terminal:bybit';
 
@@ -20,8 +20,8 @@ export function loadKeys() {
   try {
     const raw = localStorage.getItem(KEY_STORE);
     const v = raw ? JSON.parse(raw) : {};
-    return { mode: v.mode ?? 'testnet', testnet: v.testnet ?? {}, live: v.live ?? {} };
-  } catch { return { mode: 'testnet', testnet: {}, live: {} }; }
+    return { mode: v.mode ?? 'demo', demo: v.demo ?? {}, testnet: v.testnet ?? {}, live: v.live ?? {} };
+  } catch { return { mode: 'demo', demo: {}, testnet: {}, live: {} }; }
 }
 
 export function saveKeys(v) {
@@ -33,6 +33,9 @@ export function clearKeys(mode) {
   v[mode] = {};
   saveKeys(v);
 }
+
+/** 顯示目前實際會連到哪個網址 —— 環境選錯是這一頁最常見的問題 */
+const escapeHost = (mode) => ({ demo: 'api-demo.bybit.com', testnet: 'api-testnet.bybit.com', live: 'api.bybit.com' }[mode] ?? '—');
 
 const money = (v, d = 2) => (Number.isFinite(v) ? v.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }) : '—');
 
@@ -48,11 +51,11 @@ export function createTradePanel(deps) {
 
   const isZh = () => deps.lang() === 'zh';
   const cur = () => keys[keys.mode] ?? {};
-  const isLive = () => keys.mode === 'live';
+  const isLive = () => isRealMoney(keys.mode);
 
   function build() {
     if (!client && cur().apiKey && cur().apiSecret) {
-      client = createClient({ apiKey: cur().apiKey, apiSecret: cur().apiSecret, testnet: !isLive() });
+      client = createClient({ apiKey: cur().apiKey, apiSecret: cur().apiSecret, mode: keys.mode });
     }
     return client;
   }
@@ -65,13 +68,14 @@ export function createTradePanel(deps) {
         <header class="card__head"><h3>${isZh() ? '帳戶' : 'Account'}</h3>
           <span class="pill ${isLive() ? 'pill--down' : 'pill--up'}">${isLive() ? (isZh() ? '實盤 · 真錢' : 'LIVE · real money') : (isZh() ? '模擬盤' : 'Testnet')}</span>
         </header>
-        <div class="seg" id="tradeMode">
-          <button data-mode="testnet" class="${!isLive() ? 'active' : ''}">${isZh() ? '模擬盤' : 'Testnet'}</button>
-          <button data-mode="live" class="${isLive() ? 'active' : ''}">${isZh() ? '實盤' : 'Live'}</button>
+        <div class="seg seg--full" id="tradeMode">
+          ${['demo', 'testnet', 'live'].map((m) => `<button data-mode="${m}" class="${keys.mode === m ? 'active' : ''}">${isZh() ? MODE_LABELS[m].zh : MODE_LABELS[m].en}</button>`).join('')}
         </div>
+        <p class="muted small">${isZh() ? MODE_LABELS[keys.mode].hint.zh : MODE_LABELS[keys.mode].hint.en}
+          · <span class="mono tiny">${escapeHost(keys.mode)}</span></p>
         <p class="muted small">${isZh()
-          ? '金鑰只會存在這支手機／這個瀏覽器裡，不會上傳到任何地方。申請金鑰時請<b>只勾 Unified Trading — Trade</b>，<b>絕對不要勾提領（Withdraw）</b>。'
-          : 'Keys are stored only in this browser. Grant Trade permission only — never Withdraw.'}</p>
+          ? '⚠️ <b>模擬交易</b>與<b>測試網</b>是 Bybit 兩套獨立系統，金鑰不能互通 —— 選錯會出現「API Key 無效」。<br>金鑰只會存在這支手機／這個瀏覽器裡，不會上傳到任何地方。申請時請<b>只勾 Unified Trading — Trade</b>，<b>絕對不要勾提領（Withdraw）</b>。'
+          : 'Demo and Testnet are separate systems — keys are not interchangeable. Keys stay in this browser. Grant Trade only, never Withdraw.'}</p>
         <div class="form-row"><label>API Key</label><input id="bbKey" class="input" type="password" autocomplete="off" value="${k.apiKey ?? ''}" /></div>
         <div class="form-row"><label>API Secret</label><input id="bbSecret" class="input" type="password" autocomplete="off" value="${k.apiSecret ?? ''}" /></div>
         <div class="btn-row">
@@ -101,7 +105,7 @@ export function createTradePanel(deps) {
     $('#tradeMode')?.querySelectorAll('button').forEach((b) => {
       b.onclick = () => {
         const next = b.dataset.mode;
-        if (next === 'live' && !confirm(isZh()
+        if (isRealMoney(next) && !confirm(isZh()
           ? '切換到實盤後，送出的每一張單都是真錢。確定要切換嗎？'
           : 'Live mode places real orders. Continue?')) return;
         keys.mode = next;
@@ -139,7 +143,10 @@ export function createTradePanel(deps) {
         renderTicket();
       } catch (e) {
         const msg = explainError(e);
-        $('#bbStatus').innerHTML = `<span class="pill pill--down">${isZh() ? '連線失敗' : 'Failed'}</span> ${isZh() ? msg.zh : msg.en}`;
+        const code = Number.isFinite(e?.code) && e.code > 0 ? ` <span class="mono tiny dim">[retCode ${e.code}]</span>` : '';
+        $('#bbStatus').innerHTML = `<span class="pill pill--down">${isZh() ? '連線失敗' : 'Failed'}</span>${code} ` +
+          `${isZh() ? msg.zh : msg.en}` +
+          `<br><span class="tiny dim">${isZh() ? '目前連線的網址' : 'Endpoint'}：${escapeHost(keys.mode)}</span>`;
       }
     };
 

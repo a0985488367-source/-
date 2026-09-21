@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { roundStep, roundTick, planToOrder, explainError, BybitError } from '../src/exchange/bybit.js';
+import { roundStep, roundTick, planToOrder, explainError, BybitError, createClient, isRealMoney } from '../src/exchange/bybit.js';
 
 test('數量一律無條件捨去到步進值（寧可少買也不要因為超額被退單）', () => {
   assert.equal(roundStep(1.23456, 0.001), 1.234);
@@ -78,4 +78,34 @@ test('保證金與名目價值依槓桿計算', () => {
   assert.equal(r.qty, 25);
   assert.equal(r.notional, 2500);
   assert.equal(r.margin, 250);
+});
+
+/* ------------------------------------------- Bybit 的三套獨立環境 */
+
+test('三個環境各自對應正確的網址，金鑰不會被送錯地方', () => {
+  assert.equal(createClient({ apiKey: 'k', apiSecret: 's', mode: 'demo' }).host, 'https://api-demo.bybit.com');
+  assert.equal(createClient({ apiKey: 'k', apiSecret: 's', mode: 'testnet' }).host, 'https://api-testnet.bybit.com');
+  assert.equal(createClient({ apiKey: 'k', apiSecret: 's', mode: 'live' }).host, 'https://api.bybit.com');
+});
+
+test('只有 live 算真錢，模擬交易與測試網都不是', () => {
+  assert.equal(isRealMoney('live'), true);
+  assert.equal(isRealMoney('demo'), false);
+  assert.equal(isRealMoney('testnet'), false);
+});
+
+test('10003 的說明要指出「環境選錯」這個最常見的原因', () => {
+  const msg = explainError(new BybitError(10003, 'API key is invalid')).zh;
+  assert.match(msg, /模擬交易/);
+  assert.match(msg, /測試網/);
+  assert.match(msg, /不能互通/);
+});
+
+test('未知的環境名稱退回模擬交易，不會誤連到實盤', () => {
+  assert.equal(createClient({ apiKey: 'k', apiSecret: 's', mode: 'nonsense' }).host, 'https://api-demo.bybit.com');
+});
+
+test('舊的 testnet 布林參數仍然相容', () => {
+  assert.equal(createClient({ apiKey: 'k', apiSecret: 's', mode: null, testnet: false }).host, 'https://api.bybit.com');
+  assert.equal(createClient({ apiKey: 'k', apiSecret: 's', mode: null, testnet: true }).host, 'https://api-testnet.bybit.com');
 });
