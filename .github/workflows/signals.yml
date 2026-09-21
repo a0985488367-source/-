@@ -118,15 +118,3 @@ jobs:
             sleep 5
           done
           echo "::warning::帳本推送失敗，下次執行會再試"
-
-  # ── 暫時性：驗證衍生品 API 端點（沙盒連不到交易所，只有 runner 連得到）──
-  probe-derivatives:
-    if: ${{ inputs.mode == 'probe' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - run: node scripts/probe-derivatives.mjs
