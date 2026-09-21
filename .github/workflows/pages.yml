@@ -7,7 +7,7 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: ['main', 'claude/smc-crypto-trading-app-6p37v9']
+    branches: ['main']
     paths-ignore: ['data/**']
   workflow_dispatch:
 
@@ -32,6 +32,9 @@ jobs:
 
   deploy:
     needs: test
+    # Pages 只允許從預設分支部署，從其他分支跑會被環境保護規則擋下來而失敗。
+    # 加這道保險，之後就算有人把分支加回上面的 branches 也只會跑測試、不會變紅。
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
