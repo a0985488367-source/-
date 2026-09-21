@@ -262,16 +262,20 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ env.CF_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ env.CF_ACCOUNT }}
+          # Global API Key 是完全不同的驗證機制（等同帳號本人登入，沒有像
+          # Scoped Token 那樣的權限範圍）。實測發現連經典上傳 API 都被 Scoped
+          # Token 拒絕、而且沒有任何錯誤代碼，判斷問題出在這把 Token 的範圍
+          # 本身，不是端點選錯。兩個都有設定時優先用 Global Key 試這一步。
+          CF_EMAIL: ${{ secrets.CF_EMAIL }}
+          CF_GLOBAL_KEY: ${{ secrets.CF_GLOBAL_API_KEY }}
         run: |
-          # wrangler 3 預設會先用「版本化部署」流程（先 PUT ?excludeScript=true
-          # 建版本，再另外呼叫 deployments 切換流量）。這一步在這個帳戶上被
-          # Cloudflare 拒絕（403，沒有錯誤代碼），但帳戶上其實已經有其他 Worker
-          # 正常運作、Token 權限也都確認沒問題——判斷是這個帳戶的 API Token
-          # 還沒有這個較新流程的存取權，屬於 Cloudflare 那邊的功能開通問題。
-          #
-          # 改成直接呼叫「經典」單次上傳 API，這是 API Token 從很早期就支援、
-          # 一直沒變過的端點，跳過版本化部署那一整條路徑。
           set -e
+          if [ -n "$CF_EMAIL" ] && [ -n "$CF_GLOBAL_KEY" ]; then
+            echo "ℹ️ 有設定 Global API Key，這一步改用它（Scoped Token 的範圍似乎擋住了寫入 Workers 指令碼）"
+            AUTH_HEADERS=(-H "X-Auth-Email: $CF_EMAIL" -H "X-Auth-Key: $CF_GLOBAL_KEY")
+          else
+            AUTH_HEADERS=(-H "Authorization: Bearer $CLOUDFLARE_API_TOKEN")
+          fi
           # vars 直接從 wrangler.toml 讀，不在這裡另外複製一份數字，
           # 這樣以後改 wrangler.toml 就不必記得回來同步這支腳本。
           METADATA="$(node -e '
@@ -296,7 +300,7 @@ jobs:
           ' "$KV_ID")"
 
           RESP="$(curl -sS -X PUT \
-            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "${AUTH_HEADERS[@]}" \
             -F "metadata=$METADATA;type=application/json" \
             -F "index.js=@index.js;type=application/javascript+module" \
             "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/smc-signals")"
@@ -310,7 +314,7 @@ jobs:
 
           # 排程觸發器（每 2 分鐘）也是獨立的經典端點，跟上面同一套 API。
           CRON_RESP="$(curl -sS -X PUT \
-            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json" \
+            "${AUTH_HEADERS[@]}" -H "Content-Type: application/json" \
             -d '[{"cron":"*/2 * * * *"}]' \
             "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/smc-signals/schedules")"
           if printf '%s' "$CRON_RESP" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.exit(JSON.parse(s||"{}").success?0:1))' 2>/dev/null; then
