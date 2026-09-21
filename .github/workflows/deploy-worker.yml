@@ -31,22 +31,60 @@ jobs:
       - name: 檢查 Cloudflare 金鑰
         id: check
         env:
-          TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # 兩個都讀：secret 讀不到時退回 variable（很多人會誤填在 Variables 分頁）
+          TOKEN_SECRET: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          TOKEN_VAR: ${{ vars.CLOUDFLARE_API_TOKEN }}
+          ACCOUNT_SECRET: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ACCOUNT_VAR: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          if [ -z "$TOKEN" ] || [ -z "$ACCOUNT" ]; then
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::尚未設定 CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID，略過部署。"
-          else
+          # 這一步只會印出「有沒有設定」「長度幾個字」，永遠不會印出金鑰內容。
+          trim() { printf '%s' "$1" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'; }
+
+          TOKEN="$(trim "${TOKEN_SECRET:-$TOKEN_VAR}")"
+          ACCOUNT="$(trim "${ACCOUNT_SECRET:-$ACCOUNT_VAR}")"
+
+          [ -n "$TOKEN" ] && echo "::add-mask::$TOKEN"
+          [ -n "$ACCOUNT" ] && echo "::add-mask::$ACCOUNT"
+
+          where() { [ -n "$1" ] && echo "Secrets 分頁" || { [ -n "$2" ] && echo "Variables 分頁" || echo "找不到"; }; }
+          echo "=== 金鑰檢查（不會顯示內容）==="
+          echo "CLOUDFLARE_API_TOKEN ：來源=$(where "$TOKEN_SECRET" "$TOKEN_VAR")，長度=${#TOKEN}"
+          echo "CLOUDFLARE_ACCOUNT_ID：來源=$(where "$ACCOUNT_SECRET" "$ACCOUNT_VAR")，長度=${#ACCOUNT}"
+
+          OK=true
+          if [ -z "$TOKEN" ]; then
+            echo "::error::讀不到 CLOUDFLARE_API_TOKEN。請確認在 Settings → Secrets and variables → **Actions** → Secrets 分頁新增，名稱完全等於 CLOUDFLARE_API_TOKEN（全大寫、底線、前後不能有空白）。"
+            OK=false
+          fi
+          if [ -z "$ACCOUNT" ]; then
+            echo "::error::讀不到 CLOUDFLARE_ACCOUNT_ID。同上，名稱完全等於 CLOUDFLARE_ACCOUNT_ID。"
+            OK=false
+          fi
+
+          # 常見貼錯：Account ID 是 32 位十六進位；兩個值貼反了也抓得出來
+          if [ -n "$ACCOUNT" ] && ! printf '%s' "$ACCOUNT" | grep -qE '^[0-9a-fA-F]{32}$'; then
+            echo "::warning::CLOUDFLARE_ACCOUNT_ID 看起來不像 Account ID（正常是 32 個英數字）。請從 dash.cloudflare.com 網址列 / 概覽頁右側複製。"
+          fi
+          if [ -n "$TOKEN" ] && printf '%s' "$TOKEN" | grep -qE '^[0-9a-fA-F]{32}$'; then
+            echo "::warning::CLOUDFLARE_API_TOKEN 看起來像 Account ID，兩個值可能貼反了。"
+          fi
+
+          if [ "$OK" = true ]; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "CF_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+            echo "CF_ACCOUNT=$ACCOUNT" >> "$GITHUB_ENV"
+            echo "✅ 兩個金鑰都讀到了，開始部署。"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "❌ 金鑰不齊，略過部署（不算失敗，補好再跑一次就好）。"
           fi
 
       - name: 建立 KV 命名空間（若不存在）並部署
         if: ${{ steps.check.outputs.ready == 'true' }}
         working-directory: worker
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ env.CF_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ env.CF_ACCOUNT }}
         run: |
           set -e
           find_id() {
@@ -71,8 +109,8 @@ jobs:
         if: ${{ steps.check.outputs.ready == 'true' }}
         working-directory: worker
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ env.CF_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ env.CF_ACCOUNT }}
           WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL || secrets.SMC }}
         run: |
           if [ -z "$WEBHOOK" ]; then

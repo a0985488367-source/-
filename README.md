@@ -198,9 +198,14 @@ Worker 只做一件事：讀最新的 `market.json`，比對現價，
    - 權限加兩條：**Account · Workers Scripts · Edit**、**Account · Workers KV Storage · Edit**
    - 建立後複製 Token
 3. 回主控台首頁，右側複製 **Account ID**
-4. 到 GitHub Repo → **Settings → Secrets and variables → Actions**，新增兩個 secret：
+4. 到 GitHub Repo → **Settings → Secrets and variables → Actions**，
+   在 **Secrets** 分頁（不是隔壁的 Variables 分頁）按 **New repository secret**，新增兩個：
    - `CLOUDFLARE_API_TOKEN`
    - `CLOUDFLARE_ACCOUNT_ID`
+
+   > 左側選單裡 Actions／Codespaces／Dependabot 各有一組 secret，
+   > 一定要選 **Actions** 那一組，其他兩組工作流程讀不到。
+   > 名稱必須一字不差（全大寫、底線）。
 5. 到 **Actions → 部署 Cloudflare Worker → Run workflow** 執行一次
 
 部署流程會自動建立 KV 命名空間、部署 Worker，並把既有的 Discord webhook
