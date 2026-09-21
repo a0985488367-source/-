@@ -330,15 +330,23 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ env.CF_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ env.CF_ACCOUNT }}
           WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL || secrets.SMC }}
+          CF_EMAIL: ${{ secrets.CF_EMAIL }}
+          CF_GLOBAL_KEY: ${{ secrets.CF_GLOBAL_API_KEY }}
         run: |
           if [ -z "$WEBHOOK" ]; then
             echo "::warning::沒有 Discord webhook secret，Worker 將無法推播"
             exit 0
           fi
-          # 一樣改用經典的 secrets 端點，不透過 wrangler。
+          # 這是 Workers 指令碼底下的子資源，跟部署那步一樣可能被 Scoped
+          # Token 擋下來，同樣優先用 Global Key（如果有設定）。
+          if [ -n "$CF_EMAIL" ] && [ -n "$CF_GLOBAL_KEY" ]; then
+            AUTH_HEADERS=(-H "X-Auth-Email: $CF_EMAIL" -H "X-Auth-Key: $CF_GLOBAL_KEY")
+          else
+            AUTH_HEADERS=(-H "Authorization: Bearer $CLOUDFLARE_API_TOKEN")
+          fi
           PAYLOAD="$(node -e 'console.log(JSON.stringify({name:"DISCORD_WEBHOOK_URL", text: process.argv[1], type: "secret_text"}))' "$WEBHOOK")"
           RESP="$(curl -sS -X PUT \
-            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json" \
+            "${AUTH_HEADERS[@]}" -H "Content-Type: application/json" \
             -d "$PAYLOAD" \
             "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/smc-signals/secrets")"
           if printf '%s' "$RESP" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.exit(JSON.parse(s||"{}").success?0:1))' 2>/dev/null; then
@@ -347,4 +355,3 @@ jobs:
             echo "::warning::webhook 同步失敗"
             printf '%s' "$RESP" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{for(const e of (JSON.parse(s).errors||[]))console.log("   ["+e.code+"] "+e.message)}catch{}})'
           fi
-          echo "已同步 webhook 到 Worker"
