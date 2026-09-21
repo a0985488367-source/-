@@ -52,6 +52,7 @@ export const DERIV_PROVIDERS = {
         markPrice: Number(prem.markPrice),
         openInterest: series.length ? series[series.length - 1].value : null,
         openInterestValue: series.length ? series[series.length - 1].notional : null,
+        oiUnit: 'base',   // 以標的幣計價（例如幾顆 BTC）
         oiSeries: series,
       };
     },
@@ -80,6 +81,7 @@ export const DERIV_PROVIDERS = {
         markPrice: Number(t.markPrice),
         openInterest: Number(t.openInterest),
         openInterestValue: Number(t.openInterestValue),
+        oiUnit: 'base',
         oiSeries: series,
       };
     },
@@ -108,6 +110,10 @@ export const DERIV_PROVIDERS = {
         nextFundingTime: Number(f.nextFundingTime ?? f.fundingTime),
         markPrice: null,
         openInterest: series.length ? series[series.length - 1].value : null,
+        // 注意：OKX 這支是「整個幣種」的未平倉量（含所有合約），不是單一永續，
+        // 而且以美元計價。拿來看「增減趨勢」沒問題，但絕對值不能跟其他家比大小。
+        oiUnit: 'usd',
+        oiScope: 'currency',
         oiSeries: series,
       };
     },
@@ -127,14 +133,27 @@ function normalizeOkxFunding(f) {
  * 依序嘗試各交易所，第一個成功的就用。
  * @param {string} symbol 例如 'BTCUSDT'
  */
+/**
+ * 上次成功的來源。實測發現 Binance 永續（fapi）對美國 IP 回 451、
+ * Bybit 回 403，而 GitHub Actions 的機器就在美國 —— 所以推播那條
+ * 管線實際上只有 OKX 能用。記住上次成功的來源，就不用每次都先白試兩家、
+ * 白等兩次逾時。瀏覽器端（台灣）三家都通，一樣會自己挑到最快的那家。
+ */
+let lastGood = null;
+
+export function resetDerivProviderCache() { lastGood = null; }
+
 export async function fetchDerivatives(symbol, opts = {}, providers = ['binance', 'bybit', 'okx']) {
+  const order = lastGood && providers.includes(lastGood)
+    ? [lastGood, ...providers.filter((p) => p !== lastGood)]
+    : providers;
   let err;
-  for (const id of providers) {
+  for (const id of order) {
     const p = DERIV_PROVIDERS[id];
     if (!p) continue;
     try {
       const r = await p.fetch(symbol, opts);
-      if (Number.isFinite(r.fundingRate)) return r;
+      if (Number.isFinite(r.fundingRate)) { lastGood = id; return r; }
     } catch (e) { err = e; }
   }
   throw err || new Error('沒有可用的衍生品資料來源');
