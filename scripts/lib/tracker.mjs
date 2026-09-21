@@ -15,109 +15,33 @@
  *   expired  等太久都沒進場，作廢
  */
 
-/** 保證是有限數字：任何算式意外產生 undefined/NaN/Infinity 時，安全退回 0 */
-const finite = (v, fallback = 0) => (Number.isFinite(v) ? v : fallback);
+import { stepTrade, buildLadder, finite, DEFAULT_MANAGEMENT } from '../../src/smc/manage.js';
+
+export { DEFAULT_MANAGEMENT, buildLadder };
 
 /** 保守假設：同一根 K 棒同時觸及停損與目標時，算停損 */
 export function advanceTrade(trade, candles, opts = {}) {
-  const { entryWindowBars = 24, maxHoldBars = 200 } = opts;
   const t = { ...trade, hitTargets: [...(trade.hitTargets ?? [])], events: [] };
   if (t.status === 'target' || t.status === 'stop' || t.status === 'expired') return t;
 
-  const long = t.dir === 'long';
-  const risk = Math.abs(t.entry - t.stop) || 1;
   const from = candles.findIndex((c) => c.time > (t.lastCheckedTime ?? t.openTime));
   if (from < 0) return t;
 
+  // 實際的推進邏輯放在 src/smc/manage.js，與回測共用同一份程式碼 ——
+  // 這樣「回測看到的改善」跟「上線後的行為」保證是同一套規則。
   for (let i = from; i < candles.length; i++) {
-    const c = candles[i];
-    t.lastCheckedTime = c.time;
-    t.barsSinceOpen = (t.barsSinceOpen ?? 0) + 1;
-
-    if (t.status === 'pending') {
-      const filled = long ? c.low <= t.entry : c.high >= t.entry;
-      if (filled) {
-        t.status = 'active';
-        t.filledTime = c.time;
-        t.barsSinceFill = 0;
-        t.events.push({ type: 'filled', time: c.time, price: t.entry });
-      } else {
-        // 等太久都沒被碰到 → 作廢。
-        // （不需要另外判斷「跌破停損」：停損必在進場價的另一側，
-        //   價格要到停損一定先經過進場價，也就一定會先成交。）
-        if (t.barsSinceOpen > entryWindowBars) {
-          t.status = 'expired';
-          t.closedTime = c.time;
-          t.exitPrice = c.close;
-          t.r = 0;
-          t.events.push({ type: 'expired', time: c.time, reason: 'timeout' });
-          return t;
-        }
-        continue;
-      }
-    }
-
-    if (t.status !== 'active') continue;
-    t.barsSinceFill = (t.barsSinceFill ?? 0) + 1;
-
-    // 記錄最大有利／不利幅度（用來評估「有沒有先到過某個 R 再被打掉」）
-    const favorable = long ? (c.high - t.entry) / risk : (t.entry - c.low) / risk;
-    const adverse = long ? (c.low - t.entry) / risk : (t.entry - c.high) / risk;
-    t.maxFavorableR = Math.max(t.maxFavorableR ?? 0, favorable);
-    t.maxAdverseR = Math.min(t.maxAdverseR ?? 0, adverse);
-
-    const hitStop = long ? c.low <= t.stop : c.high >= t.stop;
-    if (hitStop) {
-      t.status = 'stop';
-      t.closedTime = c.time;
-      t.exitPrice = t.stop;
-      t.r = finite(t.hitTargets.length ? partialR(t) : -1, -1);
-      t.events.push({ type: 'stop', time: c.time, price: t.stop });
-      return t;
-    }
-
-    for (const tp of t.targets) {
-      if (t.hitTargets.includes(tp.name)) continue;
-      const hit = long ? c.high >= tp.price : c.low <= tp.price;
-      if (!hit) continue;
-      t.hitTargets.push(tp.name);
-      t.events.push({ type: 'target', name: tp.name, time: c.time, price: tp.price, rr: finite(tp.rr) });
-      // 打到第一個目標後把停損移到成本價（模擬「保本」的常見做法）
-      if (t.hitTargets.length === 1) {
-        t.stop = t.entry;
-        t.events.push({ type: 'breakeven', time: c.time, price: t.entry });
-      }
-      if (t.hitTargets.length === t.targets.length) {
-        t.status = 'target';
-        t.closedTime = c.time;
-        t.exitPrice = tp.price;
-        t.r = finite(tp.rr);
-        return t;
-      }
-    }
-
-    if (t.barsSinceFill > maxHoldBars) {
-      t.status = 'expired';
-      t.closedTime = c.time;
-      t.exitPrice = c.close;
-      t.r = finite((long ? c.close - t.entry : t.entry - c.close) / risk);
-      t.events.push({ type: 'expired', time: c.time, reason: 'maxHold' });
-      return t;
-    }
+    if (stepTrade(t, candles[i], opts)) break;
   }
   return t;
 }
 
-/** 已經打到部分目標後才被停損（停損已移到成本價）→ 以最後達成的目標計 R */
-function partialR(t) {
-  const last = t.targets.find((x) => x.name === t.hitTargets[t.hitTargets.length - 1]);
-  return last ? finite(last.rr) * 0.5 : 0; // 保守：只認一半，因為實際會分批出場
-}
-
 /** 統計績效。expired（未進場）不計入勝率，只單獨列出 */
 export function computeStats(closed) {
-  const traded = closed.filter((t) => t.status === 'target' || t.status === 'stop');
-  const expired = closed.filter((t) => t.status === 'expired');
+  // 只有「從未成交」的限價單不計入勝率（那不是一筆交易）；
+  // 成交後才逾時出場的有真實損益，必須算進去。
+  const unfilled = (t) => t.status === 'expired' && t.exitReason !== 'maxHold' && !t.filledTime;
+  const traded = closed.filter((t) => !unfilled(t));
+  const expired = closed.filter(unfilled);
   if (!traded.length) {
     return { count: 0, expired: expired.length, wins: 0, losses: 0, winRate: 0, totalR: 0, expectancy: 0, byGrade: [], bySymbol: [] };
   }
@@ -173,7 +97,7 @@ function groupBy(list, keyFn) {
 }
 
 /** 由分析結果建立一筆待追蹤的模擬單 */
-export function tradeFromSetup({ id, symbol, interval, setup, candleTime, grade, score }) {
+export function tradeFromSetup({ id, symbol, interval, setup, candleTime, grade, score, management = {} }) {
   return {
     id,
     symbol,
@@ -181,7 +105,13 @@ export function tradeFromSetup({ id, symbol, interval, setup, candleTime, grade,
     dir: setup.dir,
     entry: setup.entry,
     stop: setup.stop,
-    targets: setup.targets.map((t) => ({ name: t.name, price: t.price, rr: t.rr, label: t.label })),
+    initialStop: setup.stop,
+    targets: buildLadder(
+      setup.entry,
+      setup.stop,
+      setup.targets.map((t) => ({ name: t.name, price: t.price, rr: t.rr, label: t.label })),
+      management,
+    ),
     grade: grade ?? setup.grade,
     score: score ?? setup.score,
     poiType: setup.poi?.type,
@@ -192,6 +122,8 @@ export function tradeFromSetup({ id, symbol, interval, setup, candleTime, grade,
     barsSinceOpen: 0,
     barsSinceFill: 0,
     hitTargets: [],
+    remaining: 1,
+    realizedR: 0,
     maxFavorableR: 0,
     maxAdverseR: 0,
   };
