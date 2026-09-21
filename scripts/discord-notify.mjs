@@ -20,6 +20,8 @@ import { PROVIDERS } from '../src/data/providers.js';
 import { analyze } from '../src/smc/engine.js';
 import { aggregateBias, tfSuite } from '../src/smc/mtf.js';
 import { advanceTrade, computeStats, tradeFromSetup } from './lib/tracker.mjs';
+import { COLORS, price, fmtR, buildOutcomeEmbed } from './lib/outcome-embed.mjs';
+import { renderJournalMarkdown } from './lib/journal-markdown.mjs';
 
 const ARGS = new Set(process.argv.slice(2));
 const opt = (name) => {
@@ -40,24 +42,10 @@ const MAX_CLOSED = 300;
 const STATE_TTL_MS = 3 * 24 * 60 * 60 * 1000;
 const WEBHOOK = process.env.DISCORD_WEBHOOK_URL || '';
 
-const COLORS = { bull: 0x26a69a, bear: 0xef5350, info: 0x3aa0ff, warn: 0xe2b13c };
-
 /* ------------------------------------------------------------------ 工具 */
 
 const log = (...a) => console.log(...a);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const fmt = (v, d = 2) => (v == null || !isFinite(v) ? '—' : Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }));
-
-/** 依價格量級決定小數位 */
-function digitsFor(p) {
-  const a = Math.abs(p);
-  if (a >= 10000) return 1;
-  if (a >= 100) return 2;
-  if (a >= 1) return 4;
-  if (a >= 0.01) return 5;
-  return 7;
-}
-const price = (v) => fmt(v, digitsFor(v));
 
 async function loadConfig() {
   const raw = await readFile(new URL('../signals.config.json', import.meta.url), 'utf8');
@@ -125,59 +113,7 @@ async function saveJournal(journal) {
   await writeFile(JOURNAL_MD, renderJournalMarkdown(journal));
 }
 
-function renderJournalMarkdown(j) {
-  const s = j.stats ?? computeStats(j.closed);
-  const rows = [...j.closed].reverse().slice(0, 60).map((t) => {
-    const icon = t.status === 'target' ? '✅' : t.status === 'stop' ? '❌' : '⌛';
-    return `| ${new Date(t.openTime).toISOString().slice(0, 16).replace('T', ' ')} | ${t.symbol} | ${t.interval} | ${t.dir === 'long' ? '多' : '空'} | ${t.grade ?? '—'} | ${price(t.entry)} | ${price(t.stop)} | ${icon} ${t.status} | ${t.r == null ? '—' : t.r.toFixed(2)}R |`;
-  });
-  const openRows = j.open.map((t) =>
-    `| ${t.symbol} | ${t.interval} | ${t.dir === 'long' ? '多' : '空'} | ${t.status === 'pending' ? '等待進場' : '持有中'} | ${price(t.entry)} | ${price(t.stop)} | ${t.hitTargets.join('、') || '—'} |`);
 
-  return `# 模擬盤紀錄
-
-> 由 \`scripts/discord-notify.mjs\` 自動維護，請勿手動編輯。
-> 每則推播到 Discord 的交易計畫都會在這裡被追蹤到打到目標或停損為止。
-
-更新時間：${j.updatedAt ?? '—'}
-
-## 總覽
-
-| 指標 | 數值 |
-|---|---|
-| 已結束交易 | ${s.count} 筆（另有 ${s.expired} 筆未進場作廢） |
-| 勝率 | ${s.count ? s.winRate.toFixed(1) + '%' : '—'} |
-| 期望值 | ${s.count ? s.expectancy.toFixed(2) + 'R' : '—'} |
-| 總報酬 | ${s.count ? s.totalR.toFixed(1) + 'R' : '—'} |
-| 獲利因子 | ${s.count ? (isFinite(s.profitFactor) ? s.profitFactor.toFixed(2) : '∞') : '—'} |
-| 最大回撤 | ${s.count ? s.maxDrawdownR.toFixed(1) + 'R' : '—'} |
-| 最長連敗 | ${s.count ? s.maxLossStreak : '—'} |
-
-${s.count ? `## 分級表現
-
-| 評級 | 筆數 | 勝率 | 平均 R |
-|---|---|---|---|
-${s.byGrade.map((g) => `| ${g.key} | ${g.count} | ${g.winRate.toFixed(0)}% | ${g.avgR.toFixed(2)}R |`).join('\n')}
-
-## 各幣種表現
-
-| 幣種 | 筆數 | 勝率 | 總 R |
-|---|---|---|---|
-${s.bySymbol.map((g) => `| ${g.key} | ${g.count} | ${g.winRate.toFixed(0)}% | ${g.totalR.toFixed(1)}R |`).join('\n')}
-` : ''}
-## 進行中（${j.open.length}）
-
-| 幣種 | 週期 | 方向 | 狀態 | 進場 | 停損 | 已達目標 |
-|---|---|---|---|---|---|---|
-${openRows.join('\n') || '| — | | | | | | |'}
-
-## 最近結束的交易
-
-| 開倉時間 (UTC) | 幣種 | 週期 | 方向 | 評級 | 進場 | 停損 | 結果 | R |
-|---|---|---|---|---|---|---|---|---|
-${rows.join('\n') || '| — | | | | | | | | |'}
-`;
-}
 
 /* -------------------------------------------------------------- 行情抓取 */
 
@@ -436,61 +372,6 @@ function buildMarketEmbed(sig, cfg) {
 }
 
 /** 模擬單狀態變化 → Discord 訊息 */
-function buildOutcomeEmbed(trade, event, stats, cfg) {
-  const base = trade.symbol.replace(/USDT$/, '');
-  const dirText = trade.dir === 'long' ? '做多' : '做空';
-  const statLine = stats.count
-    ? `累計 ${stats.count} 筆 · 勝率 ${stats.winRate.toFixed(0)}% · 期望值 ${stats.expectancy >= 0 ? '+' : ''}${stats.expectancy.toFixed(2)}R · 總計 ${stats.totalR >= 0 ? '+' : ''}${stats.totalR.toFixed(1)}R`
-    : '尚無已結束的交易';
-  const common = {
-    url: cfg.siteUrl || undefined,
-    footer: { text: statLine },
-    timestamp: new Date(event.time).toISOString(),
-  };
-  const held = trade.filledTime && event.time
-    ? `持有 ${Math.round((event.time - trade.filledTime) / 3600000 * 10) / 10} 小時`
-    : '';
-
-  if (event.type === 'filled') {
-    return {
-      ...common,
-      title: `⏳ ${base} ${dirText} · 已進場`,
-      color: COLORS.info,
-      description: `價格回到 **${price(trade.entry)}**，模擬單成交。\n停損 ${price(trade.stop)}｜第一目標 ${price(trade.targets[0]?.price)}`,
-    };
-  }
-  if (event.type === 'target') {
-    const final = trade.status === 'target';
-    return {
-      ...common,
-      title: `${final ? '🎉' : '✅'} ${base} ${dirText} · ${event.name} 達成 +${event.rr.toFixed(2)}R`,
-      color: COLORS.bull,
-      description: final
-        ? `**全部目標達成**，模擬單以 ${price(event.price)} 結算。${held}`
-        : `價格觸及 ${price(event.price)}。停損已移到成本價 ${price(trade.entry)}，這筆單之後最差是平手。`,
-    };
-  }
-  if (event.type === 'stop') {
-    const saved = trade.hitTargets.length > 0;
-    return {
-      ...common,
-      title: `${saved ? '🟡' : '❌'} ${base} ${dirText} · ${saved ? '回到成本價出場' : '停損'} ${trade.r >= 0 ? '+' : ''}${trade.r.toFixed(2)}R`,
-      color: saved ? COLORS.warn : COLORS.bear,
-      description: saved
-        ? `已達成 ${trade.hitTargets.join('、')} 後回落，於成本價出場。${held}`
-        : `價格觸及停損 ${price(trade.stop)}。${held}\n最大有利幅度曾達 ${trade.maxFavorableR.toFixed(2)}R。`,
-    };
-  }
-  return {
-    ...common,
-    title: `⌛ ${base} ${dirText} · ${trade.status === 'expired' && !trade.filledTime ? '未進場作廢' : '逾時出場'}`,
-    color: COLORS.info,
-    description: trade.filledTime
-      ? `持有超過上限，以 ${price(trade.exitPrice)} 結算 ${trade.r >= 0 ? '+' : ''}${trade.r.toFixed(2)}R。`
-      : `等了 ${cfg.tracking.entryWindowBars} 根 K 棒價格都沒回到進場區，這則訊號作廢（不計入勝率）。`,
-  };
-}
-
 async function postDiscord(payload) {
   assertWebhookLooksValid();
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -729,74 +610,107 @@ async function main() {
     return log('✓ 晨報已送出');
   }
 
-  // ── 先推成效回報（先講結果，再講新機會） ──
-  if (outcomes.length) log(`\n${outcomes.length} 則模擬單狀態更新：`);
-  for (const { trade, event } of outcomes) {
-    if (!cfg.notify.outcomes) break;
-    const embed = buildOutcomeEmbed(trade, event, stats, cfg);
-    if (DRY) { log(`  [dry-run] ${embed.title}`); continue; }
-    await postDiscord({ embeds: [embed] });
-    log(`  已推播：${embed.title}`);
-    await sleep(600);
+  // 是否已有同方向的模擬單在追蹤：POI 每次重算都會換一個新 ID，
+  // 若不做這層判斷，同一個設置會被當成「新訊號」無限累加重複的模擬單。
+  const hasOpenTrade = (symbol, interval, dir) =>
+    journal.open.some((t) => t.symbol === symbol && t.interval === interval && t.dir === dir);
+
+  const errors = [];
+  /** 单一項目失敗只記錄、不中斷整批 —— 這是這次修的核心：
+   *  一筆爛資料不該讓後面所有「新交易計畫」的推播全部消失。 */
+  async function safely(label, fn) {
+    try {
+      await fn();
+    } catch (e) {
+      errors.push(`${label}: ${e.message}`);
+      log(`  ⚠️ ${label} 失敗，已略過（不影響其他訊號）：${e.message}`);
+    }
   }
 
-  // ── 全市場掃描的機會 ──
-  const opportunities = await marketOpportunities(cfg, state);
-  if (opportunities.length) {
-    log(`\n全市場掃描機會 ${opportunities.length} 則：`);
+  try {
+    // ── 先推成效回報（先講結果，再講新機會） ──
+    if (outcomes.length) log(`\n${outcomes.length} 則模擬單狀態更新：`);
+    for (const { trade, event } of outcomes) {
+      if (!cfg.notify.outcomes) break;
+      await safely(`成效通知 ${trade.symbol} ${event.type}`, async () => {
+        const embed = buildOutcomeEmbed(trade, event, stats, cfg);
+        if (!embed) return; // 例如 breakeven：不需要獨立推播
+        if (DRY) { log(`  [dry-run] ${embed.title}`); return; }
+        await postDiscord({ embeds: [embed] });
+        log(`  已推播：${embed.title}`);
+        await sleep(600);
+      });
+    }
+
+    // ── 全市場掃描的機會 ──
+    const opportunities = await marketOpportunities(cfg, state).catch((e) => {
+      errors.push(`全市場機會讀取失敗: ${e.message}`);
+      log(`  ⚠️ 全市場機會讀取失敗，已略過：${e.message}`);
+      return [];
+    });
+    if (opportunities.length) log(`\n全市場掃描機會 ${opportunities.length} 則：`);
     for (const sig of opportunities) {
-      const embed = buildMarketEmbed(sig, cfg);
-      if (DRY) { log(`  [dry-run] ${embed.title}`); continue; }
-      await postDiscord({ embeds: [embed] });
-      log(`  已推播：${embed.title}`);
-      state[sig.id] = new Date().toISOString();
-      const r = sig.row;
-      if (cfg.tracking.enabled && !journal.open.some((t) => t.id === sig.id)) {
-        journal.open.push({
-          id: sig.id, symbol: r.symbol, interval: r.interval, dir: r.dir,
-          entry: r.entry, stop: r.stop,
-          targets: r.targets.map((t) => ({ name: t.name, price: t.price, rr: t.rr, label: t.label })),
-          grade: r.grade, score: r.score, poiType: r.poiType,
-          status: 'active', filledTime: r.updatedAt, openTime: r.updatedAt,
-          lastCheckedTime: r.updatedAt, barsSinceOpen: 0, barsSinceFill: 0,
-          hitTargets: [], maxFavorableR: 0, maxAdverseR: 0, source: 'market',
-        });
-        log(`    ↳ 已加入模擬盤追蹤`);
-      }
-      await sleep(600);
+      await safely(`全市場機會 ${sig.symbol}`, async () => {
+        const embed = buildMarketEmbed(sig, cfg);
+        if (DRY) { log(`  [dry-run] ${embed.title}`); return; }
+        await postDiscord({ embeds: [embed] });
+        log(`  已推播：${embed.title}`);
+        state[sig.id] = new Date().toISOString();
+        const r = sig.row;
+        if (cfg.tracking.enabled && !hasOpenTrade(r.symbol, r.interval, r.dir)) {
+          journal.open.push({
+            id: sig.id, symbol: r.symbol, interval: r.interval, dir: r.dir,
+            entry: r.entry, stop: r.stop,
+            targets: r.targets.map((t) => ({ name: t.name, price: t.price, rr: t.rr, label: t.label })),
+            grade: r.grade, score: r.score, poiType: r.poiType,
+            status: 'active', filledTime: r.updatedAt, openTime: r.updatedAt,
+            lastCheckedTime: r.updatedAt, barsSinceOpen: 0, barsSinceFill: 0,
+            hitTargets: [], maxFavorableR: 0, maxAdverseR: 0, source: 'market',
+          });
+          log(`    ↳ 已加入模擬盤追蹤`);
+        }
+        await sleep(600);
+      });
     }
+
+    // ── 再推新訊號 ──
+    if (found.length) log(`\n共 ${found.length} 則新訊號：`);
+    for (const sig of found) {
+      await safely(`新訊號 ${sig.symbol}`, async () => {
+        const embed = buildEmbed(sig, cfg);
+        if (DRY) {
+          log(`  [dry-run] ${embed.title}`);
+          if (ARGS.has('--verbose')) log(JSON.stringify(embed, null, 2));
+          return;
+        }
+        await postDiscord({ embeds: [embed] });
+        log(`  已推播：${embed.title}`);
+        state[sig.id] = new Date().toISOString();
+
+        // 交易計畫 → 建立一筆模擬單開始追蹤（同方向已有追蹤中的單就不重複建立）
+        if (cfg.tracking.enabled && sig.kind === 'plan' && !hasOpenTrade(sig.symbol, sig.interval, sig.setup.dir)) {
+          journal.open.push(tradeFromSetup({
+            id: sig.id,
+            symbol: sig.symbol,
+            interval: sig.interval,
+            setup: sig.setup,
+            candleTime: sig.analysis.candles.at(-1).time,
+          }));
+          log(`    ↳ 已加入模擬盤追蹤`);
+        }
+        await sleep(600);
+      });
+    }
+  } finally {
+    // 不論上面推播過程有沒有出錯，都要存檔 ——
+    // 否則同一批爛資料會在下次執行時被重新處理一次，重複崩潰、重複推播。
+    await finish();
   }
 
-  // ── 再推新訊號 ──
-  if (!found.length && !outcomes.length && !opportunities.length) return finish();
-  if (found.length) log(`\n共 ${found.length} 則新訊號：`);
-
-  for (const sig of found) {
-    const embed = buildEmbed(sig, cfg);
-    if (DRY) {
-      log(`  [dry-run] ${embed.title}`);
-      if (ARGS.has('--verbose')) log(JSON.stringify(embed, null, 2));
-      continue;
-    }
-    await postDiscord({ embeds: [embed] });
-    log(`  已推播：${embed.title}`);
-    state[sig.id] = new Date().toISOString();
-
-    // 交易計畫 → 建立一筆模擬單開始追蹤
-    if (cfg.tracking.enabled && sig.kind === 'plan' && !journal.open.some((t) => t.id === sig.id)) {
-      journal.open.push(tradeFromSetup({
-        id: sig.id,
-        symbol: sig.symbol,
-        interval: sig.interval,
-        setup: sig.setup,
-        candleTime: sig.analysis.candles.at(-1).time,
-      }));
-      log(`    ↳ 已加入模擬盤追蹤`);
-    }
-    await sleep(600);
+  if (errors.length) {
+    log(`\n本次共有 ${errors.length} 個項目推播失敗（已略過，其餘訊號正常送出）：`);
+    errors.forEach((e) => log(`  - ${e}`));
   }
-
-  return finish();
 
   async function finish() {
     if (DRY) return log('\n（dry-run：未送出、未寫入帳本）');

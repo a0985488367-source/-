@@ -15,6 +15,9 @@
  *   expired  等太久都沒進場，作廢
  */
 
+/** 保證是有限數字：任何算式意外產生 undefined/NaN/Infinity 時，安全退回 0 */
+const finite = (v, fallback = 0) => (Number.isFinite(v) ? v : fallback);
+
 /** 保守假設：同一根 K 棒同時觸及停損與目標時，算停損 */
 export function advanceTrade(trade, candles, opts = {}) {
   const { entryWindowBars = 24, maxHoldBars = 200 } = opts;
@@ -68,7 +71,7 @@ export function advanceTrade(trade, candles, opts = {}) {
       t.status = 'stop';
       t.closedTime = c.time;
       t.exitPrice = t.stop;
-      t.r = t.hitTargets.length ? partialR(t) : -1;
+      t.r = finite(t.hitTargets.length ? partialR(t) : -1, -1);
       t.events.push({ type: 'stop', time: c.time, price: t.stop });
       return t;
     }
@@ -78,7 +81,7 @@ export function advanceTrade(trade, candles, opts = {}) {
       const hit = long ? c.high >= tp.price : c.low <= tp.price;
       if (!hit) continue;
       t.hitTargets.push(tp.name);
-      t.events.push({ type: 'target', name: tp.name, time: c.time, price: tp.price, rr: tp.rr });
+      t.events.push({ type: 'target', name: tp.name, time: c.time, price: tp.price, rr: finite(tp.rr) });
       // 打到第一個目標後把停損移到成本價（模擬「保本」的常見做法）
       if (t.hitTargets.length === 1) {
         t.stop = t.entry;
@@ -88,7 +91,7 @@ export function advanceTrade(trade, candles, opts = {}) {
         t.status = 'target';
         t.closedTime = c.time;
         t.exitPrice = tp.price;
-        t.r = tp.rr;
+        t.r = finite(tp.rr);
         return t;
       }
     }
@@ -97,7 +100,7 @@ export function advanceTrade(trade, candles, opts = {}) {
       t.status = 'expired';
       t.closedTime = c.time;
       t.exitPrice = c.close;
-      t.r = (long ? c.close - t.entry : t.entry - c.close) / risk;
+      t.r = finite((long ? c.close - t.entry : t.entry - c.close) / risk);
       t.events.push({ type: 'expired', time: c.time, reason: 'maxHold' });
       return t;
     }
@@ -108,7 +111,7 @@ export function advanceTrade(trade, candles, opts = {}) {
 /** 已經打到部分目標後才被停損（停損已移到成本價）→ 以最後達成的目標計 R */
 function partialR(t) {
   const last = t.targets.find((x) => x.name === t.hitTargets[t.hitTargets.length - 1]);
-  return last ? last.rr * 0.5 : 0; // 保守：只認一半，因為實際會分批出場
+  return last ? finite(last.rr) * 0.5 : 0; // 保守：只認一半，因為實際會分批出場
 }
 
 /** 統計績效。expired（未進場）不計入勝率，只單獨列出 */
