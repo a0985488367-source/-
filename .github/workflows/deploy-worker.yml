@@ -32,8 +32,11 @@ jobs:
         id: check
         env:
           # 兩個都讀：secret 讀不到時退回 variable（很多人會誤填在 Variables 分頁）
-          TOKEN_SECRET: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          TOKEN_VAR: ${{ vars.CLOUDFLARE_API_TOKEN }}
+          # 接受兩個名稱。實務上「更新既有 secret」這個動作比「新增」容易失敗，
+          # 所以多開一個新名字讓人可以直接新增一個，不必去改舊的那個。
+          TOKEN_SECRET: ${{ secrets.CF_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
+          TOKEN_VAR: ${{ vars.CF_API_TOKEN || vars.CLOUDFLARE_API_TOKEN }}
+          TOKEN_NEW: ${{ secrets.CF_API_TOKEN }}
           ACCOUNT_SECRET: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           ACCOUNT_VAR: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
         run: |
@@ -48,12 +51,12 @@ jobs:
 
           where() { [ -n "$1" ] && echo "Secrets 分頁" || { [ -n "$2" ] && echo "Variables 分頁" || echo "找不到"; }; }
           echo "=== 金鑰檢查（不會顯示內容）==="
-          echo "CLOUDFLARE_API_TOKEN ：來源=$(where "$TOKEN_SECRET" "$TOKEN_VAR")，長度=${#TOKEN}"
+          echo "API Token ：來源=$(where "$TOKEN_SECRET" "$TOKEN_VAR")，名稱=$([ -n "$TOKEN_NEW" ] && echo CF_API_TOKEN || echo CLOUDFLARE_API_TOKEN)，長度=${#TOKEN}"
           echo "CLOUDFLARE_ACCOUNT_ID：來源=$(where "$ACCOUNT_SECRET" "$ACCOUNT_VAR")，長度=${#ACCOUNT}"
 
           OK=true
           if [ -z "$TOKEN" ]; then
-            echo "::error::讀不到 CLOUDFLARE_API_TOKEN。請確認在 Settings → Secrets and variables → **Actions** → Secrets 分頁新增，名稱完全等於 CLOUDFLARE_API_TOKEN（全大寫、底線、前後不能有空白）。"
+            echo "::error::讀不到 API Token。請在 Settings → Secrets and variables → Actions → Secrets 分頁按 New repository secret，新增一個名為 CF_API_TOKEN 的 secret（不必去動舊的 CLOUDFLARE_API_TOKEN）。"
             OK=false
           fi
           if [ -z "$ACCOUNT" ]; then
@@ -121,7 +124,7 @@ jobs:
           if [ -z "$GOOD" ]; then
             echo "❌ API Token 無效（長度 ${#CLOUDFLARE_API_TOKEN}）"
             verify "$CLOUDFLARE_API_TOKEN" | why
-            echo "::error::Cloudflare 不認這把 API Token。正常的 Token 是 40 個字元；你這把是 ${#CLOUDFLARE_API_TOKEN} 個字元。請到 https://dash.cloudflare.com/profile/api-tokens 重新 Create Token，並複製建立完成後「只顯示一次」的那一長串（不是列表裡的名稱或 ID）。"
+            echo "::error::Cloudflare 不認這把 API Token（長度 ${#CLOUDFLARE_API_TOKEN}，正常是 40）。請到 https://dash.cloudflare.com/profile/api-tokens 用 Edit Cloudflare Workers 範本建立，複製建立完成後「只顯示一次」的那一長串，然後在 GitHub 按 New repository secret 新增一個名為 CF_API_TOKEN 的 secret —— 不要去更新舊的那個。"
             exit 1
           fi
           if [ "$GOOD" != "$CLOUDFLARE_API_TOKEN" ]; then
