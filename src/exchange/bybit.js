@@ -13,10 +13,29 @@
  *   payload：GET 是查詢字串，POST 是原始 JSON 字串（必須與實際送出的完全一致）
  */
 
+/**
+ * Bybit 有三套彼此獨立的環境，金鑰不能互通：
+ *
+ *   demo    主站 bybit.com 裡切換到「模擬交易 / Demo Trading」拿的金鑰
+ *   testnet 另一個網站 testnet.bybit.com 註冊的獨立帳號拿的金鑰
+ *   live    真錢
+ *
+ * 最容易踩的坑：在主站開了「模擬交易」，卻以為那叫 testnet。
+ * 兩者網址不同，互相拿去用一定回 10003 金鑰無效。
+ */
 export const HOSTS = {
+  demo: 'https://api-demo.bybit.com',
   testnet: 'https://api-testnet.bybit.com',
   live: 'https://api.bybit.com',
 };
+
+export const MODE_LABELS = {
+  demo: { zh: '模擬交易', en: 'Demo', hint: { zh: '在 bybit.com 主站切換到「模擬交易」後申請的金鑰', en: 'Keys from Demo Trading on bybit.com' } },
+  testnet: { zh: '測試網', en: 'Testnet', hint: { zh: '在 testnet.bybit.com 這個獨立網站註冊後申請的金鑰', en: 'Keys from testnet.bybit.com' } },
+  live: { zh: '實盤', en: 'Live', hint: { zh: '真錢帳戶', en: 'Real money' } },
+};
+
+export const isRealMoney = (mode) => mode === 'live';
 
 const RECV_WINDOW = '10000';
 const enc = new TextEncoder();
@@ -47,7 +66,11 @@ export function explainError(e) {
     };
   }
   const map = {
-    10003: { zh: 'API Key 無效。請確認貼的是 Key 本身，而且模擬盤／實盤的金鑰沒有互相貼錯。', en: 'Invalid API key.' },
+    10003: {
+      zh: 'API Key 無效。最常見的原因是環境選錯了 —— Bybit 的「模擬交易（主站）」和「測試網（testnet.bybit.com）」是兩套獨立系統，金鑰不能互通。' +
+        '請確認上面選的環境，跟你申請金鑰的地方一致。',
+      en: 'Invalid API key — most often the wrong environment (Demo vs Testnet are separate systems).',
+    },
     10004: { zh: '簽章錯誤。通常是 API Secret 貼錯或前後多了空白。', en: 'Signature error.' },
     10005: { zh: '權限不足。請在 Bybit 後台為這把金鑰開啟「Unified Trading — Trade」權限。', en: 'Permission denied.' },
     10006: { zh: '請求太頻繁，稍後再試。', en: 'Rate limited.' },
@@ -64,8 +87,10 @@ export function explainError(e) {
 /**
  * @param {{apiKey:string, apiSecret:string, testnet:boolean, fetchImpl?:Function}} cfg
  */
-export function createClient({ apiKey, apiSecret, testnet = true, fetchImpl }) {
-  const host = testnet ? HOSTS.testnet : HOSTS.live;
+export function createClient({ apiKey, apiSecret, mode = 'demo', testnet, fetchImpl }) {
+  // testnet 是舊的布林參數，保留相容
+  const resolved = mode ?? (testnet === false ? 'live' : 'testnet');
+  const host = HOSTS[resolved] ?? HOSTS.demo;
   const doFetch = fetchImpl || ((...a) => fetch(...a));
 
   async function call(method, path, params = {}, { signed = true } = {}) {
@@ -104,12 +129,14 @@ export function createClient({ apiKey, apiSecret, testnet = true, fetchImpl }) {
 
     const json = await res.json();
     if (json.retCode !== 0) throw new BybitError(json.retCode, json.retMsg || '請求失敗');
+    // 注意：Bybit 業務層錯誤的 HTTP 仍然是 200，所以一定要看 retCode
     return json.result;
   }
 
   return {
     host,
-    testnet,
+    mode: resolved,
+    testnet: resolved !== 'live',
 
     /** 連線測試：讀餘額。這是唯讀動作，不會動到任何部位。 */
     async walletBalance(accountType = 'UNIFIED') {

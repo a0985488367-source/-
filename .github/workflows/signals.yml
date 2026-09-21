@@ -109,12 +109,31 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data
           git commit -m "chore(data): 更新模擬盤帳本 [skip ci]"
+
+          # 推回「目前這個分支」，不是寫死的 main：
+          # 在功能分支上執行時，原本會把 main 拉進來，data/ 必定衝突。
+          BRANCH="${GITHUB_REF_NAME}"
+
           for i in 1 2 3; do
-            if git pull --rebase --autostash origin main && git push; then
-              echo "已提交"
+            if git push origin "HEAD:$BRANCH"; then
+              echo "已提交到 $BRANCH"
               exit 0
             fi
-            echo "推送失敗，5 秒後重試（$i/3）"
-            sleep 5
+            echo "遠端有新的提交，先合併再推（$i/3）"
+            git fetch origin "$BRANCH" || true
+
+            # data/ 底下都是每次執行重新產生的檔案，文字合併一定衝突，
+            # 而且合併出來的結果沒有意義（半個舊帳本混半個新帳本）。
+            # 一律以本次執行算出來的版本為準；下一次執行本來就會從最新狀態重算。
+            #
+            # 原本用 git pull --rebase，衝突後沒有 rebase --abort 就直接重試 ——
+            # 工作目錄還卡在未解決的衝突，所以第 2、3 次必定以同樣的錯誤失敗，
+            # 等於三次重試完全是白做的。
+            if ! git merge --no-edit "origin/$BRANCH"; then
+              git checkout --ours -- data || true
+              git add data || true
+              git commit --no-edit || true
+            fi
+            sleep 3
           done
           echo "::warning::帳本推送失敗，下次執行會再試"

@@ -4,6 +4,7 @@ import {
   classifyFunding, oiChangePct, priceOiRegime, derivativesVerdict,
   annualizeFunding, fundingCountdown, FUNDING_THRESHOLDS,
 } from '../src/smc/derivatives.js';
+import { snapshotChange } from '../src/data/derivatives.js';
 
 test('資金費率分級：中性 / 偏高 / 極端', () => {
   assert.equal(classifyFunding(0.00005).level, 'neutral');
@@ -89,4 +90,32 @@ test('資金費率倒數', () => {
 test('門檻值有匯出，方便之後依實測調整', () => {
   assert.ok(FUNDING_THRESHOLDS.neutral < FUNDING_THRESHOLDS.elevated);
   assert.ok(FUNDING_THRESHOLDS.elevated < FUNDING_THRESHOLDS.extreme);
+});
+
+/* -------------------------------- 未平倉量改用「跟上一次掃描比」 */
+
+test('快照差分：正常間隔算得出變化率', () => {
+  const t = Date.UTC(2026, 0, 1, 12);
+  const r = snapshotChange({ value: 110, time: t }, { value: 100, time: t - 3600000 });
+  assert.equal(r.pct, 10);
+  assert.equal(r.hours, 1);
+});
+
+test('快照差分：間隔太短或太久都不採用（沒有參考價值）', () => {
+  const t = Date.UTC(2026, 0, 1, 12);
+  assert.equal(snapshotChange({ value: 110, time: t }, { value: 100, time: t - 60000 }), null, '1 分鐘太短');
+  assert.equal(snapshotChange({ value: 110, time: t }, { value: 100, time: t - 20 * 3600000 }), null, '20 小時太久');
+});
+
+test('快照差分：缺任一邊就回 null，不會拿 0 當基準算出無限大', () => {
+  const t = Date.now();
+  assert.equal(snapshotChange(null, { value: 100, time: t }), null);
+  assert.equal(snapshotChange({ value: 100, time: t }, null), null);
+  assert.equal(snapshotChange({ value: 100, time: t }, { value: 0, time: t - 3600000 }), null);
+});
+
+test('未平倉量算不出來時，判讀要說「資料不足」而不是亂猜方向', () => {
+  const v = derivativesVerdict({ dir: 'long', funding: 0.0001, priceChangePct: 3, oiChangePct: null });
+  assert.equal(v.regime.key, 'unknown');
+  assert.equal(v.score, 0, '沒有持倉資料就不該因此加減分');
 });

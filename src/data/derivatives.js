@@ -158,3 +158,45 @@ export async function fetchDerivatives(symbol, opts = {}, providers = ['binance'
   }
   throw err || new Error('沒有可用的衍生品資料來源');
 }
+
+/* ---------------------------------------------- 全市場未平倉量快照 */
+
+/**
+ * 一次抓回 OKX 所有永續合約的未平倉量。
+ *
+ * 為什麼需要這個：OKX 的「未平倉量歷史」端點（rubik）只涵蓋主流幣，
+ * 實測 13 檔進榜幣種裡只有 2 檔拿得到序列，等於未平倉量這半邊形同虛設。
+ * 而「目前未平倉量」端點涵蓋所有永續、而且一次呼叫就能全部拿回來。
+ *
+ * 搭配 snapshotChange()：把上一次掃描存下來的數值當基準算變化率，
+ * 就不再依賴交易所提供歷史。掃描本來就每 15 分鐘到 2 小時跑一次，
+ * 這個間隔拿來看「持倉在增還是在減」剛剛好。
+ *
+ * @returns {Promise<Map<string, {value:number, time:number}>>} key 為 BTCUSDT 這種格式
+ */
+export async function fetchAllOpenInterest() {
+  const r = await J('https://www.okx.com/api/v5/public/open-interest?instType=SWAP');
+  const map = new Map();
+  for (const row of r?.data ?? []) {
+    // BTC-USDT-SWAP → BTCUSDT，非 USDT 本位的合約跳過
+    const m = /^(.+?)-(USDT)-SWAP$/.exec(row.instId ?? '');
+    if (!m) continue;
+    const value = Number(row.oiCcy ?? row.oi);
+    if (!(value > 0)) continue;
+    map.set(`${m[1]}${m[2]}`, { value, time: Number(row.ts) || Date.now() });
+  }
+  return map;
+}
+
+/**
+ * 以上一次的快照算未平倉量變化率。
+ * @param {{value:number,time:number}|null} now
+ * @param {{value:number,time:number}|null} prev
+ * @returns {{pct:number, hours:number}|null} 間隔太短或太長都回 null（沒有參考價值）
+ */
+export function snapshotChange(now, prev, { minHours = 0.2, maxHours = 12 } = {}) {
+  if (!now?.value || !prev?.value) return null;
+  const hours = Math.abs(now.time - prev.time) / 3600000;
+  if (!(hours >= minHours && hours <= maxHours)) return null;
+  return { pct: ((now.value - prev.value) / prev.value) * 100, hours };
+}

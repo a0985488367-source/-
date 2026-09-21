@@ -244,6 +244,21 @@ async function attachDerivatives(sig) {
   };
 }
 
+/**
+ * 市場掃描那份資料裡的衍生品欄位。
+ * 結構跟 derivField 不同：掃描時已經先算好存進 market.json，
+ * 這裡只負責排版，不再重算。
+ */
+function scanDerivField(d) {
+  if (!d || !Number.isFinite(d.fundingRate)) return [];
+  const pct = (d.fundingRate * 100).toFixed(4) + '%';
+  const oi = Number.isFinite(d.oiChangePct) ? (d.oiChangePct > 0 ? '+' : '') + d.oiChangePct.toFixed(1) + '%' : '—';
+  return [{
+    name: `資金費率 ${pct}　未平倉量 ${oi}`,
+    value: `${d.regimeZh}${d.note ? `\n${d.note}` : ''}`,
+  }];
+}
+
 function derivField(deriv) {
   if (!deriv || deriv.error) return [];
   const rate = deriv.raw?.fundingRate;
@@ -401,6 +416,7 @@ function buildMarketEmbed(sig, cfg) {
       { name: '現價', value: price(r.price), inline: true },
       { name: '區間位置', value: r.pd ? `${zhZone(r.pd.zone)} ${r.pd.pct.toFixed(0)}%` : '—', inline: true },
       { name: '匯流', value: `${r.checksPassed}/${r.checksTotal} · 評分 ${r.score}`, inline: true },
+      ...scanDerivField(r.deriv),
     ],
     footer: { text: `${r.symbol} · ${r.interval} · 全市場掃描（前 ${cfg.market.top ?? '—'} 名）· 僅供研究，非投資建議` },
     timestamp: new Date(r.updatedAt).toISOString(),
