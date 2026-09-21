@@ -832,18 +832,33 @@ function playReplay() {
 
 let marketData = null;
 
+/**
+ * 讀取全市場掃描結果。
+ *
+ * 舊版邏輯：只要 marketData 已經載入過一次，之後再打開這個分頁就永遠不會
+ * 重新抓，只能靠手動按重新整理——結果就是分頁看起來「卡在」剛打開 App
+ * 那一刻的市況，即使伺服器早就掃出新結果。
+ *
+ * 改成「先顯示舊的、背景重新抓」：有快取就先秒開，同時在背景打一次新的，
+ * 抓到就換上；沒快取或強制刷新時才顯示載入中。這樣每次切回這個分頁
+ * 都會自動跟最新掃描結果同步，不用使用者自己按。
+ */
 async function loadMarket({ force = false } = {}) {
   const host = $('#marketResult');
   if (!host) return;
-  if (marketData && !force) return renderMarketPane();
-  host.innerHTML = `<p class="dim pad">${isZh() ? '載入掃描結果…' : 'Loading…'}</p>`;
+  const hadCache = !!marketData;
+  if (hadCache && !force) renderMarketPane(); // 先秒開舊的，不讓畫面空白等待
+  else host.innerHTML = `<p class="dim pad">${isZh() ? '載入掃描結果…' : 'Loading…'}</p>`;
   try {
     marketData = await fetchMarket();
     renderMarketPane();
   } catch (e) {
-    host.innerHTML = `<p class="dim pad">${isZh()
-      ? '還沒有掃描結果。伺服器每小時會掃描一次全市場，稍後再試。'
-      : 'No scan results yet — the server scans hourly.'}<br><span class="tiny">${escapeHtml(e.message)}</span></p>`;
+    if (!hadCache) {
+      host.innerHTML = `<p class="dim pad">${isZh()
+        ? '還沒有掃描結果。伺服器每小時會掃描一次全市場，稍後再試。'
+        : 'No scan results yet — the server scans hourly.'}<br><span class="tiny">${escapeHtml(e.message)}</span></p>`;
+    }
+    // 已經有快取可以看時，背景刷新失敗就默默保留舊資料，不用跳錯誤打斷使用者
   }
 }
 
