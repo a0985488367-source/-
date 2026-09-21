@@ -257,6 +257,21 @@ jobs:
           sed -i "s/REPLACE_WITH_YOUR_KV_NAMESPACE_ID/$ID/" wrangler.toml
           npx --yes wrangler@3 deploy
 
+      - name: 部署失敗時，印出 wrangler 的完整除錯紀錄
+        if: ${{ failure() && steps.check.outputs.ready == 'true' }}
+        run: |
+          # wrangler 的 CLI 輸出把 Cloudflare 原始錯誤裁剪成一句話（"No access to
+          # the specified resource"），連錯誤代碼都沒有。它自己寫的除錯紀錄裡有
+          # 完整的 HTTP 請求／回應，把 Authorization 那一行拿掉之後印出來，
+          # 才看得到 Cloudflare 真正回了什麼。
+          LOG="$(ls -t /home/runner/.config/.wrangler/logs/*.log 2>/dev/null | head -n1)"
+          if [ -z "$LOG" ]; then
+            echo "找不到 wrangler 的除錯紀錄檔"
+          else
+            echo "=== $LOG（已隱藏 Authorization）==="
+            grep -v -i 'authorization' "$LOG" | tail -c 8000
+          fi
+
       - name: 同步 Discord webhook 到 Worker
         if: ${{ steps.check.outputs.ready == 'true' }}
         working-directory: worker
