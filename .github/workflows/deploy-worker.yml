@@ -136,7 +136,25 @@ jobs:
 
           KV="$(curl -sS -H "Authorization: Bearer $GOOD" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/storage/kv/namespaces?per_page=1")"
           if printf '%s' "$KV" | ok; then
-            echo "✅ 帳號 ID 正確，而且 Token 讀得到 Workers KV"
+            echo "✅ 帳號 ID 正確，而且 Token 讀得到 Workers KV 清單"
+
+            # 「讀清單」跟「建立」是兩種不同等級的權限，Cloudflare 常常只給了讀取。
+            # 直接測試建立一個暫時的命名空間，成功就立刻刪掉，藉此在部署前就抓出
+            # 「權限等級選成讀取而非編輯」這種問題，而不是等 wrangler 建立失敗才發現。
+            CREATE="$(curl -sS -X POST \
+              -H "Authorization: Bearer $GOOD" -H "Content-Type: application/json" \
+              -d '{"title":"smc-signals-permission-probe"}' \
+              "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/storage/kv/namespaces")"
+            if printf '%s' "$CREATE" | ok; then
+              PROBE_ID="$(printf '%s' "$CREATE" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).result?.id||""))')"
+              [ -n "$PROBE_ID" ] && curl -sS -X DELETE -H "Authorization: Bearer $GOOD" \
+                "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/storage/kv/namespaces/$PROBE_ID" >/dev/null
+              echo "✅ 也確認建得起 KV 命名空間（測試用的已經刪除）"
+            else
+              printf '%s' "$CREATE" | why
+              echo "::error::Token 讀得到 KV 清單，但建不了新的命名空間。這代表 Workers KV Storage 這條權限的等級被設成了「讀取」，需要改成「編輯」。請到 https://dash.cloudflare.com/profile/api-tokens 打開這把 Token 的 Edit，把 Workers KV Storage 那一列右邊的等級從 Read 改成 Edit，然後往下按 Save（不用重新複製貼上，等級本身改變不會產生新的 Token 字串）。"
+              exit 1
+            fi
           else
             printf '%s' "$KV" | why
             echo "::warning::讀不到這個帳號的 Workers KV，正在確認這把 Token 實際能看到哪些帳戶……"
