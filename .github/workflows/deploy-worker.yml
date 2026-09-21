@@ -40,6 +40,7 @@ jobs:
           # 帳戶 ID 同理：接受一個新名稱，新增一個就好，不用去更新舊的那個。
           ACCOUNT_SECRET: ${{ secrets.CF_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
           ACCOUNT_VAR: ${{ vars.CF_ACCOUNT_ID || vars.CLOUDFLARE_ACCOUNT_ID }}
+          ACCOUNT_NEW: ${{ secrets.CF_ACCOUNT_ID }}
         run: |
           # 這一步只會印出「有沒有設定」「長度幾個字」，永遠不會印出金鑰內容。
           trim() { printf '%s' "$1" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'; }
@@ -53,7 +54,7 @@ jobs:
           where() { [ -n "$1" ] && echo "Secrets 分頁" || { [ -n "$2" ] && echo "Variables 分頁" || echo "找不到"; }; }
           echo "=== 金鑰檢查（不會顯示內容）==="
           echo "API Token ：來源=$(where "$TOKEN_SECRET" "$TOKEN_VAR")，名稱=$([ -n "$TOKEN_NEW" ] && echo CF_API_TOKEN || echo CLOUDFLARE_API_TOKEN)，長度=${#TOKEN}"
-          echo "CLOUDFLARE_ACCOUNT_ID：來源=$(where "$ACCOUNT_SECRET" "$ACCOUNT_VAR")，長度=${#ACCOUNT}"
+          echo "帳戶 ID ：來源=$(where "$ACCOUNT_SECRET" "$ACCOUNT_VAR")，名稱=$([ -n "$ACCOUNT_NEW" ] && echo CF_ACCOUNT_ID || echo CLOUDFLARE_ACCOUNT_ID)，長度=${#ACCOUNT}"
 
           OK=true
           if [ -z "$TOKEN" ]; then
