@@ -132,7 +132,19 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: node scripts/research/ab-test.mjs --commit=false | tee ab-output.txt
+      - name: 樣本內（原本那 10 檔大型幣）
+        run: |
+          echo '### 樣本內：BTC/ETH/SOL/BNB/XRP/DOGE/ADA/AVAX/LINK/LTC' | tee ab-output.txt
+          node scripts/research/ab-test.mjs \
+            --symbols=BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT,ADAUSDT,AVAXUSDT,LINKUSDT,LTCUSDT \
+            --intervals=15m,1h --out=data/research/ab-in-sample.json | tee -a ab-output.txt
+      - name: 樣本外（完全不同的 12 檔 + 多一個週期）
+        run: |
+          echo '' | tee -a ab-output.txt
+          echo '### 樣本外：DOT/NEAR/APT/ARB/OP/SUI/TIA/INJ/FIL/ATOM/UNI/AAVE' | tee -a ab-output.txt
+          node scripts/research/ab-test.mjs \
+            --symbols=DOTUSDT,NEARUSDT,APTUSDT,ARBUSDT,OPUSDT,SUIUSDT,TIAUSDT,INJUSDT,FILUSDT,ATOMUSDT,UNIUSDT,AAVEUSDT \
+            --intervals=15m,1h,4h --out=data/research/ab-out-of-sample.json | tee -a ab-output.txt
       - if: always()
         run: |
           { echo '## 部位管理規則 A/B 實測'; echo '```'; cat ab-output.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
