@@ -95,18 +95,47 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ env.CF_ACCOUNT }}
         run: |
           # 只印 Cloudflare 回傳的成功與否和錯誤訊息，不會印出金鑰。
-          api() { curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/$1"; }
-          say() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let j;try{j=JSON.parse(s)}catch{console.log("回應不是 JSON");process.exit(1)}
-            if(j.success){console.log("✅ "+process.argv[1]);process.exit(0)}
-            console.log("❌ "+process.argv[1]);for(const e of (j.errors||[]))console.log("   ["+e.code+"] "+e.message);process.exit(1)})' "$1"; }
+          ok() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.exit(JSON.parse(s||"{}").success?0:1))' 2>/dev/null; }
+          why() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{for(const e of (JSON.parse(s).errors||[]))console.log("   ["+e.code+"] "+e.message)}catch{console.log("   回應不是 JSON")}})'; }
+          verify() { curl -sS -H "Authorization: Bearer $1" https://api.cloudflare.com/client/v4/user/tokens/verify; }
 
-          FAIL=0
-          api "user/tokens/verify" | say "API Token 有效" || FAIL=1
-          api "accounts/$CLOUDFLARE_ACCOUNT_ID/tokens/permission_groups" >/dev/null 2>&1 || true
-          api "accounts/$CLOUDFLARE_ACCOUNT_ID/storage/kv/namespaces?per_page=1" | say "帳號 ID 正確，而且 Token 讀得到 Workers KV" || FAIL=1
+          # Cloudflare 的 API Token 是 40 個字元。如果貼進來的字串裡夾了別的文字
+          # （例如連同「Token value:」一起複製），就把裡面那段 40 字元的挑出來試試看。
+          CANDIDATES="$CLOUDFLARE_API_TOKEN"
+          EXTRACTED="$(printf '%s' "$CLOUDFLARE_API_TOKEN" | tr -c 'A-Za-z0-9_-' '\n' | awk 'length($0)==40' | head -n1)"
+          if [ -n "$EXTRACTED" ] && [ "$EXTRACTED" != "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::add-mask::$EXTRACTED"
+            CANDIDATES="$CANDIDATES
+          $EXTRACTED"
+          fi
 
-          if [ "$FAIL" = 1 ]; then
-            echo "::error::金鑰驗證沒過（詳見上面）。code 1000/9109 = Token 不對或權限不足；code 7003 = 帳號 ID 不對。Token 需要 Account · Workers Scripts · Edit 和 Account · Workers KV Storage · Edit 兩個權限。"
+          GOOD=""
+          while IFS= read -r CAND; do
+            CAND="$(printf '%s' "$CAND" | tr -d '[:space:]')"
+            [ -z "$CAND" ] && continue
+            if verify "$CAND" | ok; then GOOD="$CAND"; break; fi
+          done <<EOF
+          $CANDIDATES
+          EOF
+
+          if [ -z "$GOOD" ]; then
+            echo "❌ API Token 無效（長度 ${#CLOUDFLARE_API_TOKEN}）"
+            verify "$CLOUDFLARE_API_TOKEN" | why
+            echo "::error::Cloudflare 不認這把 API Token。正常的 Token 是 40 個字元；你這把是 ${#CLOUDFLARE_API_TOKEN} 個字元。請到 https://dash.cloudflare.com/profile/api-tokens 重新 Create Token，並複製建立完成後「只顯示一次」的那一長串（不是列表裡的名稱或 ID）。"
+            exit 1
+          fi
+          if [ "$GOOD" != "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "ℹ️ CLOUDFLARE_API_TOKEN 夾在別的文字裡，已自動擷取出 40 字元的 Token。"
+            echo "CF_TOKEN=$GOOD" >> "$GITHUB_ENV"
+          fi
+          echo "✅ API Token 有效"
+
+          KV="$(curl -sS -H "Authorization: Bearer $GOOD" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/storage/kv/namespaces?per_page=1")"
+          if printf '%s' "$KV" | ok; then
+            echo "✅ 帳號 ID 正確，而且 Token 讀得到 Workers KV"
+          else
+            printf '%s' "$KV" | why
+            echo "::error::Token 有效，但讀不到這個帳號的 Workers KV。code 7003 = 帳號 ID 不對；code 9109/10000 = 這把 Token 缺少 Account · Workers KV Storage · Edit 權限。"
             exit 1
           fi
 
