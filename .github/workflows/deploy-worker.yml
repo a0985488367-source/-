@@ -37,8 +37,9 @@ jobs:
           TOKEN_SECRET: ${{ secrets.CF_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
           TOKEN_VAR: ${{ vars.CF_API_TOKEN || vars.CLOUDFLARE_API_TOKEN }}
           TOKEN_NEW: ${{ secrets.CF_API_TOKEN }}
-          ACCOUNT_SECRET: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          ACCOUNT_VAR: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          # 帳戶 ID 同理：接受一個新名稱，新增一個就好，不用去更新舊的那個。
+          ACCOUNT_SECRET: ${{ secrets.CF_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ACCOUNT_VAR: ${{ vars.CF_ACCOUNT_ID || vars.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           # 這一步只會印出「有沒有設定」「長度幾個字」，永遠不會印出金鑰內容。
           trim() { printf '%s' "$1" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'; }
