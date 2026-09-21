@@ -18,6 +18,7 @@ import { runScan, renderScanTable } from './ui/scanner.js';
 import { fetchMarket, renderMarket } from './ui/market.js';
 import { AlertEngine, createAlert, renderAlerts } from './ui/alerts.js';
 import { renderGlossary } from './ui/glossary.js';
+import { createTradePanel } from './ui/trade.js';
 import { fmtPrice, fmtNum, fmtTime, fmtAgo, debounce, throttle, escapeHtml } from './core/utils.js';
 
 /* ------------------------------------------------------------------ 狀態 */
@@ -80,9 +81,21 @@ const LAYER_PRESETS = {
 const PRESET_ORDER = ['lean', 'standard', 'full'];
 const PRESET_LABEL = { lean: { zh: '精簡', en: 'Lean' }, standard: { zh: '標準', en: 'Standard' }, full: { zh: '完整', en: 'Full' }, custom: { zh: '自訂', en: 'Custom' } };
 
+// 分頁名稱用 data-tab 當索引，不用陣列順序 ——
+// 之前是按順序對應，插入一個新分頁就會讓後面全部錯位。
 const T = {
-  zh: { tabs: ['分析', '多週期', '掃描', '回測', '風險', '警報', '教學', '設定'] },
-  en: { tabs: ['Analysis', 'MTF', 'Scanner', 'Backtest', 'Risk', 'Alerts', 'Learn', 'Settings'] },
+  zh: {
+    tabs: {
+      analysis: '分析', mtf: '多週期', scanner: '掃描', backtest: '回測',
+      risk: '風險', trade: '下單', alerts: '警報', learn: '教學', settings: '設定',
+    },
+  },
+  en: {
+    tabs: {
+      analysis: 'Analysis', mtf: 'MTF', scanner: 'Scanner', backtest: 'Backtest',
+      risk: 'Risk', trade: 'Trade', alerts: 'Alerts', learn: 'Learn', settings: 'Settings',
+    },
+  },
 };
 
 const isZh = () => state.lang === 'zh';
@@ -116,6 +129,7 @@ function init() {
   bindMarket();
   bindBacktest();
   bindRisk();
+  bindTrade();
   bindAlerts();
   bindGlossary();
   bindSettings();
@@ -437,6 +451,8 @@ function bindTabs() {
     $$('.tab-panel').forEach((p) => p.classList.toggle('active', p.dataset.panel === btn.dataset.tab));
     if (btn.dataset.tab === 'learn') renderGloss();
     if (btn.dataset.tab === 'scanner') loadMarket();
+    // 切到下單頁時用最新的計畫重算委託單（數量、停損停利都會跟著變）
+    if (btn.dataset.tab === 'trade') tradePanel?.renderTicket();
   };
 }
 
@@ -1013,6 +1029,21 @@ function bindRisk() {
 
 /* ------------------------------------------------------------------ 警報 */
 
+let tradePanel = null;
+
+function bindTrade() {
+  tradePanel = createTradePanel({
+    lang: () => state.lang,
+    getSymbol: () => state.symbol,
+    getRisk: () => state.risk,
+    getPlan: () => {
+      const s = analysis?.setup;
+      return !s || s.none ? null : s;
+    },
+  });
+  tradePanel.render();
+}
+
 function bindAlerts() {
   alerts.requestPermission();
   const refresh = () => {
@@ -1126,7 +1157,8 @@ function syncSettingLabels() {
 
 function applyLang() {
   const tabs = T[state.lang].tabs;
-  $$('#tabs button').forEach((b, i) => (b.textContent = tabs[i]));
+  tradePanel?.render();
+  $$('#tabs button').forEach((b) => { const label = tabs[b.dataset.tab]; if (label) b.textContent = label; });
   $('#symbolSearch').placeholder = isZh() ? '搜尋幣種… (BTC, ETH, SOL)' : 'Search symbol… (BTC, ETH, SOL)';
   $('#glossSearch').placeholder = isZh() ? '搜尋術語… OB / FVG / CHoCH' : 'Search terms… OB / FVG / CHoCH';
   $('#scanBtn').textContent = isZh() ? '開始掃描' : 'Run scan';

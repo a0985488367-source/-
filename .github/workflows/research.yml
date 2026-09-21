@@ -1,0 +1,61 @@
+# 部位管理規則 A/B 實測
+#
+# 這個沙盒環境連不到交易所 API，但 Actions runner 連得到，
+# 所以研究用的回測放在這裡跑，結果直接印在 log 並存進 data/research/。
+name: 策略研究（A/B 實測）
+
+on:
+  workflow_dispatch:
+    inputs:
+      symbols:
+        description: '要測的幣種（逗號分隔）'
+        default: 'BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT,ADAUSDT,AVAXUSDT,LINKUSDT,LTCUSDT,DOTUSDT,NEARUSDT,APTUSDT,ARBUSDT,OPUSDT'
+      intervals:
+        description: '週期（逗號分隔）'
+        default: '15m,1h'
+      min_score:
+        description: '最低分數'
+        default: '55'
+      commit:
+        description: '是否把結果存回倉庫'
+        default: 'true'
+
+permissions:
+  contents: write
+
+jobs:
+  ab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 跑 A/B 實測
+        run: |
+          node scripts/research/ab-test.mjs \
+            --symbols='${{ inputs.symbols }}' \
+            --intervals='${{ inputs.intervals }}' \
+            --min-score='${{ inputs.min_score }}' \
+            | tee ab-output.txt
+
+      - name: 寫進步驟摘要
+        if: always()
+        run: |
+          {
+            echo '## 部位管理規則 A/B 實測'
+            echo '```'
+            cat ab-output.txt || echo '(沒有輸出)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 存回倉庫
+        if: ${{ inputs.commit == 'true' }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add data/research/ || true
+          git diff --cached --quiet || git commit -m 'chore(research): 更新 A/B 實測結果 [skip ci]'
+          git push

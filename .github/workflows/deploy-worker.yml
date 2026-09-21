@@ -31,22 +31,120 @@ jobs:
       - name: 檢查 Cloudflare 金鑰
         id: check
         env:
-          TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # 兩個都讀：secret 讀不到時退回 variable（很多人會誤填在 Variables 分頁）
+          TOKEN_SECRET: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          TOKEN_VAR: ${{ vars.CLOUDFLARE_API_TOKEN }}
+          ACCOUNT_SECRET: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ACCOUNT_VAR: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          if [ -z "$TOKEN" ] || [ -z "$ACCOUNT" ]; then
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::尚未設定 CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID，略過部署。"
-          else
+          # 這一步只會印出「有沒有設定」「長度幾個字」，永遠不會印出金鑰內容。
+          trim() { printf '%s' "$1" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'; }
+
+          TOKEN="$(trim "${TOKEN_SECRET:-$TOKEN_VAR}")"
+          ACCOUNT="$(trim "${ACCOUNT_SECRET:-$ACCOUNT_VAR}")"
+
+          [ -n "$TOKEN" ] && echo "::add-mask::$TOKEN"
+          [ -n "$ACCOUNT" ] && echo "::add-mask::$ACCOUNT"
+
+          where() { [ -n "$1" ] && echo "Secrets 分頁" || { [ -n "$2" ] && echo "Variables 分頁" || echo "找不到"; }; }
+          echo "=== 金鑰檢查（不會顯示內容）==="
+          echo "CLOUDFLARE_API_TOKEN ：來源=$(where "$TOKEN_SECRET" "$TOKEN_VAR")，長度=${#TOKEN}"
+          echo "CLOUDFLARE_ACCOUNT_ID：來源=$(where "$ACCOUNT_SECRET" "$ACCOUNT_VAR")，長度=${#ACCOUNT}"
+
+          OK=true
+          if [ -z "$TOKEN" ]; then
+            echo "::error::讀不到 CLOUDFLARE_API_TOKEN。請確認在 Settings → Secrets and variables → **Actions** → Secrets 分頁新增，名稱完全等於 CLOUDFLARE_API_TOKEN（全大寫、底線、前後不能有空白）。"
+            OK=false
+          fi
+          if [ -z "$ACCOUNT" ]; then
+            echo "::error::讀不到 CLOUDFLARE_ACCOUNT_ID。同上，名稱完全等於 CLOUDFLARE_ACCOUNT_ID。"
+            OK=false
+          fi
+
+          # 常見貼錯：整串網址貼進來了。Account ID 一定是 32 位十六進位，
+          # 所以直接從貼上的內容裡把它挑出來（例如 https://dash.cloudflare.com/<32碼>/home）。
+          if [ -n "$ACCOUNT" ] && ! printf '%s' "$ACCOUNT" | grep -qE '^[0-9a-fA-F]{32}$'; then
+            PICKED="$(printf '%s' "$ACCOUNT" | grep -oE '[0-9a-fA-F]{32}' | head -n1)"
+            if [ -n "$PICKED" ]; then
+              echo "::add-mask::$PICKED"
+              echo "ℹ️ CLOUDFLARE_ACCOUNT_ID 夾在別的文字裡（長度 ${#ACCOUNT}），已自動擷取出 32 碼的帳號 ID。"
+              ACCOUNT="$PICKED"
+            else
+              echo "::error::CLOUDFLARE_ACCOUNT_ID 裡找不到 32 碼的帳號 ID。請到 https://dash.cloudflare.com 登入後，複製網址列 dash.cloudflare.com/ 後面那一段英數字。"
+              OK=false
+            fi
+          fi
+          # API Token 常見貼錯：前面多了 Bearer、或整段被引號包住
+          TOKEN="$(printf '%s' "$TOKEN" | sed -e 's/^[Bb]earer[[:space:]]*//' -e 's/^["'"'"']//' -e 's/["'"'"']$//')"
+          [ -n "$TOKEN" ] && echo "::add-mask::$TOKEN"
+
+          if [ "$OK" = true ]; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "CF_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+            echo "CF_ACCOUNT=$ACCOUNT" >> "$GITHUB_ENV"
+            echo "✅ 兩個金鑰都讀到了，開始部署。"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "❌ 金鑰不齊，略過部署（不算失敗，補好再跑一次就好）。"
+          fi
+
+      - name: 驗證 Cloudflare 金鑰能不能用
+        if: ${{ steps.check.outputs.ready == 'true' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ env.CF_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ env.CF_ACCOUNT }}
+        run: |
+          # 只印 Cloudflare 回傳的成功與否和錯誤訊息，不會印出金鑰。
+          ok() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.exit(JSON.parse(s||"{}").success?0:1))' 2>/dev/null; }
+          why() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{for(const e of (JSON.parse(s).errors||[]))console.log("   ["+e.code+"] "+e.message)}catch{console.log("   回應不是 JSON")}})'; }
+          verify() { curl -sS -H "Authorization: Bearer $1" https://api.cloudflare.com/client/v4/user/tokens/verify; }
+
+          # Cloudflare 的 API Token 是 40 個字元。如果貼進來的字串裡夾了別的文字
+          # （例如連同「Token value:」一起複製），就把裡面那段 40 字元的挑出來試試看。
+          CANDIDATES="$CLOUDFLARE_API_TOKEN"
+          EXTRACTED="$(printf '%s' "$CLOUDFLARE_API_TOKEN" | tr -c 'A-Za-z0-9_-' '\n' | awk 'length($0)==40' | head -n1)"
+          if [ -n "$EXTRACTED" ] && [ "$EXTRACTED" != "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::add-mask::$EXTRACTED"
+            CANDIDATES="$CANDIDATES
+          $EXTRACTED"
+          fi
+
+          GOOD=""
+          while IFS= read -r CAND; do
+            CAND="$(printf '%s' "$CAND" | tr -d '[:space:]')"
+            [ -z "$CAND" ] && continue
+            if verify "$CAND" | ok; then GOOD="$CAND"; break; fi
+          done <<EOF
+          $CANDIDATES
+          EOF
+
+          if [ -z "$GOOD" ]; then
+            echo "❌ API Token 無效（長度 ${#CLOUDFLARE_API_TOKEN}）"
+            verify "$CLOUDFLARE_API_TOKEN" | why
+            echo "::error::Cloudflare 不認這把 API Token。正常的 Token 是 40 個字元；你這把是 ${#CLOUDFLARE_API_TOKEN} 個字元。請到 https://dash.cloudflare.com/profile/api-tokens 重新 Create Token，並複製建立完成後「只顯示一次」的那一長串（不是列表裡的名稱或 ID）。"
+            exit 1
+          fi
+          if [ "$GOOD" != "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "ℹ️ CLOUDFLARE_API_TOKEN 夾在別的文字裡，已自動擷取出 40 字元的 Token。"
+            echo "CF_TOKEN=$GOOD" >> "$GITHUB_ENV"
+          fi
+          echo "✅ API Token 有效"
+
+          KV="$(curl -sS -H "Authorization: Bearer $GOOD" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/storage/kv/namespaces?per_page=1")"
+          if printf '%s' "$KV" | ok; then
+            echo "✅ 帳號 ID 正確，而且 Token 讀得到 Workers KV"
+          else
+            printf '%s' "$KV" | why
+            echo "::error::Token 有效，但讀不到這個帳號的 Workers KV。code 7003 = 帳號 ID 不對；code 9109/10000 = 這把 Token 缺少 Account · Workers KV Storage · Edit 權限。"
+            exit 1
           fi
 
       - name: 建立 KV 命名空間（若不存在）並部署
         if: ${{ steps.check.outputs.ready == 'true' }}
         working-directory: worker
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ env.CF_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ env.CF_ACCOUNT }}
         run: |
           set -e
           find_id() {
@@ -71,8 +169,8 @@ jobs:
         if: ${{ steps.check.outputs.ready == 'true' }}
         working-directory: worker
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ env.CF_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ env.CF_ACCOUNT }}
           WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL || secrets.SMC }}
         run: |
           if [ -z "$WEBHOOK" ]; then

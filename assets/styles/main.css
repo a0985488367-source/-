@@ -196,6 +196,10 @@ sup { font-size: 8px; color: var(--accent); margin-left: 2px; }
 .btn--primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
 .btn--primary:hover { filter: brightness(1.1); color: #fff; }
 .btn.on { border-color: var(--up); color: var(--up); }
+/* 實盤下單用：紅色是刻意的，讓人在按下去之前多看一眼 */
+.btn--danger { background: var(--down); border-color: var(--down); color: #fff; font-weight: 600; }
+.btn--danger:hover { filter: brightness(1.1); color: #fff; }
+.btn:disabled { opacity: .55; pointer-events: none; }
 .btn-row { display: flex; gap: 6px; margin: 8px 0; }
 
 .seg { display: flex; background: var(--bg-elev2); border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }

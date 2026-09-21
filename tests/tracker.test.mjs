@@ -11,6 +11,12 @@ const bars = (spec) =>
     open: (h + l) / 2, high: h, low: l, close: (h + l) / 2, volume: 1,
   }));
 
+/** 全部規則關閉的基準設定：每個測試只打開自己要驗的那一條，互不干擾 */
+const OFF = {
+  scalpR: 0, scalpFraction: 0, breakevenAtR: 0, breakevenOffsetR: 0,
+  scratchR: 0, trailFromR: 0, trailGapR: 0,
+};
+
 const longTrade = (over = {}) => ({
   id: 't1', symbol: 'BTCUSDT', interval: '15m', dir: 'long',
   entry: 100, stop: 95,
@@ -40,11 +46,12 @@ test('限價單：等太久沒成交 → 逾時作廢', () => {
   assert.equal(t.events.at(-1).reason, 'timeout');
 });
 
-test('市價單打到全部目標 → 以最後一個目標的 R 結算', () => {
+test('市價單打到全部目標 → 以整筆部位的淨 R 結算（含分批）', () => {
   const t = advanceTrade(longTrade({ status: 'active', filledTime: T0 }), bars([[106, 99], [116, 105]]));
   assert.equal(t.status, 'target');
   assert.deepEqual(t.hitTargets, ['TP1', 'TP2']);
-  assert.equal(t.r, 3);
+  // 一半在 TP1(+1R) 出場、一半抱到 TP2(+3R) → 0.5×1 + 0.5×3 = 2R
+  assert.equal(t.r, 2);
 });
 
 test('直接停損 → -1R', () => {
@@ -53,13 +60,15 @@ test('直接停損 → -1R', () => {
   assert.equal(t.r, -1);
 });
 
-test('打到 TP1 後停損會移到成本價，之後回落不會變成 -1R', () => {
-  const t1 = advanceTrade(longTrade({ status: 'active', filledTime: T0 }), bars([[106, 99]]));
+test('breakevenAtR：獲利達門檻後停損移到成本價，之後回落不會變成 -1R', () => {
+  const cfg = { ...OFF, breakevenAtR: 1 };
+  const t1 = advanceTrade(longTrade({ status: 'active', filledTime: T0 }), bars([[106, 99]]), cfg);
   assert.deepEqual(t1.hitTargets, ['TP1']);
   assert.equal(t1.stop, 100, '停損應移到進場價');
-  const t2 = advanceTrade(t1, bars([[106, 99], [104, 96]]));
+  const t2 = advanceTrade(t1, bars([[106, 99], [104, 96]]), cfg);
   assert.equal(t2.status, 'stop');
-  assert.ok(t2.r > 0, '已保本又打到過 TP1，結算不應為負');
+  assert.equal(t2.exitReason, 'breakeven');
+  assert.ok(t2.r > 0, '已保本又在 TP1 出掉一半，結算不應為負');
 });
 
 test('同一根同時觸及停損與目標 → 保守算停損', () => {
@@ -113,9 +122,91 @@ test('tradeFromSetup 依進場方式決定初始狀態', () => {
   const t = tradeFromSetup({ id: 'x', symbol: 'BTCUSDT', interval: '15m', setup, candleTime: T0 });
   assert.equal(t.status, 'active');
   assert.equal(t.filledTime, T0);
-  assert.equal(t.targets[0].label, '流動性');
+  // 預設會在最前面插入保本鏢，原本的流動性目標往後移一格
+  assert.equal(t.targets[0].name, 'TP0');
+  assert.equal(t.targets.at(-1).label, '流動性');
 
   const t2 = tradeFromSetup({ id: 'y', symbol: 'BTCUSDT', interval: '15m', setup: { ...setup, entryType: 'limit' }, candleTime: T0 });
   assert.equal(t2.status, 'pending');
   assert.equal(t2.filledTime, null);
+});
+
+/* ---------------------------------------------- 新的部位管理規則 */
+
+test('保本鏢：先在 0.5R 出掉一部分，之後回到成本價仍是正報酬（原本會是 -1R）', () => {
+  const cfg = { ...OFF, scalpR: 0.5, scalpFraction: 0.34, breakevenAtR: 0.5 };
+  const setup = {
+    dir: 'long', entry: 100, stop: 95, entryType: 'market',
+    targets: [{ name: 'TP1', price: 110, rr: 2 }, { name: 'TP2', price: 120, rr: 4 }],
+    grade: 'A', score: 80,
+  };
+  const t0 = tradeFromSetup({ id: 'z', symbol: 'BTCUSDT', interval: '15m', setup, candleTime: T0, management: cfg });
+  assert.equal(t0.targets[0].name, 'TP0', '階梯最前面應該是保本鏢');
+  assert.equal(t0.targets[0].price, 102.5, '0.5R = 進場價 + 0.5 × 風險');
+
+  // 先碰到 102.5（+0.5R），再跌回進場價
+  const t = advanceTrade(t0, bars([[103, 99], [101, 99]]), cfg);
+  assert.equal(t.status, 'stop');
+  assert.equal(t.exitReason, 'breakeven');
+  assert.ok(t.r > 0, `原本應該是 -1R，現在是 ${t.r.toFixed(3)}R`);
+});
+
+test('保本鏢：TP1 本來就夠近時不會重複插入', () => {
+  const setup = {
+    dir: 'long', entry: 100, stop: 95, entryType: 'market',
+    targets: [{ name: 'TP1', price: 102, rr: 0.4 }], grade: 'A', score: 70,
+  };
+  const t = tradeFromSetup({ id: 'q', symbol: 'ETHUSDT', interval: '1h', setup, candleTime: T0, management: { ...OFF, scalpR: 0.5, scalpFraction: 0.34 } });
+  assert.equal(t.targets.length, 1);
+  assert.equal(t.targets[0].name, 'TP1');
+});
+
+test('認賠出場：逆行到 scratchR 就走，虧損小於一個完整停損', () => {
+  const cfg = { ...OFF, scratchR: 0.75 };
+  const t = advanceTrade(longTrade({ status: 'active', filledTime: T0 }), bars([[101, 96]]), cfg);
+  assert.equal(t.status, 'stop');
+  assert.equal(t.exitReason, 'scratch');
+  assert.ok(Math.abs(t.r + 0.75) < 1e-9, `應為 -0.75R，實得 ${t.r}`);
+});
+
+test('認賠出場：已經分批獲利過就不再觸發（避免把賺錢單掃掉）', () => {
+  const cfg = { ...OFF, scratchR: 0.75, scalpR: 0.5, scalpFraction: 0.34 };
+  const t = advanceTrade(
+    longTrade({ status: 'active', filledTime: T0, targets: [{ name: 'TP0', price: 102.5, rr: 0.5, fraction: 0.34 }, { name: 'TP1', price: 115, rr: 3, fraction: 0 }] }),
+    bars([[103, 99], [101, 96.5]]),
+    cfg,
+  );
+  assert.deepEqual(t.hitTargets, ['TP0']);
+  assert.notEqual(t.exitReason, 'scratch');
+});
+
+test('追蹤停損：獲利回吐超過 trailGapR 就出場，且鎖住利潤', () => {
+  const cfg = { ...OFF, trailFromR: 1, trailGapR: 0.5 };
+  const t = advanceTrade(
+    longTrade({ status: 'active', filledTime: T0, targets: [{ name: 'TP1', price: 200, rr: 20 }] }),
+    bars([[110, 99], [109, 106]]),
+    cfg,
+  );
+  assert.equal(t.status, 'stop');
+  assert.equal(t.exitReason, 'trail');
+  assert.ok(t.r > 1, `應鎖住 1R 以上，實得 ${t.r.toFixed(2)}R`);
+});
+
+test('R 的刻度以原始停損為準：停損移動後 R 不會被重新縮放', () => {
+  const cfg = { ...OFF, breakevenAtR: 1 };
+  const t1 = advanceTrade(longTrade({ status: 'active', filledTime: T0, targets: [{ name: 'TP1', price: 115, rr: 3 }] }), bars([[106, 99]]), cfg);
+  assert.equal(t1.stop, 100);
+  const t2 = advanceTrade(t1, bars([[106, 99], [116, 105]]), cfg);
+  assert.equal(t2.r, 3, '仍以進場價到原始停損（5 點）為 1R');
+});
+
+test('未成交就作廢的單不列入勝率；成交後逾時的單要列入', () => {
+  const s = computeStats([
+    { status: 'expired', exitReason: 'timeout', r: 0, filledTime: null, grade: 'A', symbol: 'A', dir: 'long' },
+    { status: 'expired', exitReason: 'maxHold', r: -0.4, filledTime: T0, grade: 'A', symbol: 'A', dir: 'long' },
+    { status: 'target', r: 2, filledTime: T0, grade: 'A', symbol: 'A', dir: 'long' },
+  ]);
+  assert.equal(s.count, 2, '成交後逾時的那筆要算進交易數');
+  assert.equal(s.expired, 1);
+  assert.equal(s.wins, 1);
 });

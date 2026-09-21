@@ -19,7 +19,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { PROVIDERS } from '../src/data/providers.js';
 import { analyze } from '../src/smc/engine.js';
 import { aggregateBias, tfSuite } from '../src/smc/mtf.js';
-import { advanceTrade, computeStats, tradeFromSetup } from './lib/tracker.mjs';
+import { advanceTrade, computeStats, tradeFromSetup, DEFAULT_MANAGEMENT } from './lib/tracker.mjs';
 import { COLORS, price, fmtR, buildOutcomeEmbed } from './lib/outcome-embed.mjs';
 import { renderJournalMarkdown } from './lib/journal-markdown.mjs';
 
@@ -61,7 +61,7 @@ async function loadConfig() {
     minScore: cfg.minScore ?? 68,
     minRR: cfg.minRR ?? 2,
     notify: { plan: true, poiTouch: true, choch: false, sweep: false, outcomes: true, ...(cfg.notify ?? {}) },
-    tracking: { enabled: true, entryWindowBars: 24, maxHoldBars: 200, ...(cfg.tracking ?? {}) },
+    tracking: { enabled: true, ...DEFAULT_MANAGEMENT, ...(cfg.tracking ?? {}) },
     market: { notify: true, minScore: 72, maxPerRun: 3, maxAgeMin: 120, ...(cfg.market ?? {}) },
     timezone: cfg.timezone ?? 'Asia/Taipei',
     freshBars: cfg.freshBars ?? 2,
@@ -659,13 +659,14 @@ async function main() {
         const r = sig.row;
         if (cfg.tracking.enabled && !hasOpenTrade(r.symbol, r.interval, r.dir)) {
           journal.open.push({
-            id: sig.id, symbol: r.symbol, interval: r.interval, dir: r.dir,
-            entry: r.entry, stop: r.stop,
-            targets: r.targets.map((t) => ({ name: t.name, price: t.price, rr: t.rr, label: t.label })),
-            grade: r.grade, score: r.score, poiType: r.poiType,
-            status: 'active', filledTime: r.updatedAt, openTime: r.updatedAt,
-            lastCheckedTime: r.updatedAt, barsSinceOpen: 0, barsSinceFill: 0,
-            hitTargets: [], maxFavorableR: 0, maxAdverseR: 0, source: 'market',
+            ...tradeFromSetup({
+              id: sig.id, symbol: r.symbol, interval: r.interval,
+              setup: { dir: r.dir, entry: r.entry, stop: r.stop, targets: r.targets, entryType: 'market' },
+              candleTime: r.updatedAt, grade: r.grade, score: r.score,
+              management: cfg.tracking,
+            }),
+            poiType: r.poiType,
+            source: 'market',
           });
           log(`    ↳ 已加入模擬盤追蹤`);
         }
@@ -695,6 +696,7 @@ async function main() {
             interval: sig.interval,
             setup: sig.setup,
             candleTime: sig.analysis.candles.at(-1).time,
+            management: cfg.tracking,
           }));
           log(`    ↳ 已加入模擬盤追蹤`);
         }
