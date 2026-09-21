@@ -138,7 +138,41 @@ jobs:
             echo "✅ 帳號 ID 正確，而且 Token 讀得到 Workers KV"
           else
             printf '%s' "$KV" | why
-            echo "::error::Token 有效，但讀不到這個帳號的 Workers KV。code 7003 = 帳號 ID 不對；code 9109/10000 = 這把 Token 缺少 Account · Workers KV Storage · Edit 權限。"
+            echo "::warning::讀不到這個帳號的 Workers KV，正在確認這把 Token 實際能看到哪些帳戶……"
+
+            # 直接問 Cloudflare「這把 Token 能看到哪些帳戶」，
+            # 不用再靠螢幕截圖去猜帳戶資源／權限到底哪裡沒對上。
+            ACCOUNTS="$(curl -sS -H "Authorization: Bearer $GOOD" "https://api.cloudflare.com/client/v4/accounts?per_page=50")"
+            node -e '
+              let s = "";
+              process.stdin.on("data", d => s += d).on("end", () => {
+                let j;
+                try { j = JSON.parse(s); } catch { console.log("   （回應不是 JSON，可能是網路問題）"); return; }
+                const configured = process.argv[1];
+                if (!j.success) {
+                  console.log("   Token 連「列出帳戶」都做不到 —— 這把 Token 可能完全沒有任何帳戶層級的權限。");
+                  for (const e of j.errors || []) console.log("   [" + e.code + "] " + e.message);
+                  return;
+                }
+                const list = j.result || [];
+                if (!list.length) {
+                  console.log("   這把 Token 看不到任何帳戶。多半是「帳戶資源」那格選成了空的，或勾錯了帳戶。");
+                  return;
+                }
+                const ids = list.map((a) => a.id);
+                if (ids.includes(configured)) {
+                  console.log("   奇怪：Token 看得到這個帳戶（" + list.find(a=>a.id===configured).name + "），但剛才讀 KV 還是被拒絕。");
+                  console.log("   這種情況通常是權限清單裡雖然有「Workers KV Storage」，但等級是「讀取」而不是「編輯」，或者剛編輯完權限後忘記按最後的「儲存／Save」。");
+                } else {
+                  console.log("   問題找到了：GitHub 上設定的帳戶 ID 跟這把 Token 能看到的帳戶對不起來。");
+                  console.log("   這把 Token 實際看得到的帳戶：");
+                  for (const a of list) console.log("     - " + a.name);
+                  console.log("   請到 Cloudflare 主控台首頁，網址列 dash.cloudflare.com/ 後面那一段，才是要填進 CLOUDFLARE_ACCOUNT_ID 的值。");
+                }
+              });
+            ' "$CLOUDFLARE_ACCOUNT_ID" <<< "$ACCOUNTS"
+
+            echo "::error::Token 有效，但讀不到這個帳號的 Workers KV。詳細原因見上方輸出。"
             exit 1
           fi
 
