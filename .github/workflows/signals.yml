@@ -25,7 +25,13 @@ permissions:
   contents: write   # 需要把模擬盤帳本寫回倉庫
 
 concurrency:
-  group: smc-signals
+  # 用分支區分排隊群組：舊寫法所有分支共用同一個 group，在功能分支上手動
+  # 跑測試（workflow_dispatch）時，會頂掉還在排隊、尚未開始的 main 排程
+  # 觸發 —— GitHub 的規則是「還沒開始執行」的那一個會被新進來的取代，
+  # 不是照順序排隊。這正是 market.json 曾經連續好幾小時沒更新的原因：
+  # 同一時段在功能分支上跑的測試（A/B 驗證、部署測試）把 main 每 15
+  # 分鐘一次的排程都頂掉了。分開群組後，各分支互不影響。
+  group: smc-signals-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
