@@ -17,7 +17,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { PROVIDERS } from '../src/data/providers.js';
 import { analyze } from '../src/smc/engine.js';
 import { aggregateBias, tfSuite } from '../src/smc/mtf.js';
-import { fetchDerivatives } from '../src/data/derivatives.js';
+import { DERIV_PROVIDERS, fetchAllOpenInterest, snapshotChange } from '../src/data/derivatives.js';
 import { derivativesVerdict, oiChangePct } from '../src/smc/derivatives.js';
 
 const ARGS = process.argv.slice(2);
@@ -38,7 +38,7 @@ const PROVIDER_IDS = opt('providers', 'binance,okx,bybit').split(',');
 const MIN_SCORE = Number(opt('min-score', 50));
 const DETAIL_TOP = Number(opt('detail', 30));
 /** 要補抓資金費率／未平倉量的檔數（只針對進榜的） */
-const DERIV_TOP = Number(opt('deriv', 25));
+const DERIV_TOP = Number(opt('deriv', 80));
 
 /**
  * 排除穩定幣對與槓桿代幣：這些的 SMC 結構沒有參考價值。
@@ -142,20 +142,45 @@ function toRow(symbol, a, provider, quoteVolume) {
 /**
  * 補上資金費率與未平倉量。
  *
- * 這是加分資訊，任何一檔失敗都只是那一檔沒有這段資料，
- * 絕不能讓整個市場掃描跟著失敗。併發限制在 4，避免被交易所限流。
+ * 未平倉量不走交易所的「歷史」端點 —— 實測 OKX 的 rubik 只涵蓋主流幣，
+ * 13 檔進榜幣種裡只有 2 檔拿得到序列，等於這半邊形同虛設。
+ * 改成：一次抓回全市場的「目前未平倉量」，再跟上一次掃描存下來的數值相比。
+ * 涵蓋率從 2/13 變成所有 OKX 永續都有。
+ *
+ * 這是加分資訊，任何一步失敗都只是少了這段資料，
+ * 絕不能讓整個市場掃描跟著失敗。
  */
-async function attachDerivatives(list) {
+async function attachDerivatives(list, prevRows) {
   if (!list.length) return;
+
+  // 上一次掃描的未平倉量快照，用來算變化率
+  const prevOi = new Map();
+  for (const r of prevRows ?? []) {
+    if (r?.deriv?.oiValue > 0 && r.deriv.oiAt) prevOi.set(r.symbol, { value: r.deriv.oiValue, time: r.deriv.oiAt });
+  }
+
+  let oiNow = new Map();
+  try {
+    oiNow = await fetchAllOpenInterest();
+    log(`  未平倉量快照：全市場 ${oiNow.size} 個永續合約`);
+  } catch (e) {
+    log(`  ⚠️ 未平倉量快照取得失敗（${e.message}），這次只會有資金費率`);
+  }
+
   let done = 0;
   let ok = 0;
+  let withOi = 0;
   const queue = [...list];
   const worker = async () => {
     while (queue.length) {
       const r = queue.shift();
+      done++;
       try {
-        const raw = await fetchDerivatives(r.symbol);
-        const oiPct = oiChangePct(raw.oiSeries);
+        // 只打 OKX：Binance 永續與 Bybit 都擋美國 IP，而這支跑在 GitHub 的機器上
+        const raw = await DERIV_PROVIDERS.okx.fetch(r.symbol);
+        const now = oiNow.get(r.symbol) ?? null;
+        const change = snapshotChange(now, prevOi.get(r.symbol) ?? null);
+        const oiPct = change?.pct ?? null;
         const v = derivativesVerdict({
           dir: r.dir,
           funding: raw.fundingRate,
@@ -169,18 +194,30 @@ async function attachDerivatives(list) {
           fundingSide: v.funding.side,
           fundingAnnualPct: r2(v.fundingAnnualPct),
           oiChangePct: r2(oiPct),
+          oiHours: change ? r2(change.hours) : null,
+          // 存下這次的絕對值，下一次掃描才算得出變化率
+          oiValue: now?.value ?? null,
+          oiAt: now?.time ?? null,
           regime: v.regime.key,
           regimeZh: v.regime.zh,
           score: v.score,
           note: v.notes[0] ?? null,
         };
         ok++;
+        if (Number.isFinite(oiPct)) withOi++;
       } catch { /* 這一檔沒有永續合約或來源暫時掛掉，略過 */ }
-      done++;
     }
   };
   await Promise.all(Array.from({ length: Math.min(4, list.length) }, worker));
-  log(`  衍生品資料：${ok}/${done} 檔取得資金費率與未平倉量`);
+  log(`  衍生品資料：${ok}/${done} 檔有資金費率，其中 ${withOi} 檔算得出未平倉量變化`);
+  if (ok && !withOi) log('  （第一次掃描沒有基準可比，下一次就會有未平倉量變化）');
+}
+
+/** 讀上一次掃描的結果，只為了拿未平倉量的基準值 */
+async function previousRows() {
+  try {
+    return JSON.parse(await readFile(OUT_JSON, 'utf8')).rows ?? [];
+  } catch { return []; }
 }
 
 async function main() {
@@ -244,7 +281,7 @@ async function main() {
 
   // 只對真的會出現在清單上的幣抓資金費率與未平倉量。
   // 全部 120 檔都抓沒有意義（多數不會進榜），而且會拖慢整個掃描。
-  await attachDerivatives([...ready, ...waiting].slice(0, DERIV_TOP));
+  await attachDerivatives([...ready, ...waiting].slice(0, DERIV_TOP), await previousRows());
 
   const out = {
     generatedAt: new Date().toISOString(),
