@@ -196,6 +196,41 @@ jobs:
             exit 1
           fi
 
+      - name: 查 Cloudflare 官方 API，找出部署被拒絕的真正原因
+        if: ${{ steps.check.outputs.ready == 'true' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ env.CF_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ env.CF_ACCOUNT }}
+        run: |
+          # 這一步只讀不寫，用來在真正部署前先排除幾個 Cloudflare 帳號常見的
+          # 「權限看起來都對，但還是被拒絕」的原因，不再靠使用者截圖來回猜。
+          api() { curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/$1"; }
+          ok() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.exit(JSON.parse(s||"{}").success?0:1))' 2>/dev/null; }
+          why() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{for(const e of (JSON.parse(s).errors||[]))console.log("   ["+e.code+"] "+e.message)}catch{console.log("   回應不是 JSON")}})'; }
+
+          # 原因一：這個帳戶從來沒有在 Cloudflare 網頁上開通過 Workers、
+          # 也沒有設定 workers.dev 子網域。沒有這個子網域，API 部署 Worker
+          # 常常會被拒絕，即使 Token 權限完全正確。
+          SUB="$(api "accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain")"
+          if printf '%s' "$SUB" | ok; then
+            HOST="$(printf '%s' "$SUB" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).result?.subdomain||"（空）"))')"
+            echo "✅ 這個帳戶已經設定 workers.dev 子網域：$HOST"
+          else
+            echo "❌ 讀不到 workers.dev 子網域設定"
+            printf '%s' "$SUB" | why
+            echo "::warning::這個帳戶可能從來沒有在 Cloudflare 網頁上開通過 Workers。請登入 https://dash.cloudflare.com → 左側選單 Workers & Pages，如果它要你先選一個 workers.dev 子網域名稱（例如 xxx.workers.dev），代表就是這個原因——選好、確認之後再回來部署。"
+          fi
+
+          # 原因二：直接用 Token 呼叫「列出 Workers 指令碼」，
+          # 確認 Workers Scripts 權限本身在這個帳戶下真的生效。
+          LIST="$(api "accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts")"
+          if printf '%s' "$LIST" | ok; then
+            echo "✅ Token 讀得到這個帳戶的 Workers 指令碼清單（權限本身沒問題）"
+          else
+            echo "❌ 連「列出 Workers 指令碼」都被拒絕"
+            printf '%s' "$LIST" | why
+          fi
+
       - name: 建立 KV 命名空間（若不存在）並部署
         if: ${{ steps.check.outputs.ready == 'true' }}
         working-directory: worker
