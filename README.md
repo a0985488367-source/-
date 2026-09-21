@@ -257,6 +257,21 @@ Worker 只做一件事：讀最新的 `market.json`，比對現價，
    > 名稱必須一字不差（全大寫、底線）。
 5. 到 **Actions → 部署 Cloudflare Worker → Run workflow** 執行一次
 
+#### 如果部署一直卡在「No access to the specified resource」
+
+某些帳戶的 Scoped Token 沒辦法寫入 Workers 指令碼，即使權限勾得完全正確
+（Cloudflare 那邊沒給出明確原因）。這時改用 **Global API Key**：
+
+1. https://dash.cloudflare.com/profile/api-tokens 頁面最下方「API 金鑰」
+   區塊，Global API Key 旁邊按 **檢視**，輸入密碼後複製
+2. 到 GitHub 加兩個 secret：
+   - `CF_EMAIL`：你登入 Cloudflare 的 email
+   - `CF_GLOBAL_API_KEY`：剛複製的那串
+3. 重新執行部署，這一步會自動改用這組驗證
+
+Global API Key 等同帳號本人登入、沒有範圍限制，安全性比 Scoped Token
+低，建議部署成功後就把它從 GitHub Secrets 刪掉（不影響已部署的 Worker）。
+
 部署流程會自動建立 KV 命名空間、部署 Worker，並把既有的 Discord webhook
 同步過去 —— 不需要在 Cloudflare 那邊再貼一次。
 
