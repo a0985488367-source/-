@@ -247,6 +247,8 @@ Worker 只做一件事：讀最新的 `market.json`，比對現價，
 3. 回主控台首頁，右側複製 **Account ID**
 4. 到 GitHub Repo → **Settings → Secrets and variables → Actions**，
    在 **Secrets** 分頁（不是隔壁的 Variables 分頁）按 **New repository secret**，新增兩個：
+   （Token 用 `CF_API_TOKEN` 或 `CLOUDFLARE_API_TOKEN` 都可以，兩個名稱都接受。
+   如果舊的那個填錯了，直接新增 `CF_API_TOKEN` 就會蓋過去，不必去更新舊的。）
    - `CLOUDFLARE_API_TOKEN`
    - `CLOUDFLARE_ACCOUNT_ID`
 
