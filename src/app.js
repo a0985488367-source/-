@@ -11,6 +11,8 @@ import { PROVIDERS } from './data/providers.js';
 import { analyze } from './smc/engine.js';
 import { positionSize } from './smc/setups.js';
 import { aggregateBias, narrative, TF_WEIGHT } from './smc/mtf.js';
+import { fetchDerivatives } from './data/derivatives.js';
+import { derivativesVerdict, oiChangePct, fundingCountdown } from './smc/derivatives.js';
 import { backtest } from './smc/backtest.js';
 import { Chart } from './chart/chart.js';
 import * as P from './ui/panels.js';
@@ -30,6 +32,7 @@ const alerts = new AlertEngine(state);
 let chart = null;
 let candles = [];
 let analysis = null;
+let derivatives = null;
 let ticker = null;
 let mtfRows = [];
 let mtfAgg = null;
@@ -538,6 +541,8 @@ async function loadData(force = false) {
     if (state.live && !replay.active) startStream();
     loadTicker();
     loadMtf();
+    derivatives = null;      // 換幣種時先清掉舊的，免得短暫顯示上一個幣的數字
+    loadDerivatives();
   } catch (e) {
     toast((isZh() ? '資料載入失敗：' : 'Failed to load data: ') + (e?.message || e), 'error', 6000);
   } finally {
@@ -630,9 +635,41 @@ function renderAnalysisPanel() {
     P.renderPois(analysis, state.lang),
     P.renderLiquidity(analysis, state.lang),
     P.renderKeyLevels(analysis, state.lang),
+    P.renderDerivatives(derivatives, state.lang),
   ].join(''));
   const copyBtn = $('[data-copy-setup]');
   if (copyBtn) copyBtn.onclick = copyPlan;
+}
+
+/**
+ * 抓取並解讀資金費率與未平倉量。
+ *
+ * 刻意獨立於主分析流程之外：這是「加分項」，任何一家交易所掛掉或
+ * 這個幣種沒有永續合約，都不該讓圖表與交易計畫跟著壞掉。
+ */
+async function loadDerivatives() {
+  const symbol = state.symbol;
+  try {
+    const raw = await fetchDerivatives(symbol);
+    if (state.symbol !== symbol) return; // 使用者已經換幣了，這筆結果作廢
+    const candles = analysis?.candles ?? [];
+    const lookback = candles.slice(-24);
+    const priceChangePct = lookback.length > 1
+      ? ((lookback.at(-1).close - lookback[0].close) / lookback[0].close) * 100
+      : 0;
+    const oiPct = oiChangePct(raw.oiSeries);
+    const dir = analysis?.setup && !analysis.setup.none ? analysis.setup.dir : (analysis?.bias?.score ?? 0) >= 0 ? 'long' : 'short';
+    derivatives = {
+      ...derivativesVerdict({ dir, funding: raw.fundingRate, priceChangePct, oiChangePct: oiPct }),
+      oiChangePct: oiPct,
+      countdown: fundingCountdown(raw.nextFundingTime),
+      raw,
+    };
+  } catch (e) {
+    if (state.symbol !== symbol) return;
+    derivatives = { error: e.message };
+  }
+  renderAnalysisPanel();
 }
 
 /** 將目前計畫輸出成可貼進交易日誌的純文字 */

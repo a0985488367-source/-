@@ -288,3 +288,50 @@ export function renderTicker(ticker, a, lang, interval) {
     ${a && !a.empty && a.currentSession ? `<span class="tk__item tk__session"><i>${lang === 'zh' ? '時段' : 'Session'}</i>${lang === 'zh' ? a.currentSession.nameZh : a.currentSession.name}</span>` : ''}
   `;
 }
+
+/**
+ * 資金費率與未平倉量。
+ *
+ * 這一區刻意放在交易計畫底下：它不決定要不要進場，
+ * 而是告訴你「現在跟你站同一邊的人多不多」。
+ */
+export function renderDerivatives(d, lang) {
+  const zh = lang === 'zh';
+  if (!d) return '';
+  if (d.error) {
+    return `<section class="card"><header class="card__head"><h3>${zh ? '資金費率 · 未平倉量' : 'Funding · Open Interest'}</h3>
+      <span class="pill pill--flat">${zh ? '無資料' : 'No data'}</span></header>
+      <p class="pad dim">${escapeHtml(zh ? '這個幣種在幾家交易所上都沒有永續合約，或資料暫時取不到。' : 'No perpetual data available.')}</p></section>`;
+  }
+
+  const { funding, regime, fundingAnnualPct, notes, notesEn, raw, countdown } = d;
+  const rate = raw?.fundingRate;
+  const pillClass = funding.level === 'extreme' ? 'pill--down' : funding.level === 'elevated' ? 'pill--warn' : 'pill--flat';
+  const qualityClass = regime.quality === 'healthy' ? 'up' : regime.quality === 'weak' ? 'down' : '';
+  const list = zh ? notes : notesEn;
+
+  return `<section class="card"><header class="card__head">
+      <h3>${zh ? '資金費率 · 未平倉量' : 'Funding · Open Interest'}</h3>
+      <span class="pill ${pillClass}">${escapeHtml(funding.level === 'neutral' ? (zh ? '中性' : 'Neutral')
+        : funding.level === 'extreme' ? (zh ? '極端' : 'Extreme')
+        : funding.level === 'elevated' ? (zh ? '偏高' : 'Elevated') : (zh ? '輕微' : 'Mild'))}</span>
+    </header>
+    <div class="rows">
+      <div class="row"><span>${zh ? '資金費率（每 8 小時）' : 'Funding (8h)'}</span>
+        <b class="${rate > 0 ? 'up' : rate < 0 ? 'down' : ''}">${Number.isFinite(rate) ? (rate * 100).toFixed(4) + '%' : '—'}</b></div>
+      <div class="row"><span>${zh ? '年化' : 'Annualised'}</span>
+        <b>${Number.isFinite(fundingAnnualPct) ? fundingAnnualPct.toFixed(1) + '%' : '—'}</b></div>
+      ${countdown ? `<div class="row"><span>${zh ? '下次收取' : 'Next funding'}</span><b>${escapeHtml(zh ? countdown.zh : countdown.en)}</b></div>` : ''}
+      <div class="row"><span>${zh ? '未平倉量變化' : 'OI change'}</span>
+        <b class="${d.oiChangePct > 0 ? 'up' : d.oiChangePct < 0 ? 'down' : ''}">${Number.isFinite(d.oiChangePct) ? (d.oiChangePct > 0 ? '+' : '') + d.oiChangePct.toFixed(2) + '%' : '—'}</b></div>
+    </div>
+    <div class="deriv-regime">
+      <span class="deriv-regime__label">${zh ? '持倉結構' : 'Structure'}</span>
+      <b class="${qualityClass}">${escapeHtml(zh ? regime.zh : regime.en)}</b>
+    </div>
+    ${list?.length ? `<ul class="deriv-notes">${list.map((n) => `<li>${escapeHtml(n)}</li>`).join('')}</ul>` : ''}
+    <p class="pad dim small">${escapeHtml(zh
+      ? `資料來源：${raw?.provider ?? '—'}。費率為正代表多方付錢給空方（做多的人比較多）。擁擠的那一邊，停損就掛在反方向 —— 那裡常常就是下一次被掃的流動性。`
+      : `Source: ${raw?.provider ?? '—'}. Positive funding means longs pay shorts.`)}</p>
+  </section>`;
+}

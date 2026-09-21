@@ -20,6 +20,8 @@ import { PROVIDERS } from '../src/data/providers.js';
 import { analyze } from '../src/smc/engine.js';
 import { aggregateBias, tfSuite } from '../src/smc/mtf.js';
 import { advanceTrade, computeStats, tradeFromSetup, DEFAULT_MANAGEMENT } from './lib/tracker.mjs';
+import { fetchDerivatives } from '../src/data/derivatives.js';
+import { derivativesVerdict, oiChangePct } from '../src/smc/derivatives.js';
 import { COLORS, price, fmtR, buildOutcomeEmbed } from './lib/outcome-embed.mjs';
 import { renderJournalMarkdown } from './lib/journal-markdown.mjs';
 
@@ -223,6 +225,39 @@ function collectSignals({ symbol, interval, analysis, cfg, providerId, htf, isPr
 
 const zhZone = (z) => (z === 'premium' ? '溢價' : z === 'discount' ? '折價' : '均衡');
 
+/**
+ * 把資金費率與未平倉量整理成推播裡的一個欄位。
+ * 拿不到資料就回空陣列 —— 這是加分項，絕對不能讓它擋住訊號推播。
+ */
+/** 抓這個幣的資金費率與未平倉量，換算成對這筆交易方向的解讀 */
+async function attachDerivatives(sig) {
+  const raw = await fetchDerivatives(sig.symbol);
+  const candles = sig.analysis.candles.slice(-24);
+  const priceChangePct = candles.length > 1
+    ? ((candles.at(-1).close - candles[0].close) / candles[0].close) * 100
+    : 0;
+  const oiPct = oiChangePct(raw.oiSeries);
+  return {
+    ...derivativesVerdict({ dir: sig.setup.dir, funding: raw.fundingRate, priceChangePct, oiChangePct: oiPct }),
+    oiChangePct: oiPct,
+    raw,
+  };
+}
+
+function derivField(deriv) {
+  if (!deriv || deriv.error) return [];
+  const rate = deriv.raw?.fundingRate;
+  const pct = Number.isFinite(rate) ? (rate * 100).toFixed(4) + '%' : '—';
+  const oi = Number.isFinite(deriv.oiChangePct) ? (deriv.oiChangePct > 0 ? '+' : '') + deriv.oiChangePct.toFixed(1) + '%' : '—';
+  const warn = deriv.notes.find((n) => n.startsWith('⚠'));
+  const good = deriv.notes.find((n) => !n.startsWith('⚠'));
+  const line = warn || good;
+  return [{
+    name: `資金費率 ${pct}　未平倉量 ${oi}`,
+    value: `${deriv.regime.zh}${line ? `\n${line}` : ''}`,
+  }];
+}
+
 function buildEmbed(sig, cfg) {
   const { symbol, interval, analysis: a } = sig;
   const base = symbol.replace(/USDT$/, '');
@@ -253,6 +288,7 @@ function buildEmbed(sig, cfg) {
         { name: '目標', value: tps || '—' },
         { name: `匯流 ${passed.length}/${s.checklist.length} · 評分 ${s.score}/100`, value: passed.map((c) => `✓ ${c.zh}`).join('\n') || '—' },
         ...common,
+        ...derivField(sig.deriv),
         ...(s.conflict ? [{ name: '⚠️ 注意', value: '高週期與進場週期方向分歧，建議減碼或等待表態。' }] : []),
         { name: '失效條件', value: s.invalidation },
       ],
@@ -678,6 +714,10 @@ async function main() {
     if (found.length) log(`\n共 ${found.length} 則新訊號：`);
     for (const sig of found) {
       await safely(`新訊號 ${sig.symbol}`, async () => {
+        // 資金費率與未平倉量是加分項：取不到就算了，不能因此少推一則訊號
+        if (sig.kind === 'plan' && cfg.derivatives !== false) {
+          sig.deriv = await attachDerivatives(sig).catch(() => null);
+        }
         const embed = buildEmbed(sig, cfg);
         if (DRY) {
           log(`  [dry-run] ${embed.title}`);
