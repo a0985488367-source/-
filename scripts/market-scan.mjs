@@ -17,6 +17,8 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { PROVIDERS } from '../src/data/providers.js';
 import { analyze } from '../src/smc/engine.js';
 import { aggregateBias, tfSuite } from '../src/smc/mtf.js';
+import { fetchDerivatives } from '../src/data/derivatives.js';
+import { derivativesVerdict, oiChangePct } from '../src/smc/derivatives.js';
 
 const ARGS = process.argv.slice(2);
 const opt = (name, dflt) => {
@@ -35,6 +37,8 @@ const STALE_MIN = Number(opt('if-stale', 0));
 const PROVIDER_IDS = opt('providers', 'binance,okx,bybit').split(',');
 const MIN_SCORE = Number(opt('min-score', 50));
 const DETAIL_TOP = Number(opt('detail', 30));
+/** 要補抓資金費率／未平倉量的檔數（只針對進榜的） */
+const DERIV_TOP = Number(opt('deriv', 25));
 
 /**
  * 排除穩定幣對與槓桿代幣：這些的 SMC 結構沒有參考價值。
@@ -94,9 +98,15 @@ function toRow(symbol, a, provider, quoteVolume) {
   const s = a.setup;
   if (!s || s.none) return null;
   const distancePct = ((s.entry - a.price) / a.price) * 100;
+  // 近 24 根的價格變化：判讀「價格與未平倉量同向還是背離」時要用到
+  const recent = a.candles.slice(-24);
+  const changePct = recent.length > 1
+    ? ((recent.at(-1).close - recent[0].close) / recent[0].close) * 100
+    : 0;
   return {
     symbol,
     price: r8(a.price),
+    changePct: r2(changePct),
     quoteVolume: Math.round(quoteVolume ?? 0),
     provider,
     interval: INTERVAL,
@@ -127,6 +137,50 @@ function toRow(symbol, a, provider, quoteVolume) {
       : null,
     updatedAt: a.candles.at(-1).time,
   };
+}
+
+/**
+ * 補上資金費率與未平倉量。
+ *
+ * 這是加分資訊，任何一檔失敗都只是那一檔沒有這段資料，
+ * 絕不能讓整個市場掃描跟著失敗。併發限制在 4，避免被交易所限流。
+ */
+async function attachDerivatives(list) {
+  if (!list.length) return;
+  let done = 0;
+  let ok = 0;
+  const queue = [...list];
+  const worker = async () => {
+    while (queue.length) {
+      const r = queue.shift();
+      try {
+        const raw = await fetchDerivatives(r.symbol);
+        const oiPct = oiChangePct(raw.oiSeries);
+        const v = derivativesVerdict({
+          dir: r.dir,
+          funding: raw.fundingRate,
+          priceChangePct: r.changePct ?? 0,
+          oiChangePct: oiPct,
+        });
+        r.deriv = {
+          provider: raw.provider,
+          fundingRate: raw.fundingRate,
+          fundingLevel: v.funding.level,
+          fundingSide: v.funding.side,
+          fundingAnnualPct: r2(v.fundingAnnualPct),
+          oiChangePct: r2(oiPct),
+          regime: v.regime.key,
+          regimeZh: v.regime.zh,
+          score: v.score,
+          note: v.notes[0] ?? null,
+        };
+        ok++;
+      } catch { /* 這一檔沒有永續合約或來源暫時掛掉，略過 */ }
+      done++;
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(4, list.length) }, worker));
+  log(`  衍生品資料：${ok}/${done} 檔取得資金費率與未平倉量`);
 }
 
 async function main() {
@@ -188,6 +242,10 @@ async function main() {
   const ready = rows.filter((r) => r.status === 'ready' && r.valid);
   const waiting = rows.filter((r) => r.status === 'waiting' && r.valid);
 
+  // 只對真的會出現在清單上的幣抓資金費率與未平倉量。
+  // 全部 120 檔都抓沒有意義（多數不會進榜），而且會拖慢整個掃描。
+  await attachDerivatives([...ready, ...waiting].slice(0, DERIV_TOP));
+
   const out = {
     generatedAt: new Date().toISOString(),
     provider,
@@ -216,9 +274,17 @@ async function main() {
 }
 
 function renderMarkdown(out, ready, waiting) {
+  const fundingCell = (d) => {
+    if (!d || !Number.isFinite(d.fundingRate)) return '—';
+    const pct = (d.fundingRate * 100).toFixed(3) + '%';
+    // 只有極端／偏高才標記，平常這欄就是背景資訊
+    const mark = d.fundingLevel === 'extreme' ? '🔥' : d.fundingLevel === 'elevated' ? '⚠️' : '';
+    const oi = Number.isFinite(d.oiChangePct) ? `${d.oiChangePct > 0 ? '+' : ''}${d.oiChangePct.toFixed(1)}%` : '—';
+    return `${mark}${pct} / OI ${oi}`;
+  };
   const row = (r) =>
-    `| ${r.symbol.replace('USDT', '')} | ${r.grade}/${r.score} | ${r.dir === 'long' ? '做多' : '做空'} | ${price(r.entry)} | ${price(r.stop)} | ${r.rr.toFixed(2)}R | ${r.poiType ?? '—'} | ${r.distancePct >= 0 ? '+' : ''}${r.distancePct.toFixed(2)}% |`;
-  const head = '| 幣種 | 評級 | 方向 | 進場 | 停損 | 風報比 | POI | 距現價 |\n|---|---|---|---|---|---|---|---|';
+    `| ${r.symbol.replace('USDT', '')} | ${r.grade}/${r.score} | ${r.dir === 'long' ? '做多' : '做空'} | ${price(r.entry)} | ${price(r.stop)} | ${r.rr.toFixed(2)}R | ${r.poiType ?? '—'} | ${r.distancePct >= 0 ? '+' : ''}${r.distancePct.toFixed(2)}% | ${fundingCell(r.deriv)} |`;
+  const head = '| 幣種 | 評級 | 方向 | 進場 | 停損 | 風報比 | POI | 距現價 | 費率／未平倉量 |\n|---|---|---|---|---|---|---|---|---|';
   return `# 全市場掃描
 
 由 \`scripts/market-scan.mjs\` 自動產生，請勿手動編輯。
@@ -232,14 +298,14 @@ function renderMarkdown(out, ready, waiting) {
 價格已經在 POI 區間內，可以直接執行。
 
 ${head}
-${ready.map(row).join('\n') || '| — | | | | | | | |'}
+${ready.map(row).join('\n') || '| — | | | | | | | | |'}
 
 ## ⏳ 等待回測（${waiting.length}）
 
 計畫成立但價格還沒回到進場區，掛限價單或設價格提醒。
 
 ${head}
-${waiting.slice(0, 40).map(row).join('\n') || '| — | | | | | | | |'}
+${waiting.slice(0, 40).map(row).join('\n') || '| — | | | | | | | | |'}
 `;
 }
 

@@ -33,6 +33,20 @@ export async function fetchMarket() {
 }
 
 const dirCls = (d) => (d === 'long' ? 'up' : 'down');
+
+/**
+ * 資金費率欄。極端值才上色 —— 平常這個數字只是背景資訊，
+ * 只有在一面倒的時候才值得你多看一眼。
+ */
+function fundingCell(d, zh) {
+  if (!d || !Number.isFinite(d.fundingRate)) return '<td class="mono tiny dim">—</td>';
+  const pct = (d.fundingRate * 100).toFixed(3) + '%';
+  const cls = d.fundingLevel === 'extreme' ? 'down' : d.fundingLevel === 'elevated' ? 'warn' : 'dim';
+  const title = zh
+    ? `${d.regimeZh}（年化 ${d.fundingAnnualPct ?? '—'}%，未平倉量 ${d.oiChangePct ?? '—'}%）`
+    : `${d.regime} (annualised ${d.fundingAnnualPct ?? '—'}%)`;
+  return `<td class="mono tiny ${cls}" title="${escapeHtml(title)}">${pct}</td>`;
+}
 const gradeCls = (g) => (g === 'A+' || g === 'A' ? 'up' : g === 'B' ? 'warn' : 'dim');
 
 function rowHtml(r, lang) {
@@ -47,6 +61,7 @@ function rowHtml(r, lang) {
     <td class="mono">${r.rr.toFixed(1)}R</td>
     <td class="tiny dim">${escapeHtml(r.poiType ?? '—')}</td>
     <td class="mono tiny ${Math.abs(dist) < 0.5 ? 'up' : 'dim'}">${dist >= 0 ? '+' : ''}${dist.toFixed(2)}%</td>
+    ${fundingCell(r.deriv, lang === 'zh')}
   </tr>`;
 }
 
@@ -65,7 +80,7 @@ export function renderMarket(data, lang, filter = {}) {
   const head = `<thead><tr>
     <th>${zh ? '幣種' : 'Symbol'}</th><th>${zh ? '評級' : 'Grade'}</th><th>${zh ? '方向' : 'Dir'}</th>
     <th>${zh ? '進場' : 'Entry'}</th><th>${zh ? '停損' : 'Stop'}</th><th>R:R</th>
-    <th>POI</th><th>${zh ? '距現價' : 'Dist'}</th>
+    <th>POI</th><th>${zh ? '距現價' : 'Dist'}</th><th>${zh ? '費率' : 'Funding'}</th>
   </tr></thead>`;
 
   const table = (rows) =>
