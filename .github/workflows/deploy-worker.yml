@@ -231,16 +231,12 @@ jobs:
             printf '%s' "$LIST" | why
           fi
 
-      - name: 建立 KV 命名空間（若不存在）並部署
+      - name: 建立 KV 命名空間（若不存在）
         if: ${{ steps.check.outputs.ready == 'true' }}
         working-directory: worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ env.CF_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ env.CF_ACCOUNT }}
-          # 前一輪只知道是 403 Forbidden，回應內容被 wrangler 遮住了。
-          # 這裡沒有任何密鑰會外流：請求內容是公開倉庫裡的 Worker 原始碼，
-          # 回應內容是 Cloudflare 的 JSON 錯誤說明，兩者都不敏感。
-          WRANGLER_LOG_SANITIZE: 'false'
         run: |
           set -e
           find_id() {
@@ -258,27 +254,74 @@ jobs:
             exit 1
           fi
           echo "KV 命名空間 ID：$ID"
-          sed -i "s/REPLACE_WITH_YOUR_KV_NAMESPACE_ID/$ID/" wrangler.toml
-          npx --yes wrangler@3 deploy
+          echo "KV_ID=$ID" >> "$GITHUB_ENV"
 
-      - name: 部署失敗時，印出 wrangler 的完整除錯紀錄
-        if: ${{ failure() && steps.check.outputs.ready == 'true' }}
+      - name: 部署 Worker（改用 Cloudflare 經典上傳 API，不走 wrangler 的版本化部署）
+        if: ${{ steps.check.outputs.ready == 'true' }}
+        working-directory: worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ env.CF_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ env.CF_ACCOUNT }}
         run: |
-          # wrangler 的 CLI 輸出把 Cloudflare 原始錯誤裁剪成一句話（"No access to
-          # the specified resource"），連錯誤代碼都沒有。它自己寫的除錯紀錄裡有
-          # 完整的 HTTP 請求／回應，把 Authorization 那一行拿掉之後印出來，
-          # 才看得到 Cloudflare 真正回了什麼。
-          LOG="$(ls -t /home/runner/.config/.wrangler/logs/*.log 2>/dev/null | head -n1)"
-          if [ -z "$LOG" ]; then
-            echo "找不到 wrangler 的除錯紀錄檔"
+          # wrangler 3 預設會先用「版本化部署」流程（先 PUT ?excludeScript=true
+          # 建版本，再另外呼叫 deployments 切換流量）。這一步在這個帳戶上被
+          # Cloudflare 拒絕（403，沒有錯誤代碼），但帳戶上其實已經有其他 Worker
+          # 正常運作、Token 權限也都確認沒問題——判斷是這個帳戶的 API Token
+          # 還沒有這個較新流程的存取權，屬於 Cloudflare 那邊的功能開通問題。
+          #
+          # 改成直接呼叫「經典」單次上傳 API，這是 API Token 從很早期就支援、
+          # 一直沒變過的端點，跳過版本化部署那一整條路徑。
+          set -e
+          # vars 直接從 wrangler.toml 讀，不在這裡另外複製一份數字，
+          # 這樣以後改 wrangler.toml 就不必記得回來同步這支腳本。
+          METADATA="$(node -e '
+            const fs = require("fs");
+            const toml = fs.readFileSync("wrangler.toml", "utf8");
+            const vars = {};
+            const varsBlock = toml.match(/\[vars\]\n([\s\S]*?)(?=\n\[|$)/);
+            if (varsBlock) {
+              for (const line of varsBlock[1].split("\n")) {
+                const m = line.match(/^(\w+)\s*=\s*"(.*)"\s*$/);
+                if (m) vars[m[1]] = m[2];
+              }
+            }
+            const main = (toml.match(/^main\s*=\s*"(.+)"/m) || [, "index.js"])[1];
+            const compat = (toml.match(/^compatibility_date\s*=\s*"(.+)"/m) || [, "2024-11-01"])[1];
+            const kvBinding = (toml.match(/binding\s*=\s*"(\w+)"/) || [, "SMC_KV"])[1];
+            const bindings = [
+              { type: "kv_namespace", name: kvBinding, namespace_id: process.argv[1] },
+              ...Object.entries(vars).map(([name, text]) => ({ type: "plain_text", name, text })),
+            ];
+            console.log(JSON.stringify({ main_module: main, compatibility_date: compat, bindings }));
+          ' "$KV_ID")"
+
+          RESP="$(curl -sS -X PUT \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            -F "metadata=$METADATA;type=application/json" \
+            -F "index.js=@index.js;type=application/javascript+module" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/smc-signals")"
+
+          if ! printf '%s' "$RESP" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.exit(JSON.parse(s||"{}").success?0:1))' 2>/dev/null; then
+            echo "❌ 部署失敗"
+            printf '%s' "$RESP" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);console.log(JSON.stringify(j,null,2))}catch{console.log(s)}})'
+            exit 1
+          fi
+          echo "✅ Worker 程式碼已部署"
+
+          # 排程觸發器（每 2 分鐘）也是獨立的經典端點，跟上面同一套 API。
+          CRON_RESP="$(curl -sS -X PUT \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json" \
+            -d '[{"cron":"*/2 * * * *"}]' \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/smc-signals/schedules")"
+          if printf '%s' "$CRON_RESP" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.exit(JSON.parse(s||"{}").success?0:1))' 2>/dev/null; then
+            echo "✅ 排程（每 2 分鐘）已設定"
           else
-            echo "=== $LOG（已隱藏 Authorization）==="
-            grep -v -i 'authorization' "$LOG" | tail -c 8000
+            echo "::warning::排程設定失敗，Worker 已部署但不會自動觸發，可以之後在 Cloudflare 主控台手動加"
+            printf '%s' "$CRON_RESP" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{for(const e of (JSON.parse(s).errors||[]))console.log("   ["+e.code+"] "+e.message)}catch{}})'
           fi
 
       - name: 同步 Discord webhook 到 Worker
         if: ${{ steps.check.outputs.ready == 'true' }}
-        working-directory: worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ env.CF_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ env.CF_ACCOUNT }}
@@ -288,5 +331,16 @@ jobs:
             echo "::warning::沒有 Discord webhook secret，Worker 將無法推播"
             exit 0
           fi
-          printf '%s' "$WEBHOOK" | npx --yes wrangler@3 secret put DISCORD_WEBHOOK_URL
+          # 一樣改用經典的 secrets 端點，不透過 wrangler。
+          PAYLOAD="$(node -e 'console.log(JSON.stringify({name:"DISCORD_WEBHOOK_URL", text: process.argv[1], type: "secret_text"}))' "$WEBHOOK")"
+          RESP="$(curl -sS -X PUT \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/smc-signals/secrets")"
+          if printf '%s' "$RESP" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.exit(JSON.parse(s||"{}").success?0:1))' 2>/dev/null; then
+            echo "已同步 webhook 到 Worker"
+          else
+            echo "::warning::webhook 同步失敗"
+            printf '%s' "$RESP" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{for(const e of (JSON.parse(s).errors||[]))console.log("   ["+e.code+"] "+e.message)}catch{}})'
+          fi
           echo "已同步 webhook 到 Worker"
