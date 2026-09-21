@@ -18,6 +18,7 @@ import { runScan, renderScanTable } from './ui/scanner.js';
 import { fetchMarket, renderMarket } from './ui/market.js';
 import { AlertEngine, createAlert, renderAlerts } from './ui/alerts.js';
 import { renderGlossary } from './ui/glossary.js';
+import { createTradePanel } from './ui/trade.js';
 import { fmtPrice, fmtNum, fmtTime, fmtAgo, debounce, throttle, escapeHtml } from './core/utils.js';
 
 /* ------------------------------------------------------------------ 狀態 */
@@ -116,6 +117,7 @@ function init() {
   bindMarket();
   bindBacktest();
   bindRisk();
+  bindTrade();
   bindAlerts();
   bindGlossary();
   bindSettings();
@@ -437,6 +439,8 @@ function bindTabs() {
     $$('.tab-panel').forEach((p) => p.classList.toggle('active', p.dataset.panel === btn.dataset.tab));
     if (btn.dataset.tab === 'learn') renderGloss();
     if (btn.dataset.tab === 'scanner') loadMarket();
+    // 切到下單頁時用最新的計畫重算委託單（數量、停損停利都會跟著變）
+    if (btn.dataset.tab === 'trade') tradePanel?.renderTicket();
   };
 }
 
@@ -1012,6 +1016,21 @@ function bindRisk() {
 }
 
 /* ------------------------------------------------------------------ 警報 */
+
+let tradePanel = null;
+
+function bindTrade() {
+  tradePanel = createTradePanel({
+    lang: () => state.lang,
+    getSymbol: () => state.symbol,
+    getRisk: () => state.risk,
+    getPlan: () => {
+      const s = analysis?.setup;
+      return !s || s.none ? null : s;
+    },
+  });
+  tradePanel.render();
+}
 
 function bindAlerts() {
   alerts.requestPermission();

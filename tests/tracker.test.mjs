@@ -11,6 +11,12 @@ const bars = (spec) =>
     open: (h + l) / 2, high: h, low: l, close: (h + l) / 2, volume: 1,
   }));
 
+/** 全部規則關閉的基準設定：每個測試只打開自己要驗的那一條，互不干擾 */
+const OFF = {
+  scalpR: 0, scalpFraction: 0, breakevenAtR: 0, breakevenOffsetR: 0,
+  scratchR: 0, trailFromR: 0, trailGapR: 0,
+};
+
 const longTrade = (over = {}) => ({
   id: 't1', symbol: 'BTCUSDT', interval: '15m', dir: 'long',
   entry: 100, stop: 95,
@@ -55,7 +61,7 @@ test('直接停損 → -1R', () => {
 });
 
 test('breakevenAtR：獲利達門檻後停損移到成本價，之後回落不會變成 -1R', () => {
-  const cfg = { breakevenAtR: 1 };
+  const cfg = { ...OFF, breakevenAtR: 1 };
   const t1 = advanceTrade(longTrade({ status: 'active', filledTime: T0 }), bars([[106, 99]]), cfg);
   assert.deepEqual(t1.hitTargets, ['TP1']);
   assert.equal(t1.stop, 100, '停損應移到進場價');
@@ -116,7 +122,9 @@ test('tradeFromSetup 依進場方式決定初始狀態', () => {
   const t = tradeFromSetup({ id: 'x', symbol: 'BTCUSDT', interval: '15m', setup, candleTime: T0 });
   assert.equal(t.status, 'active');
   assert.equal(t.filledTime, T0);
-  assert.equal(t.targets[0].label, '流動性');
+  // 預設會在最前面插入保本鏢，原本的流動性目標往後移一格
+  assert.equal(t.targets[0].name, 'TP0');
+  assert.equal(t.targets.at(-1).label, '流動性');
 
   const t2 = tradeFromSetup({ id: 'y', symbol: 'BTCUSDT', interval: '15m', setup: { ...setup, entryType: 'limit' }, candleTime: T0 });
   assert.equal(t2.status, 'pending');
@@ -126,7 +134,7 @@ test('tradeFromSetup 依進場方式決定初始狀態', () => {
 /* ---------------------------------------------- 新的部位管理規則 */
 
 test('保本鏢：先在 0.5R 出掉一部分，之後回到成本價仍是正報酬（原本會是 -1R）', () => {
-  const cfg = { scalpR: 0.5, scalpFraction: 0.34, breakevenAtR: 0.5 };
+  const cfg = { ...OFF, scalpR: 0.5, scalpFraction: 0.34, breakevenAtR: 0.5 };
   const setup = {
     dir: 'long', entry: 100, stop: 95, entryType: 'market',
     targets: [{ name: 'TP1', price: 110, rr: 2 }, { name: 'TP2', price: 120, rr: 4 }],
@@ -148,13 +156,13 @@ test('保本鏢：TP1 本來就夠近時不會重複插入', () => {
     dir: 'long', entry: 100, stop: 95, entryType: 'market',
     targets: [{ name: 'TP1', price: 102, rr: 0.4 }], grade: 'A', score: 70,
   };
-  const t = tradeFromSetup({ id: 'q', symbol: 'ETHUSDT', interval: '1h', setup, candleTime: T0, management: { scalpR: 0.5, scalpFraction: 0.34 } });
+  const t = tradeFromSetup({ id: 'q', symbol: 'ETHUSDT', interval: '1h', setup, candleTime: T0, management: { ...OFF, scalpR: 0.5, scalpFraction: 0.34 } });
   assert.equal(t.targets.length, 1);
   assert.equal(t.targets[0].name, 'TP1');
 });
 
 test('認賠出場：逆行到 scratchR 就走，虧損小於一個完整停損', () => {
-  const cfg = { scratchR: 0.75 };
+  const cfg = { ...OFF, scratchR: 0.75 };
   const t = advanceTrade(longTrade({ status: 'active', filledTime: T0 }), bars([[101, 96]]), cfg);
   assert.equal(t.status, 'stop');
   assert.equal(t.exitReason, 'scratch');
@@ -162,7 +170,7 @@ test('認賠出場：逆行到 scratchR 就走，虧損小於一個完整停損'
 });
 
 test('認賠出場：已經分批獲利過就不再觸發（避免把賺錢單掃掉）', () => {
-  const cfg = { scratchR: 0.75, scalpR: 0.5, scalpFraction: 0.34 };
+  const cfg = { ...OFF, scratchR: 0.75, scalpR: 0.5, scalpFraction: 0.34 };
   const t = advanceTrade(
     longTrade({ status: 'active', filledTime: T0, targets: [{ name: 'TP0', price: 102.5, rr: 0.5, fraction: 0.34 }, { name: 'TP1', price: 115, rr: 3, fraction: 0 }] }),
     bars([[103, 99], [101, 96.5]]),
@@ -173,7 +181,7 @@ test('認賠出場：已經分批獲利過就不再觸發（避免把賺錢單�
 });
 
 test('追蹤停損：獲利回吐超過 trailGapR 就出場，且鎖住利潤', () => {
-  const cfg = { trailFromR: 1, trailGapR: 0.5 };
+  const cfg = { ...OFF, trailFromR: 1, trailGapR: 0.5 };
   const t = advanceTrade(
     longTrade({ status: 'active', filledTime: T0, targets: [{ name: 'TP1', price: 200, rr: 20 }] }),
     bars([[110, 99], [109, 106]]),
@@ -185,7 +193,7 @@ test('追蹤停損：獲利回吐超過 trailGapR 就出場，且鎖住利潤', 
 });
 
 test('R 的刻度以原始停損為準：停損移動後 R 不會被重新縮放', () => {
-  const cfg = { breakevenAtR: 1 };
+  const cfg = { ...OFF, breakevenAtR: 1 };
   const t1 = advanceTrade(longTrade({ status: 'active', filledTime: T0, targets: [{ name: 'TP1', price: 115, rr: 3 }] }), bars([[106, 99]]), cfg);
   assert.equal(t1.stop, 100);
   const t2 = advanceTrade(t1, bars([[106, 99], [116, 105]]), cfg);
