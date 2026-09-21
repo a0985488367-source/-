@@ -118,3 +118,21 @@ jobs:
             sleep 5
           done
           echo "::warning::帳本推送失敗，下次執行會再試"
+
+  # ── 暫時性：本分支限定的 A/B 實測跑道 ──────────────────────────
+  # 沙盒環境連不到交易所 API，只有 runner 連得到。research.yml 還沒進
+  # main，workflow_dispatch 不會註冊，所以借這個已註冊的工作流程跑一次。
+  # 取得數據後就會移除。
+  ab-research:
+    if: ${{ inputs.mode == 'dry-run' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node scripts/research/ab-test.mjs --commit=false | tee ab-output.txt
+      - if: always()
+        run: |
+          { echo '## 部位管理規則 A/B 實測'; echo '```'; cat ab-output.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
