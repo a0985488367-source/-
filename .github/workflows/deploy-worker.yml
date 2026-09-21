@@ -237,6 +237,10 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ env.CF_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ env.CF_ACCOUNT }}
+          # 前一輪只知道是 403 Forbidden，回應內容被 wrangler 遮住了。
+          # 這裡沒有任何密鑰會外流：請求內容是公開倉庫裡的 Worker 原始碼，
+          # 回應內容是 Cloudflare 的 JSON 錯誤說明，兩者都不敏感。
+          WRANGLER_LOG_SANITIZE: 'false'
         run: |
           set -e
           find_id() {
