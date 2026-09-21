@@ -37,6 +37,15 @@ const VARIANTS = {
   scalp05_scratch: { scalpR: 0.5, scalpFraction: 0.34, breakevenAtR: 1.0, scratchR: 0.75 },
   trail:           { scalpR: 0.5, scalpFraction: 0.34, trailFromR: 1.5, trailGapR: 1.0 },
   full:            { scalpR: 0.5, scalpFraction: 0.34, breakevenAtR: 1.0, scratchR: 0.75, trailFromR: 2, trailGapR: 1 },
+  // ── 圍繞目前最佳解（scalp05_be）的參數微調 ──
+  scalp04_be:      { scalpR: 0.4, scalpFraction: 0.34, breakevenAtR: 0.4 },
+  scalp06_be:      { scalpR: 0.6, scalpFraction: 0.34, breakevenAtR: 0.6 },
+  scalp05_be_f25:  { scalpR: 0.5, scalpFraction: 0.25, breakevenAtR: 0.5 },
+  scalp05_be_f50:  { scalpR: 0.5, scalpFraction: 0.50, breakevenAtR: 0.5 },
+  scalp05_be_off:  { scalpR: 0.5, scalpFraction: 0.34, breakevenAtR: 0.5, breakevenOffsetR: 0.05 },
+  // 保本之後讓剩餘部位用追蹤停損跑，試著把「小勝多、大勝少」補回來
+  scalp05_be_tr:   { scalpR: 0.5, scalpFraction: 0.34, breakevenAtR: 0.5, trailFromR: 2, trailGapR: 1.2 },
+  scalp05_be_tr15: { scalpR: 0.5, scalpFraction: 0.34, breakevenAtR: 0.5, trailFromR: 1.5, trailGapR: 0.8 },
 };
 
 const log = (...a) => console.log(...a);
