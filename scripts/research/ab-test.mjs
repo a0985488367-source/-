@@ -46,6 +46,9 @@ const VARIANTS = {
   // 保本之後讓剩餘部位用追蹤停損跑，試著把「小勝多、大勝少」補回來
   scalp05_be_tr:   { scalpR: 0.5, scalpFraction: 0.34, breakevenAtR: 0.5, trailFromR: 2, trailGapR: 1.2 },
   scalp05_be_tr15: { scalpR: 0.5, scalpFraction: 0.34, breakevenAtR: 0.5, trailFromR: 1.5, trailGapR: 0.8 },
+  // 最終候選：保本鏢 + 成本價（含手續費緩衝）+ 追蹤停損
+  FINAL:           { scalpR: 0.5, scalpFraction: 0.34, breakevenAtR: 0.5, breakevenOffsetR: 0.05, trailFromR: 1.5, trailGapR: 0.8 },
+  FINAL_f50:       { scalpR: 0.5, scalpFraction: 0.50, breakevenAtR: 0.5, breakevenOffsetR: 0.05, trailFromR: 1.5, trailGapR: 0.8 },
 };
 
 const log = (...a) => console.log(...a);

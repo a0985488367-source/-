@@ -138,6 +138,13 @@ jobs:
           node scripts/research/ab-test.mjs \
             --symbols=BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT,ADAUSDT,AVAXUSDT,LINKUSDT,LTCUSDT \
             --intervals=15m,1h --out=data/research/ab-in-sample.json | tee -a ab-output.txt
+      - name: 第三組驗證（又一批不同的幣）
+        run: |
+          echo '' | tee -a ab-output.txt
+          echo '### 第三組：TON/ICP/RENDER/SEI/PEPE/WIF/JUP/STX/ALGO/HBAR/VET/GRT' | tee -a ab-output.txt
+          node scripts/research/ab-test.mjs \
+            --symbols=TONUSDT,ICPUSDT,RENDERUSDT,SEIUSDT,PEPEUSDT,WIFUSDT,JUPUSDT,STXUSDT,ALGOUSDT,HBARUSDT,VETUSDT,GRTUSDT \
+            --intervals=15m,1h,4h --out=data/research/ab-validation.json | tee -a ab-output.txt
       - name: 樣本外（完全不同的 12 檔 + 多一個週期）
         run: |
           echo '' | tee -a ab-output.txt
