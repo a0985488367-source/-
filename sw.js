@@ -7,7 +7,7 @@
  *  - 跨來源請求（交易所 API / WebSocket）：完全不攔截，直接走網路
  */
 
-const VERSION = 'smc-terminal-v3';
+const VERSION = 'smc-terminal-v4';
 const SHELL = [
   './',
   'index.html',
@@ -34,6 +34,8 @@ const SHELL = [
   'src/smc/setups.js',
   'src/smc/mtf.js',
   'src/smc/backtest.js',
+  'src/smc/manage.js',
+  'src/exchange/bybit.js',
   'src/chart/chart.js',
   'src/chart/layers.js',
   'src/chart/scales.js',
@@ -43,6 +45,7 @@ const SHELL = [
   'src/ui/scanner.js',
   'src/ui/alerts.js',
   'src/ui/glossary.js',
+  'src/ui/trade.js',
   'src/i18n/index.js',
 ];
 
