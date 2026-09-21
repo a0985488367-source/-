@@ -61,13 +61,22 @@ jobs:
             OK=false
           fi
 
-          # 常見貼錯：Account ID 是 32 位十六進位；兩個值貼反了也抓得出來
+          # 常見貼錯：整串網址貼進來了。Account ID 一定是 32 位十六進位，
+          # 所以直接從貼上的內容裡把它挑出來（例如 https://dash.cloudflare.com/<32碼>/home）。
           if [ -n "$ACCOUNT" ] && ! printf '%s' "$ACCOUNT" | grep -qE '^[0-9a-fA-F]{32}$'; then
-            echo "::warning::CLOUDFLARE_ACCOUNT_ID 看起來不像 Account ID（正常是 32 個英數字）。請從 dash.cloudflare.com 網址列 / 概覽頁右側複製。"
+            PICKED="$(printf '%s' "$ACCOUNT" | grep -oE '[0-9a-fA-F]{32}' | head -n1)"
+            if [ -n "$PICKED" ]; then
+              echo "::add-mask::$PICKED"
+              echo "ℹ️ CLOUDFLARE_ACCOUNT_ID 夾在別的文字裡（長度 ${#ACCOUNT}），已自動擷取出 32 碼的帳號 ID。"
+              ACCOUNT="$PICKED"
+            else
+              echo "::error::CLOUDFLARE_ACCOUNT_ID 裡找不到 32 碼的帳號 ID。請到 https://dash.cloudflare.com 登入後，複製網址列 dash.cloudflare.com/ 後面那一段英數字。"
+              OK=false
+            fi
           fi
-          if [ -n "$TOKEN" ] && printf '%s' "$TOKEN" | grep -qE '^[0-9a-fA-F]{32}$'; then
-            echo "::warning::CLOUDFLARE_API_TOKEN 看起來像 Account ID，兩個值可能貼反了。"
-          fi
+          # API Token 常見貼錯：前面多了 Bearer、或整段被引號包住
+          TOKEN="$(printf '%s' "$TOKEN" | sed -e 's/^[Bb]earer[[:space:]]*//' -e 's/^["'"'"']//' -e 's/["'"'"']$//')"
+          [ -n "$TOKEN" ] && echo "::add-mask::$TOKEN"
 
           if [ "$OK" = true ]; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
@@ -77,6 +86,28 @@ jobs:
           else
             echo "ready=false" >> "$GITHUB_OUTPUT"
             echo "❌ 金鑰不齊，略過部署（不算失敗，補好再跑一次就好）。"
+          fi
+
+      - name: 驗證 Cloudflare 金鑰能不能用
+        if: ${{ steps.check.outputs.ready == 'true' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ env.CF_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ env.CF_ACCOUNT }}
+        run: |
+          # 只印 Cloudflare 回傳的成功與否和錯誤訊息，不會印出金鑰。
+          api() { curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/$1"; }
+          say() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let j;try{j=JSON.parse(s)}catch{console.log("回應不是 JSON");process.exit(1)}
+            if(j.success){console.log("✅ "+process.argv[1]);process.exit(0)}
+            console.log("❌ "+process.argv[1]);for(const e of (j.errors||[]))console.log("   ["+e.code+"] "+e.message);process.exit(1)})' "$1"; }
+
+          FAIL=0
+          api "user/tokens/verify" | say "API Token 有效" || FAIL=1
+          api "accounts/$CLOUDFLARE_ACCOUNT_ID/tokens/permission_groups" >/dev/null 2>&1 || true
+          api "accounts/$CLOUDFLARE_ACCOUNT_ID/storage/kv/namespaces?per_page=1" | say "帳號 ID 正確，而且 Token 讀得到 Workers KV" || FAIL=1
+
+          if [ "$FAIL" = 1 ]; then
+            echo "::error::金鑰驗證沒過（詳見上面）。code 1000/9109 = Token 不對或權限不足；code 7003 = 帳號 ID 不對。Token 需要 Account · Workers Scripts · Edit 和 Account · Workers KV Storage · Edit 兩個權限。"
+            exit 1
           fi
 
       - name: 建立 KV 命名空間（若不存在）並部署
