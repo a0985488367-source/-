@@ -161,80 +161,6 @@
       "events": []
     },
     {
-      "id": "market:PAXGUSDT:1h:long:4364.88",
-      "symbol": "PAXGUSDT",
-      "interval": "1h",
-      "dir": "long",
-      "entry": 4364.88,
-      "stop": 4331.6349,
-      "targets": [
-        {
-          "name": "TP1",
-          "price": 4464.6153,
-          "rr": 3,
-          "label": "1:3 延伸目標"
-        }
-      ],
-      "grade": "A",
-      "score": 73,
-      "poiType": "FVG",
-      "status": "active",
-      "filledTime": 1789804800000,
-      "openTime": 1789804800000,
-      "lastCheckedTime": 1789963200000,
-      "barsSinceOpen": 44,
-      "barsSinceFill": 44,
-      "hitTargets": [],
-      "maxFavorableR": 0.3044057620521479,
-      "maxAdverseR": -0.44758475685138766,
-      "source": "market",
-      "events": []
-    },
-    {
-      "id": "plan:BNBUSDT:1h:long:t1789740000000",
-      "symbol": "BNBUSDT",
-      "interval": "1h",
-      "dir": "long",
-      "entry": 755.21,
-      "stop": 755.21,
-      "targets": [
-        {
-          "name": "TP1",
-          "price": 768,
-          "rr": 1.075704256452612,
-          "label": "擺動高流動性"
-        },
-        {
-          "name": "TP2",
-          "price": 768.92,
-          "rr": 1.153080950427308,
-          "label": "等高流動性"
-        },
-        {
-          "name": "TP3",
-          "price": 790.8796552698732,
-          "rr": 3,
-          "label": "1:3 延伸目標"
-        }
-      ],
-      "grade": "A",
-      "score": 68,
-      "poiType": "FVG",
-      "status": "active",
-      "filledTime": 1789869600000,
-      "openTime": 1789804800000,
-      "lastCheckedTime": 1789963200000,
-      "barsSinceOpen": 44,
-      "barsSinceFill": 27,
-      "hitTargets": [
-        "TP1",
-        "TP2"
-      ],
-      "maxFavorableR": 28.159999999999968,
-      "maxAdverseR": -0.7830185009831049,
-      "events": []
-    },
-    {
       "id": "market:TSLABUSDT:1h:short:364.57",
       "symbol": "TSLABUSDT",
       "interval": "1h",
@@ -377,47 +303,6 @@
       "maxFavorableR": 1.4534446382937265,
       "maxAdverseR": -0.3850353340041274,
       "source": "market",
-      "events": []
-    },
-    {
-      "id": "plan:XRPUSDT:1h:short:t1789873200000",
-      "symbol": "XRPUSDT",
-      "interval": "1h",
-      "dir": "short",
-      "entry": 1.3857,
-      "stop": 1.4408016236774233,
-      "targets": [
-        {
-          "name": "TP1",
-          "price": 1.315,
-          "rr": 1.2830837874014909,
-          "label": "等低流動性"
-        },
-        {
-          "name": "TP2",
-          "price": 1.2877,
-          "rr": 1.7785319825367178,
-          "label": "區間極值"
-        },
-        {
-          "name": "TP3",
-          "price": 1.22039512896773,
-          "rr": 3,
-          "label": "1:3 延伸目標"
-        }
-      ],
-      "grade": "A+",
-      "score": 80,
-      "poiType": "FVG",
-      "status": "active",
-      "filledTime": 1789894800000,
-      "openTime": 1789880400000,
-      "lastCheckedTime": 1789963200000,
-      "barsSinceOpen": 23,
-      "barsSinceFill": 20,
-      "hitTargets": [],
-      "maxFavorableR": 0.22140908354028538,
-      "maxAdverseR": -0.9636739619663276,
       "events": []
     },
     {
@@ -754,46 +639,6 @@
       "filledTime": null,
       "openTime": 1789968600000,
       "lastCheckedTime": 1789968600000,
-      "barsSinceOpen": 0,
-      "barsSinceFill": 0,
-      "hitTargets": [],
-      "maxFavorableR": 0,
-      "maxAdverseR": 0
-    },
-    {
-      "id": "plan:BNBUSDT:1h:long:t1789938000000",
-      "symbol": "BNBUSDT",
-      "interval": "1h",
-      "dir": "long",
-      "entry": 768.4,
-      "stop": 760.3435679911601,
-      "targets": [
-        {
-          "name": "TP1",
-          "price": 777.98,
-          "rr": 1.1891120026195698,
-          "label": "前日高（PDH）"
-        },
-        {
-          "name": "TP2",
-          "price": 784.96,
-          "rr": 2.055500497221301,
-          "label": "擺動高流動性"
-        },
-        {
-          "name": "TP3",
-          "price": 792.5692960265197,
-          "rr": 3,
-          "label": "1:3 延伸目標"
-        }
-      ],
-      "grade": "A",
-      "score": 70,
-      "poiType": "Order Block",
-      "status": "pending",
-      "filledTime": null,
-      "openTime": 1789963200000,
-      "lastCheckedTime": 1789963200000,
       "barsSinceOpen": 0,
       "barsSinceFill": 0,
       "hitTargets": [],
