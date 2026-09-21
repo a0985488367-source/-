@@ -81,9 +81,21 @@ const LAYER_PRESETS = {
 const PRESET_ORDER = ['lean', 'standard', 'full'];
 const PRESET_LABEL = { lean: { zh: '精簡', en: 'Lean' }, standard: { zh: '標準', en: 'Standard' }, full: { zh: '完整', en: 'Full' }, custom: { zh: '自訂', en: 'Custom' } };
 
+// 分頁名稱用 data-tab 當索引，不用陣列順序 ——
+// 之前是按順序對應，插入一個新分頁就會讓後面全部錯位。
 const T = {
-  zh: { tabs: ['分析', '多週期', '掃描', '回測', '風險', '警報', '教學', '設定'] },
-  en: { tabs: ['Analysis', 'MTF', 'Scanner', 'Backtest', 'Risk', 'Alerts', 'Learn', 'Settings'] },
+  zh: {
+    tabs: {
+      analysis: '分析', mtf: '多週期', scanner: '掃描', backtest: '回測',
+      risk: '風險', trade: '下單', alerts: '警報', learn: '教學', settings: '設定',
+    },
+  },
+  en: {
+    tabs: {
+      analysis: 'Analysis', mtf: 'MTF', scanner: 'Scanner', backtest: 'Backtest',
+      risk: 'Risk', trade: 'Trade', alerts: 'Alerts', learn: 'Learn', settings: 'Settings',
+    },
+  },
 };
 
 const isZh = () => state.lang === 'zh';
@@ -1145,7 +1157,8 @@ function syncSettingLabels() {
 
 function applyLang() {
   const tabs = T[state.lang].tabs;
-  $$('#tabs button').forEach((b, i) => (b.textContent = tabs[i]));
+  tradePanel?.render();
+  $$('#tabs button').forEach((b) => { const label = tabs[b.dataset.tab]; if (label) b.textContent = label; });
   $('#symbolSearch').placeholder = isZh() ? '搜尋幣種… (BTC, ETH, SOL)' : 'Search symbol… (BTC, ETH, SOL)';
   $('#glossSearch').placeholder = isZh() ? '搜尋術語… OB / FVG / CHoCH' : 'Search terms… OB / FVG / CHoCH';
   $('#scanBtn').textContent = isZh() ? '開始掃描' : 'Run scan';
