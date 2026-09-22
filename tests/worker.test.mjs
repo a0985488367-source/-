@@ -221,6 +221,28 @@ test('/status 回報 Worker 自己掃描有沒有開', async () => {
   assert.equal(on.workerScanTop, 30);
 });
 
+test('/status 回報 Worker 自己掃描的快取新鮮度，不會觸發真的重新掃描', async () => {
+  const env = makeEnv({ WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_STALE_MIN: '15' });
+  globalThis.fetch = async (url) => {
+    throw new Error('查 /status 不該打任何外部 API：' + url);
+  };
+
+  const empty = await (await worker.fetch(new Request('https://w.test/status'), env)).json();
+  assert.equal(empty.workerScanCache, null, '還沒掃過時，快取欄位應該是 null');
+  assert.equal(empty.workerScanStaleMin, 15);
+
+  const cached = {
+    generatedAt: new Date(Date.now() - 3 * 60000).toISOString(),
+    provider: 'bybit',
+    interval: '1h', htfInterval: '1d', universe: 1, scanned: 1, skippedLowVolatility: 0, minScore: 0,
+    counts: { ready: 0, waiting: 0, total: 0 }, rows: [],
+  };
+  await env.SMC_KV.put('worker-scan:cache', JSON.stringify(cached));
+  const withCache = await (await worker.fetch(new Request('https://w.test/status'), env)).json();
+  assert.equal(withCache.workerScanCache.provider, 'bybit');
+  assert.equal(withCache.workerScanCache.ageMinutes, 3);
+});
+
 /* -------------------------------------------------------- Worker 自己掃描 */
 
 test('WORKER_SCAN_ENABLED 開啟時，Worker 自己即時掃描，不去讀 data/market.json', async () => {
