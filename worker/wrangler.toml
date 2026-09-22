@@ -19,7 +19,8 @@
 # 選用：Worker 自己即時掃描（需要 Workers Paid，細節見 index.js 開頭的說明）
 #   Variable      WORKER_SCAN_ENABLED / WORKER_SCAN_TOP / WORKER_SCAN_BATCH_SIZE /
 #                 WORKER_SCAN_BATCH_INTERVAL_MIN / WORKER_SCAN_INTERVAL / WORKER_SCAN_PROVIDERS /
-#                 WORKER_SCAN_MIN_SCORE（掃描累積門檻，跟推播/下單門檻 MIN_SCORE 是分開的）
+#                 WORKER_SCAN_MIN_SCORE（掃描累積門檻，跟推播/下單門檻 MIN_SCORE 是分開的）/
+#                 WORKER_SCAN_CONCURRENCY（單批內同時發出的請求數，共用 IP 容易被限流）
 #
 # 選用：把 Worker 自己的掃描結果寫回 data/market.json（細節見 index.js 開頭的說明）
 #   Secret        GITHUB_API_TOKEN（fine-grained PAT，只給這個倉庫的 Contents 讀寫權限）
@@ -46,9 +47,11 @@ AUTO_TRADE_LEVERAGE_MIN = "3"
 AUTO_TRADE_LEVERAGE_MAX = "10"
 # Worker 自己即時掃描（需要 Workers Paid；開啟前留意對外部交易所 API 的
 # 請求量會增加，見 index.js 開頭的說明）。採分批架構：候選池 120 檔，
-# 每 10 分鐘只真的重新掃描其中 20 檔（避免撐爆 Workers Paid 的 30 秒 CPU
-# 上限），結果累積進 KV，繞完一輪（120/20=6 批 × 10 分鐘 ≈ 1 小時）就等於
-# 整個候選池都更新過一次；比對現價／自動下單仍然是每 2 分鐘執行
+# 每 10 分鐘只真的重新掃描其中 20 檔，結果累積進 KV，繞完一輪（120/20=6
+# 批 × 10 分鐘 ≈ 1 小時）就等於整個候選池都更新過一次；比對現價／自動
+# 下單仍然是每 2 分鐘執行。分批（跟下面的 CONCURRENCY）不是因為 CPU 撐
+# 不住——實測 120 檔全掃不到 1 秒 CPU 時間——是因為 Cloudflare 邊緣節點
+# 對外是共用 IP，一次塞太多請求容易被交易所限流擋掉
 WORKER_SCAN_ENABLED = "true"
 WORKER_SCAN_TOP = "120"
 WORKER_SCAN_BATCH_SIZE = "20"
@@ -59,6 +62,9 @@ WORKER_SCAN_INTERVAL = "1h"
 # 下單留到比對現價那一步才照 MIN_SCORE 篩——這樣累積結果才不會被鎖死在
 # 「這一批剛好有幾檔當下超過推播門檻」，候選池繞完一輪才能真的都留下來
 WORKER_SCAN_MIN_SCORE = "0"
+# 單批內同時發出的請求數；共用 IP 愈大愈容易被限流，數字愈小單批要花
+# 愈久跑完，但比較不會整批被擋
+WORKER_SCAN_CONCURRENCY = "3"
 # 資料源照這個順序嘗試，優先用 Bybit（跟自動下單實際交易的交易所一致）
 WORKER_SCAN_PROVIDERS = "bybit,binance,okx"
 

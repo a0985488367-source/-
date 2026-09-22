@@ -305,11 +305,15 @@ https://smc-signals.<你的子網域>.workers.dev/run?dry=1 立刻試跑一次�
 分鐘的執行預設只做「比對現價」這種輕量工作，不夠格自己重新分析。
 
 升級到 **Workers Paid**（$5/月，CPU 時間上限從 10ms 拉到 30 秒）之後，
-可以讓 Worker 自己做即時分析。但 30 秒 CPU 上限撐不住「一次把 120 檔都
-做完整的兩階段結構分析」，所以採**分批**架構：候選池（依成交量排序取前
-`WORKER_SCAN_TOP` 檔）不是一次掃完，而是每隔 `WORKER_SCAN_BATCH_INTERVAL_MIN`
-分鐘只真的重新掃描其中 `WORKER_SCAN_BATCH_SIZE` 檔，結果累積進 KV，繞完
-一輪候選池就等於整個候選池都更新過一次：
+可以讓 Worker 自己做即時分析。CPU 其實綽綽有餘（實測 120 檔全掃不到 1
+秒），真正的限制是**對外請求**：Cloudflare 邊緣節點打外部 API 是從共用
+IP 出去，跟其他 Cloudflare 客戶共用，一次塞太多請求容易被交易所的 IP
+限流擋掉（實測一次掃 20 檔就有 3 成起跳的失敗率）。所以採**分批**架構：
+候選池（依成交量排序取前 `WORKER_SCAN_TOP` 檔）不是一次掃完，而是每隔
+`WORKER_SCAN_BATCH_INTERVAL_MIN` 分鐘只真的重新掃描其中
+`WORKER_SCAN_BATCH_SIZE` 檔（同一批內再用 `WORKER_SCAN_CONCURRENCY` 限
+制同時發出的請求數），結果累積進 KV，繞完一輪候選池就等於整個候選池都
+更新過一次：
 
 ```toml
 # worker/wrangler.toml 的 [vars]
@@ -319,6 +323,7 @@ WORKER_SCAN_BATCH_SIZE = "20"           # 每批真的重新掃描幾檔
 WORKER_SCAN_BATCH_INTERVAL_MIN = "10"   # 幾分鐘算下一批
 WORKER_SCAN_INTERVAL = "1h"
 WORKER_SCAN_MIN_SCORE = "0"             # 掃描累積門檻，故意很低（幾乎不濾）
+WORKER_SCAN_CONCURRENCY = "3"           # 單批內同時發出的請求數，共用 IP 別調太大
 WORKER_SCAN_PROVIDERS = "bybit,binance,okx"  # 資料源順序，預設優先用 Bybit
 ```
 
@@ -334,8 +339,9 @@ GitHub Actions 那份 `data/market.json` 的做法一致），`MIN_SCORE` 只在
 把整個候選池都掃過一次；同一檔幣種平均要等將近 1 小時才會被重新分析一次，
 但因為是分批輪流掃，實際上**每 10 分鐘就有一批新資料進來**，不是整批
 一次到齊、一次過期。想要更即時可以縮小 `WORKER_SCAN_TOP`（候選池變小，
-繞一輪更快）或拉大 `WORKER_SCAN_BATCH_SIZE`（單批算更多檔，但更接近 CPU
-上限，請斟酌）。
+繞一輪更快）或拉大 `WORKER_SCAN_BATCH_SIZE`（單批算更多檔，但單批請求
+更密集、更容易被限流，請斟酌；同時也可以調低 `WORKER_SCAN_CONCURRENCY`
+換取更穩定的成功率）。
 
 Worker 每 2 分鐘還是會照排程執行一次，但那是「比對現價、判斷有沒有進場」
 的輕量工作；還沒輪到下一批時直接沿用 KV 累積的結果，完全不會打外部 API，

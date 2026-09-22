@@ -23,13 +23,19 @@
  * App 網站的全市場掃描頁面看到的還是 GitHub 那份（120 檔、含資金費率），
  * 兩邊互不取代。
  *
- * 採「分批」架構，不是一次掃完整個候選池：Workers Paid 的 30 秒 CPU 上限
- * 撐不住一次把 WORKER_SCAN_TOP 檔都做完整的兩階段結構分析，所以每次真的
- * 重新掃描只處理 WORKER_SCAN_BATCH_SIZE 檔（候選池裡的一小段，循環索引），
- * 每隔 WORKER_SCAN_BATCH_INTERVAL_MIN 分鐘才算下一批，結果累積進 SMC_KV，
- * 繞完一輪候選池（≈ TOP / BATCH_SIZE 批）就等於整個候選池都更新過一次。
- * 例如 TOP=120、BATCH_SIZE=20、INTERVAL=10 分鐘 → 6 批 × 10 分鐘 ≈ 1 小時
- * 涵蓋 120 檔；拉長 INTERVAL 或縮小 BATCH_SIZE 可以再降低單批的運算量。
+ * 採「分批」架構，不是一次掃完整個候選池：實測 SMC 結構分析本身很便宜
+ * （120 檔全掃只要不到 1 秒 CPU 時間，30 秒上限完全夠用），真正的瓶頸是
+ * 對外請求——Cloudflare Worker 打外部 API 是從邊緣節點的共用 IP 出去，
+ * 跟同時間其他 Cloudflare 客戶共用同一個 IP，一次塞太多請求容易被交易所
+ * 的 IP 限流擋掉（實測一次掃 20 檔就有 3 成起跳的失敗率）。分批把請求量
+ * 攤開在時間軸上，同一批內也用 WORKER_SCAN_CONCURRENCY 限制同時發出的
+ * 請求數，兩者都是在跟「這個 IP 看起來太像機器人」拉開距離，不是在省
+ * CPU。每次真的重新掃描只處理 WORKER_SCAN_BATCH_SIZE 檔（候選池裡的一
+ * 小段，循環索引），每隔 WORKER_SCAN_BATCH_INTERVAL_MIN 分鐘才算下一批，
+ * 結果累積進 SMC_KV，繞完一輪候選池（≈ TOP / BATCH_SIZE 批）就等於整個
+ * 候選池都更新過一次。例如 TOP=120、BATCH_SIZE=20、INTERVAL=10 分鐘 →
+ * 6 批 × 10 分鐘 ≈ 1 小時涵蓋 120 檔；縮小 BATCH_SIZE 或 CONCURRENCY 可以
+ * 再降低單批的請求密度。
  *
  * 「算下一批」跟「Worker 每 2 分鐘的 cron 頻率」是兩回事：比對現價、自動
  * 下單這些仍然每 2 分鐘執行，只有「輪到的那一批要不要重新分析」照
@@ -51,6 +57,8 @@
  *   Variable  WORKER_SCAN_BATCH_INTERVAL_MIN  幾分鐘算下一批（預設 10）
  *   Variable  WORKER_SCAN_INTERVAL            進場週期（預設 1h，跟 GitHub 那份一致）
  *   Variable  WORKER_SCAN_MIN_SCORE           掃描累積門檻（預設 0，幾乎不濾）
+ *   Variable  WORKER_SCAN_CONCURRENCY         單批內同時發出的請求數（預設 3；
+ *             Cloudflare 邊緣節點是共用 IP，愈大愈容易被交易所限流擋掉）
  *
  * 注意：即使有分批，長期下來對外部交易所 API 的請求量還是會比原本 GitHub
  * 排程高（頻率拉高了），開啟前請留意交易所的速率限制。
@@ -137,10 +145,11 @@ const DEFAULTS = {
   AUTO_TRADE_LEVERAGE_MAX: '10',
   WORKER_SCAN_ENABLED: 'false',
   WORKER_SCAN_TOP: '120',              // 候選池總大小：想涵蓋幾檔（循環一輪會全部算過）
-  WORKER_SCAN_BATCH_SIZE: '20',        // 每次真的重新掃描只算這麼多檔，CPU 才不會爆
+  WORKER_SCAN_BATCH_SIZE: '20',        // 每次真的重新掃描只算這麼多檔，請求量才不會一次太密集
   WORKER_SCAN_BATCH_INTERVAL_MIN: '10', // 幾分鐘算下一批；一輪時間 ≈ (TOP/BATCH_SIZE) × 這個值
   WORKER_SCAN_INTERVAL: '1h',
   WORKER_SCAN_MIN_SCORE: '0', // 掃描時累積用的門檻，故意很低；真正要不要推播/下單看 MIN_SCORE
+  WORKER_SCAN_CONCURRENCY: '3', // 單批內同時發出的請求數，共用 IP 愈大愈容易被限流
   GITHUB_REPO: 'a0985488367-source/-',
   GITHUB_MARKET_PATH: 'data/market.json',
 };
@@ -215,6 +224,7 @@ export default {
         workerScanBatchSize: workerScanEnabled ? Number(cfg(env, 'WORKER_SCAN_BATCH_SIZE')) : null,
         workerScanBatchIntervalMin: workerScanEnabled ? Number(cfg(env, 'WORKER_SCAN_BATCH_INTERVAL_MIN')) : null,
         workerScanMinScore: workerScanEnabled ? Number(cfg(env, 'WORKER_SCAN_MIN_SCORE')) : null,
+        workerScanConcurrency: workerScanEnabled ? Number(cfg(env, 'WORKER_SCAN_CONCURRENCY')) : null,
         workerScanCache,
         market: market.error
           ? market
@@ -472,12 +482,15 @@ async function getFreshMarket(env) {
   // 掃描階段刻意用很低的門檻（不是拿來決定要不要推播的 MIN_SCORE）：
   // 存起來的候選池要盡量完整，真正的評分門檻在 run() 檢查現價那一步才套用。
   const scanMinScore = Number(cfg(env, 'WORKER_SCAN_MIN_SCORE'));
+  // Cloudflare 邊緣節點是共用 IP，同時發太多請求容易被交易所限流擋掉；
+  // 用比 scripts/market-scan.mjs（有專屬 IP，預設 concurrency=8）低的並行數。
+  const concurrency = Number(cfg(env, 'WORKER_SCAN_CONCURRENCY'));
 
   if (!env.SMC_KV) {
     // 沒有 KV 就沒辦法記住批次進度／累積結果，退化成每次都整批重掃
-    // WORKER_SCAN_TOP 檔——這個數字如果照預設值 120，很容易在 Workers Paid
-    // 的 30 秒 CPU 上限內跑不完，沒設 KV 的話務必自己把它調小。
-    return scanMarket({ providerIds, top, detailTop: top, interval, minScore: scanMinScore });
+    // WORKER_SCAN_TOP 檔——請求量大時一樣容易被限流，沒設 KV 的話務必
+    // 把它調小，或是拉高 WORKER_SCAN_BATCH_INTERVAL_MIN 降低整體頻率。
+    return scanMarket({ providerIds, top, detailTop: top, interval, minScore: scanMinScore, concurrency });
   }
 
   const intervalMin = Number(cfg(env, 'WORKER_SCAN_BATCH_INTERVAL_MIN'));
@@ -491,7 +504,7 @@ async function getFreshMarket(env) {
   }
 
   const cursor = Number((await env.SMC_KV.get(WORKER_SCAN_CURSOR_KEY)) || '0');
-  const batch = await scanMarket({ providerIds, top, offset: cursor, batchSize, interval, minScore: scanMinScore, detailTop: batchSize });
+  const batch = await scanMarket({ providerIds, top, offset: cursor, batchSize, interval, minScore: scanMinScore, detailTop: batchSize, concurrency });
 
   const rowsRaw = await env.SMC_KV.get(WORKER_SCAN_ROWS_KEY);
   const rows = rowsRaw ? JSON.parse(rowsRaw) : {};
