@@ -264,13 +264,28 @@ export default {
       });
     }
     if (url.pathname === '/auto-trade/status') {
+      const hasKeys = !!(env.BYBIT_DEMO_API_KEY && env.BYBIT_DEMO_API_SECRET);
+      // 多週期上線後訊號變多，同時間可能有更多部位在開——加上帳戶餘額跟
+      // 追蹤中的部位數，排查「[110007] ab not enough for new order」這種
+      // 下單失敗時，才能直接看出是保證金真的被既有部位佔滿，還是別的問題，
+      // 不用再另外查 Bybit 後台。只讀，不會因為查狀態就多下單。
+      let wallet = null;
+      if (hasKeys) {
+        wallet = await bybitCall(env, 'GET', '/v5/account/wallet-balance', { accountType: 'UNIFIED' })
+          .then((w) => ({ totalAvailableBalance: Number(w?.list?.[0]?.totalAvailableBalance ?? 0), totalWalletBalance: Number(w?.list?.[0]?.totalWalletBalance ?? 0) }))
+          .catch((e) => ({ error: e.message }));
+      }
+      const openPositions = env.SMC_KV ? await env.SMC_KV.list({ prefix: 'open-pos:' }).then((r) => r.keys.map((k) => k.name)) : [];
       return json({
         enabled: await isAutoTradeEnabled(env),
-        hasKeys: !!(env.BYBIT_DEMO_API_KEY && env.BYBIT_DEMO_API_SECRET),
+        hasKeys,
         mode: 'demo',
         riskPct: Number(cfg(env, 'AUTO_TRADE_RISK_PCT')),
         leverageMin: Number(cfg(env, 'AUTO_TRADE_LEVERAGE_MIN')),
         leverageMax: Number(cfg(env, 'AUTO_TRADE_LEVERAGE_MAX')),
+        wallet,
+        trackedOpenPositions: openPositions.length,
+        openPositions,
       });
     }
     if (url.pathname === '/auto-trade/on' || url.pathname === '/auto-trade/off') {

@@ -645,11 +645,36 @@ test('自動下單預設關閉：就算金鑰都設定好了，價格到了也�
 
 test('/auto-trade/status 回報開關與金鑰狀態', async () => {
   const env = makeEnv({ BYBIT_DEMO_API_KEY: 'k', BYBIT_DEMO_API_SECRET: 's' });
+  stubFetch({ market: makeMarket([]), prices: {}, discord: [], bybit: { calls: [], wallet: { list: [{ totalAvailableBalance: '500', totalWalletBalance: '1000' }] } } });
   const res = await worker.fetch(new Request('https://w.test/auto-trade/status'), env);
   const out = await res.json();
   assert.equal(out.enabled, false);
   assert.equal(out.hasKeys, true);
   assert.equal(out.mode, 'demo');
+});
+
+test('/auto-trade/status 補上帳戶餘額跟追蹤中的部位數，方便排查下單失敗（保證金不足等）', async () => {
+  const env = makeEnv({ BYBIT_DEMO_API_KEY: 'k', BYBIT_DEMO_API_SECRET: 's' });
+  stubFetch({
+    market: makeMarket([]), prices: {}, discord: [],
+    bybit: { calls: [], wallet: { list: [{ totalAvailableBalance: '12.34', totalWalletBalance: '1000' }] } },
+  });
+  await env.SMC_KV.put('open-pos:BTCUSDT:long', JSON.stringify({ symbol: 'BTCUSDT', dir: 'long' }));
+  await env.SMC_KV.put('open-pos:ETHUSDT:short', JSON.stringify({ symbol: 'ETHUSDT', dir: 'short' }));
+  const res = await worker.fetch(new Request('https://w.test/auto-trade/status'), env);
+  const out = await res.json();
+  assert.equal(out.wallet.totalAvailableBalance, 12.34, '保證金被既有部位佔滿時，這裡應該看得出可用餘額很低');
+  assert.equal(out.wallet.totalWalletBalance, 1000);
+  assert.equal(out.trackedOpenPositions, 2);
+  assert.deepEqual(out.openPositions.sort(), ['open-pos:BTCUSDT:long', 'open-pos:ETHUSDT:short']);
+});
+
+test('/auto-trade/status 沒有金鑰時不會嘗試查 Bybit 餘額', async () => {
+  const env = makeEnv();
+  globalThis.fetch = async (url) => { throw new Error('沒有金鑰不該打 Bybit API：' + url); };
+  const res = await worker.fetch(new Request('https://w.test/auto-trade/status'), env);
+  const out = await res.json();
+  assert.equal(out.wallet, null);
 });
 
 test('/auto-trade/on 沒帶對 token 會被拒絕，也不會真的開啟', async () => {
