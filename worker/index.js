@@ -197,10 +197,10 @@ export default {
       let workerScanCache = null;
       if (workerScanEnabled && env.SMC_KV) {
         const metaRaw = await env.SMC_KV.get(WORKER_SCAN_META_KEY).catch(() => null);
-        if (metaRaw) {
-          const metaByInterval = JSON.parse(metaRaw);
+        const metaByInterval = parseScanMeta(metaRaw);
+        if (Object.keys(metaByInterval).length) {
           const rowsRaw = await env.SMC_KV.get(WORKER_SCAN_ROWS_KEY).catch(() => null);
-          const rows = rowsRaw ? JSON.parse(rowsRaw) : {};
+          const rows = parseScanRows(rowsRaw);
           const entries = Object.entries(metaByInterval);
           // 有多個週期（WORKER_SCAN_INTERVAL 逗號分隔）時，每個週期是各自
           // 分開輪流掃描的，所以每個週期都有自己的 lastBatchAt／診斷欄位——
@@ -388,6 +388,55 @@ const WORKER_SCAN_META_KEY = 'worker-scan:meta';
 const WORKER_SCAN_CURSOR_KEY = 'worker-scan:cursor';
 
 /**
+ * 支援多週期之前，worker-scan:meta 是攤平的單一物件（{provider, interval,
+ * lastBatchAt, ...}），不是「週期 → meta」的巢狀結構。升級後如果 KV 裡
+ * 還留著這種舊格式，Object.entries() 會把 provider/interval 這些欄位名
+ * 誤判成「週期名稱」，而且舊格式裡某些欄位的值本來就會是 null（例如
+ * lastBatchSampleError），對 null 取 .lastBatchAt 會直接丟例外炸掉整個
+ * request——實測部署後 /status、/run 全部回 500 就是這個問題。
+ * 偵測格式不符就當成沒掃過（回傳空物件），讓系統用新格式從頭累積，
+ * 比硬解析猜測舊資料該對應到哪個新設定的週期安全。
+ */
+function parseScanMeta(metaRaw) {
+  if (!metaRaw) return {};
+  let meta;
+  try { meta = JSON.parse(metaRaw); } catch { return {}; }
+  const looksValid = meta && typeof meta === 'object'
+    && Object.values(meta).every((m) => m && typeof m === 'object' && typeof m.lastBatchAt === 'string');
+  return looksValid ? meta : {};
+}
+
+/**
+ * 支援多週期之前，worker-scan:rows 是用裸 symbol 當 key；現在改成
+ * `${interval}::${symbol}`（見 scanRowKey）避免不同週期的同一個 symbol
+ * 互相覆蓋。升級後 KV 裡如果還留著舊格式的 key（沒有 "::"），直接濾掉
+ * ——不然這些資料格式對不上，卻會被 Object.values() 當成正常的計畫，
+ * 混進 run() 的監看名單，用不知道是哪個週期、可能早就過期的進場價／
+ * 停損價去比對現價，非常危險。
+ */
+function parseScanRows(rowsRaw) {
+  if (!rowsRaw) return {};
+  let rows;
+  try { rows = JSON.parse(rowsRaw); } catch { return {}; }
+  if (!rows || typeof rows !== 'object') return {};
+  return Object.fromEntries(Object.entries(rows).filter(([k]) => k.includes('::')));
+}
+
+/**
+ * 同樣的道理，worker-scan:cursor 以前是單一數字（字串形式），現在改成
+ * `{ [interval]: number }`。JSON.parse 一個數字字串會得到 JS 數字（不是
+ * 物件），如果直接照舊格式沿用，之後對它寫入 cursorByInterval[interval]
+ * = ... 在 strict mode 下會丟「Cannot create property on number」的例外
+ * ——所以一樣要先驗證格式，不是物件就當成沒有游標，從頭開始算。
+ */
+function parseScanCursor(cursorRaw) {
+  if (!cursorRaw) return {};
+  let cursor;
+  try { cursor = JSON.parse(cursorRaw); } catch { return {}; }
+  return cursor && typeof cursor === 'object' && !Array.isArray(cursor) ? cursor : {};
+}
+
+/**
  * 支援多個進場週期（WORKER_SCAN_INTERVAL 可以是逗號分隔的清單，例如
  * "3m,15m,30m,1h"）之後，同一個 symbol 在不同週期會有不同的計畫，
  * 存進 worker-scan:rows 時要用「週期+symbol」當 key，不然不同週期的
@@ -548,7 +597,7 @@ async function getFreshMarket(env) {
 
   const intervalMin = Number(cfg(env, 'WORKER_SCAN_BATCH_INTERVAL_MIN'));
   const metaRaw = await env.SMC_KV.get(WORKER_SCAN_META_KEY);
-  const metaByInterval = metaRaw ? JSON.parse(metaRaw) : {};
+  const metaByInterval = parseScanMeta(metaRaw);
 
   // 找出「到期該重新掃描」的週期，優先處理最久沒更新的那個（沒 meta 的
   // 當成最久沒更新，第一次一定會被排到）——同一個 tick 只真的重新掃描
@@ -565,17 +614,17 @@ async function getFreshMarket(env) {
 
   if (!due.length) {
     const rowsRaw = await env.SMC_KV.get(WORKER_SCAN_ROWS_KEY);
-    return assembleMarket(metaByInterval, rowsRaw ? JSON.parse(rowsRaw) : {});
+    return assembleMarket(metaByInterval, parseScanRows(rowsRaw));
   }
 
   const interval = due[0];
   const cursorRaw = await env.SMC_KV.get(WORKER_SCAN_CURSOR_KEY);
-  const cursorByInterval = cursorRaw ? JSON.parse(cursorRaw) : {};
+  const cursorByInterval = parseScanCursor(cursorRaw);
   const cursor = cursorByInterval[interval] || 0;
   const batch = await scanMarket({ providerIds, top, offset: cursor, batchSize, interval, minScore: scanMinScore, detailTop: batchSize, concurrency });
 
   const rowsRaw = await env.SMC_KV.get(WORKER_SCAN_ROWS_KEY);
-  const rows = rowsRaw ? JSON.parse(rowsRaw) : {};
+  const rows = parseScanRows(rowsRaw);
   const qualified = new Map(batch.rows.map((r) => [r.symbol, r]));
   // 這一批考慮過但沒通過門檻的，要從累積結果裡刪掉——不然分數掉下去的
   // 標的會卡在舊資料裡，一直到下一輪才被清掉都不夠即時
