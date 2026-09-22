@@ -194,6 +194,14 @@ export default {
             provider: meta.provider,
             coveredSymbols: Object.keys(rows).length,
             poolTotal: meta.poolTotal,
+            // coveredSymbols 是 0 的時候，靠這幾個欄位分辨是「這一批真的都沒
+            // 通過門檻」還是「資料源這批幾乎都要不到資料」（lastBatchErrors
+            // 接近 lastBatchScanned 就是後者——這種情況調 WORKER_SCAN_MIN_SCORE
+            // 沒有用，要查的是資料源本身）
+            lastBatchScanned: meta.lastBatchScanned ?? null,
+            lastBatchSkippedLowVolatility: meta.lastBatchSkippedLowVolatility ?? null,
+            lastBatchErrors: meta.lastBatchErrors ?? null,
+            lastBatchQualified: meta.lastBatchQualified ?? null,
           };
         }
       }
@@ -500,6 +508,14 @@ async function getFreshMarket(env) {
     htfInterval: batch.htfInterval,
     poolTotal: batch.poolTotal,
     lastBatchAt: batch.generatedAt,
+    // 這一批的診斷資訊：跟 coveredSymbols 一起看，能分辨「候選池真的沒
+    // 通過門檻的計畫」還是「資料源這批幾乎都要不到資料」（後者不會被
+    // WORKER_SCAN_MIN_SCORE 篩掉，是完全不同的問題，之前只看 coveredSymbols
+    // 沒辦法分辨）
+    lastBatchScanned: batch.scanned,
+    lastBatchSkippedLowVolatility: batch.skippedLowVolatility,
+    lastBatchErrors: batch.errorCount,
+    lastBatchQualified: batch.rows.length,
   };
   const nextCursor = batch.poolTotal ? (cursor + batch.universe) % batch.poolTotal : 0;
 
