@@ -426,6 +426,45 @@ test('游標繞完候選池一圈會回到開頭（round-robin）', async () => 
   assert.equal(cursor['1h'], 3);
 });
 
+test('KV 裡還留著支援多週期以前的舊格式資料時，不會噴例外，而是當成沒掃過重新開始', async () => {
+  // 實測踩過的坑：支援多週期以前，meta 是攤平的單一物件，rows 用裸
+  // symbol 當 key，cursor 是單純數字字串。upgrade 後如果直接照新格式
+  // （週期 → meta／`interval::symbol`／週期 → cursor）解析這些舊資料，
+  // Object.entries(舊 meta) 會把 provider/interval 這些欄位名誤判成
+  // 「週期」，而且舊 meta 裡 lastBatchSampleError 這個欄位的值本來就會
+  // 是 null，對 null 取 .lastBatchAt 會直接丟例外——部署後 /status、
+  // /run 全部噴 500 就是這個問題（cursor 同理：對數字字串賦屬性在
+  // strict mode 下也會噴例外）。
+  const discord = [];
+  const env = makeEnv({ WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_PROVIDERS: 'demo', WORKER_SCAN_TOP: '12', WORKER_SCAN_BATCH_SIZE: '5', WORKER_SCAN_BATCH_INTERVAL_MIN: '15', MIN_SCORE: '999' });
+  const legacyFlatMeta = {
+    provider: 'demo', interval: '1h', htfInterval: '1d', poolTotal: 12,
+    lastBatchAt: new Date(Date.now() - 100 * 60000).toISOString(),
+    lastBatchScanned: 12, lastBatchSkippedLowVolatility: 0, lastBatchErrors: 0,
+    lastBatchQualified: 5, lastBatchSampleError: null, // 這個 null 就是實測會噴例外的地方
+  };
+  await env.SMC_KV.put('worker-scan:meta', JSON.stringify(legacyFlatMeta));
+  await env.SMC_KV.put('worker-scan:rows', JSON.stringify({ ABCUSDT: row({ symbol: 'ABCUSDT' }) })); // 舊格式：裸 symbol
+  await env.SMC_KV.put('worker-scan:cursor', '10'); // 舊格式：純數字字串
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    if (u.includes('discord')) { discord.push(JSON.parse(init.body)); return new Response(null, { status: 204 }); }
+    throw new Error('未預期的請求：' + u);
+  };
+
+  // /status 不該噴例外
+  const status = await (await worker.fetch(new Request('https://w.test/status'), env)).json();
+  assert.equal(status.workerScanCache, null, '格式不符的舊 meta 應該當成沒掃過，不是硬解析出一堆假的「週期」');
+
+  // /run 也不該噴例外，而是正常跑完（當成第一次掃描，reset 重新累積）
+  const out = await runWorker(env);
+  assert.equal(typeof out.checked, 'number', '舊格式資料不該讓整次執行掛掉');
+  const rows = JSON.parse(await env.SMC_KV.get('worker-scan:rows'));
+  assert.ok(!('ABCUSDT' in rows), '舊格式（裸 symbol）的殘留資料不該被當成有效計畫繼續用');
+  const meta = JSON.parse(await env.SMC_KV.get('worker-scan:meta'));
+  assert.ok(meta['1h'], '重新掃描後應該用新格式（週期 → meta）存回去');
+});
+
 /* -------------------------------------------------------- 多個進場週期 */
 
 test('WORKER_SCAN_INTERVAL 設多個週期時，一個 tick 只真的重新掃描最久沒更新的那個週期', async () => {
