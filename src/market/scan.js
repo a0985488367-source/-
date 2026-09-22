@@ -141,6 +141,10 @@ export async function scanMarket({
   });
 
   const skipped = stage1.filter((r) => r?.skipped).length;
+  // 記錄這一批裡有幾檔資料源直接失敗（逾時／被擋／格式錯誤）：跟
+  // coveredSymbols 一起看，能分辨「候選池真的沒訊號」還是「資料源這批
+  // 幾乎都要不到資料」——後者不會被 minScore 篩掉，是完全不同的問題。
+  const errored = stage1.filter((r) => r?.error).length;
   const candidates = stage1
     .filter((r) => r && !r.error && !r.skipped && r.score >= minScore)
     .sort((a, b) => b.score - a.score);
@@ -180,6 +184,7 @@ export async function scanMarket({
     universeSymbols: universe.map((t) => t.symbol),
     scanned: stage1.filter((r) => r && !r.skipped).length,
     skippedLowVolatility: skipped,
+    errorCount: errored,
     minScore,
     counts: { ready: ready.length, waiting: waiting.length, total: rows.length },
     rows,
