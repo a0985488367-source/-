@@ -202,6 +202,7 @@ export default {
             lastBatchSkippedLowVolatility: meta.lastBatchSkippedLowVolatility ?? null,
             lastBatchErrors: meta.lastBatchErrors ?? null,
             lastBatchQualified: meta.lastBatchQualified ?? null,
+            lastBatchSampleError: meta.lastBatchSampleError ?? null,
           };
         }
       }
@@ -516,6 +517,7 @@ async function getFreshMarket(env) {
     lastBatchSkippedLowVolatility: batch.skippedLowVolatility,
     lastBatchErrors: batch.errorCount,
     lastBatchQualified: batch.rows.length,
+    lastBatchSampleError: batch.sampleError,
   };
   const nextCursor = batch.poolTotal ? (cursor + batch.universe) % batch.poolTotal : 0;
 
