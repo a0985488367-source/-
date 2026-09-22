@@ -122,12 +122,28 @@ export default {
       // 完整掃描。真正在跑的資料源看 workerScanEnabled 這個欄位就知道。
       const market = await getMarket(env).catch((e) => ({ error: e.message }));
       const workerScanEnabled = cfg(env, 'WORKER_SCAN_ENABLED') === 'true';
+      // 只讀 KV，不會觸發真正的掃描——用來確認「快取到底有沒有照
+      // WORKER_SCAN_STALE_MIN 在更新」，不用另外查 Cloudflare 後台。
+      let workerScanCache = null;
+      if (workerScanEnabled && env.SMC_KV) {
+        const cached = await env.SMC_KV.get('worker-scan:cache').catch(() => null);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          workerScanCache = {
+            generatedAt: parsed.generatedAt,
+            ageMinutes: Math.round((Date.now() - new Date(parsed.generatedAt).getTime()) / 60000),
+            provider: parsed.provider,
+          };
+        }
+      }
       return json({
         ok: true,
         marketUrl: cfg(env, 'MARKET_URL'),
         minScore: Number(cfg(env, 'MIN_SCORE')),
         workerScanEnabled,
         workerScanTop: workerScanEnabled ? Number(cfg(env, 'WORKER_SCAN_TOP')) : null,
+        workerScanStaleMin: workerScanEnabled ? Number(cfg(env, 'WORKER_SCAN_STALE_MIN')) : null,
+        workerScanCache,
         market: market.error
           ? market
           : {
