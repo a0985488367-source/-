@@ -236,14 +236,40 @@ test('/status 回報 Worker 自己掃描分批進度，不會觸發真的重新�
   assert.equal(empty.workerScanBatchSize, 20);
   assert.equal(empty.workerScanBatchIntervalMin, 10);
 
-  const meta = { provider: 'bybit', interval: '1h', htfInterval: '1d', poolTotal: 120, lastBatchAt: new Date(Date.now() - 3 * 60000).toISOString() };
+  const meta = { '1h': { provider: 'bybit', interval: '1h', htfInterval: '1d', poolTotal: 120, lastBatchAt: new Date(Date.now() - 3 * 60000).toISOString() } };
   await env.SMC_KV.put('worker-scan:meta', JSON.stringify(meta));
-  await env.SMC_KV.put('worker-scan:rows', JSON.stringify({ ABCUSDT: row(), DEFUSDT: row({ symbol: 'DEFUSDT' }) }));
+  await env.SMC_KV.put('worker-scan:rows', JSON.stringify({ '1h::ABCUSDT': row(), '1h::DEFUSDT': row({ symbol: 'DEFUSDT' }) }));
   const withCache = await (await worker.fetch(new Request('https://w.test/status'), env)).json();
   assert.equal(withCache.workerScanCache.provider, 'bybit');
   assert.equal(withCache.workerScanCache.lastBatchAgeMinutes, 3);
   assert.equal(withCache.workerScanCache.coveredSymbols, 2);
   assert.equal(withCache.workerScanCache.poolTotal, 120);
+  assert.equal(withCache.workerScanCache.perInterval.length, 1, '只設了一個週期（預設 1h），perInterval 應該只有一筆');
+  assert.equal(withCache.workerScanCache.perInterval[0].interval, '1h');
+  assert.equal(withCache.workerScanCache.perInterval[0].provider, 'bybit');
+});
+
+test('/status 的 perInterval 逐一列出每個週期各自的批次進度', async () => {
+  const env = makeEnv({ WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_INTERVAL: '3m,1h' });
+  globalThis.fetch = async (url) => {
+    throw new Error('查 /status 不該打任何外部 API：' + url);
+  };
+  const meta = {
+    '3m': { provider: 'demo', interval: '3m', htfInterval: '1h', poolTotal: 12, lastBatchAt: new Date(Date.now() - 2 * 60000).toISOString() },
+    '1h': { provider: 'demo', interval: '1h', htfInterval: '1d', poolTotal: 12, lastBatchAt: new Date(Date.now() - 8 * 60000).toISOString() },
+  };
+  await env.SMC_KV.put('worker-scan:meta', JSON.stringify(meta));
+  await env.SMC_KV.put('worker-scan:rows', JSON.stringify({
+    '3m::ABCUSDT': row({ interval: '3m' }),
+    '1h::ABCUSDT': row({ interval: '1h' }),
+  }));
+  const out = await (await worker.fetch(new Request('https://w.test/status'), env)).json();
+  assert.equal(out.workerScanCache.coveredSymbols, 2, '兩個週期各自的 row 都要算進去（不同週期不算重複）');
+  assert.equal(out.workerScanCache.provider, 'demo', '取最新更新那個週期（3m）當代表');
+  assert.equal(out.workerScanCache.lastBatchAgeMinutes, 2);
+  const byInterval = Object.fromEntries(out.workerScanCache.perInterval.map((p) => [p.interval, p]));
+  assert.equal(byInterval['3m'].lastBatchAgeMinutes, 2);
+  assert.equal(byInterval['1h'].lastBatchAgeMinutes, 8);
 });
 
 /* -------------------------------------------------------- Worker 自己掃描 */
@@ -278,8 +304,10 @@ test('還沒輪到下一批時，直接沿用累積結果，不會真的重新�
   const discord = [];
   const env = makeEnv({ WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_PROVIDERS: 'demo', WORKER_SCAN_BATCH_INTERVAL_MIN: '15' });
   const fakeMeta = {
-    provider: 'CACHED-FAKE-MARKER', interval: '1h', htfInterval: '1d', poolTotal: 12,
-    lastBatchAt: new Date().toISOString(), // 剛剛，遠比 15 分鐘新鮮
+    '1h': {
+      provider: 'CACHED-FAKE-MARKER', interval: '1h', htfInterval: '1d', poolTotal: 12,
+      lastBatchAt: new Date().toISOString(), // 剛剛，遠比 15 分鐘新鮮
+    },
   };
   await env.SMC_KV.put('worker-scan:meta', JSON.stringify(fakeMeta));
   await env.SMC_KV.put('worker-scan:rows', JSON.stringify({}));
@@ -290,7 +318,7 @@ test('還沒輪到下一批時，直接沿用累積結果，不會真的重新�
   };
   await runWorker(env);
   const after = JSON.parse(await env.SMC_KV.get('worker-scan:meta'));
-  assert.equal(after.provider, 'CACHED-FAKE-MARKER', '還沒到批次間隔就不該被覆寫');
+  assert.equal(after['1h'].provider, 'CACHED-FAKE-MARKER', '還沒到批次間隔就不該被覆寫');
   assert.equal(await env.SMC_KV.get('worker-scan:cursor'), null, '沒有真的掃描，游標也不該被動到');
 });
 
@@ -301,8 +329,10 @@ test('輪到下一批時，真的重新掃描那一批，並把結果累積進�
   // （這個測試只關心「有沒有真的重新掃描、游標有沒有往前推」）
   const env = makeEnv({ WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_PROVIDERS: 'demo', WORKER_SCAN_TOP: '12', WORKER_SCAN_BATCH_SIZE: '5', WORKER_SCAN_BATCH_INTERVAL_MIN: '15', MIN_SCORE: '999' });
   const staleMeta = {
-    provider: 'STALE-FAKE-MARKER', interval: '1h', htfInterval: '1d', poolTotal: 12,
-    lastBatchAt: new Date(Date.now() - 100 * 60000).toISOString(), // 100 分鐘前，遠超過 15 分鐘
+    '1h': {
+      provider: 'STALE-FAKE-MARKER', interval: '1h', htfInterval: '1d', poolTotal: 12,
+      lastBatchAt: new Date(Date.now() - 100 * 60000).toISOString(), // 100 分鐘前，遠超過 15 分鐘
+    },
   };
   await env.SMC_KV.put('worker-scan:meta', JSON.stringify(staleMeta));
   await env.SMC_KV.put('worker-scan:rows', JSON.stringify({}));
@@ -313,8 +343,9 @@ test('輪到下一批時，真的重新掃描那一批，並把結果累積進�
   };
   await runWorker(env);
   const after = JSON.parse(await env.SMC_KV.get('worker-scan:meta'));
-  assert.equal(after.provider, 'demo', '過期後應該真的重新掃描這一批，結果來自 demo');
-  assert.equal(await env.SMC_KV.get('worker-scan:cursor'), '5', '游標應該往前推 batchSize（5）');
+  assert.equal(after['1h'].provider, 'demo', '過期後應該真的重新掃描這一批，結果來自 demo');
+  const cursor = JSON.parse(await env.SMC_KV.get('worker-scan:cursor'));
+  assert.equal(cursor['1h'], 5, '游標應該往前推 batchSize（5）');
 });
 
 test('掃描累積用的門檻（WORKER_SCAN_MIN_SCORE）不受推播門檻（MIN_SCORE）影響', async () => {
@@ -328,8 +359,10 @@ test('掃描累積用的門檻（WORKER_SCAN_MIN_SCORE）不受推播門檻（MI
     WORKER_SCAN_BATCH_SIZE: '5', WORKER_SCAN_BATCH_INTERVAL_MIN: '15', MIN_SCORE: '999',
   });
   const staleMeta = {
-    provider: 'demo', interval: '1h', htfInterval: '1d', poolTotal: 12,
-    lastBatchAt: new Date(Date.now() - 100 * 60000).toISOString(),
+    '1h': {
+      provider: 'demo', interval: '1h', htfInterval: '1d', poolTotal: 12,
+      lastBatchAt: new Date(Date.now() - 100 * 60000).toISOString(),
+    },
   };
   await env.SMC_KV.put('worker-scan:meta', JSON.stringify(staleMeta));
   await env.SMC_KV.put('worker-scan:rows', JSON.stringify({}));
@@ -352,13 +385,15 @@ test('分批結果會累積：這批沒掃到的舊資料要保留，不會被�
   // 才不用連帶 mock 現價 API（這個測試只關心批次累積的邏輯本身）
   const env = makeEnv({ WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_PROVIDERS: 'demo', WORKER_SCAN_TOP: '12', WORKER_SCAN_BATCH_SIZE: '5', WORKER_SCAN_BATCH_INTERVAL_MIN: '15', MIN_SCORE: '999' });
   const staleMeta = {
-    provider: 'demo', interval: '1h', htfInterval: '1d', poolTotal: 12,
-    lastBatchAt: new Date(Date.now() - 100 * 60000).toISOString(),
+    '1h': {
+      provider: 'demo', interval: '1h', htfInterval: '1d', poolTotal: 12,
+      lastBatchAt: new Date(Date.now() - 100 * 60000).toISOString(),
+    },
   };
   await env.SMC_KV.put('worker-scan:meta', JSON.stringify(staleMeta));
   // 假裝上一輪已經掃過某個這次批次不會碰到的幣種（游標從 0 開始只會碰前 5 檔）
-  await env.SMC_KV.put('worker-scan:rows', JSON.stringify({ 'UNTOUCHED-FAKE-SYMBOL': row({ symbol: 'UNTOUCHED-FAKE-SYMBOL' }) }));
-  await env.SMC_KV.put('worker-scan:cursor', '0');
+  await env.SMC_KV.put('worker-scan:rows', JSON.stringify({ '1h::UNTOUCHED-FAKE-SYMBOL': row({ symbol: 'UNTOUCHED-FAKE-SYMBOL' }) }));
+  await env.SMC_KV.put('worker-scan:cursor', JSON.stringify({ '1h': 0 }));
   globalThis.fetch = async (url, init) => {
     const u = String(url);
     if (u.includes('discord')) { discord.push(JSON.parse(init.body)); return new Response(null, { status: 204 }); }
@@ -366,26 +401,86 @@ test('分批結果會累積：這批沒掃到的舊資料要保留，不會被�
   };
   await runWorker(env);
   const rows = JSON.parse(await env.SMC_KV.get('worker-scan:rows'));
-  assert.ok('UNTOUCHED-FAKE-SYMBOL' in rows, '這批沒碰到的舊資料應該還在，不會被這次的批次結果蓋掉');
+  assert.ok('1h::UNTOUCHED-FAKE-SYMBOL' in rows, '這批沒碰到的舊資料應該還在，不會被這次的批次結果蓋掉');
 });
 
 test('游標繞完候選池一圈會回到開頭（round-robin）', async () => {
   const discord = [];
   const env = makeEnv({ WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_PROVIDERS: 'demo', WORKER_SCAN_TOP: '12', WORKER_SCAN_BATCH_SIZE: '5', WORKER_SCAN_BATCH_INTERVAL_MIN: '15', MIN_SCORE: '999' });
   const staleMeta = {
-    provider: 'demo', interval: '1h', htfInterval: '1d', poolTotal: 12,
-    lastBatchAt: new Date(Date.now() - 100 * 60000).toISOString(),
+    '1h': {
+      provider: 'demo', interval: '1h', htfInterval: '1d', poolTotal: 12,
+      lastBatchAt: new Date(Date.now() - 100 * 60000).toISOString(),
+    },
   };
   await env.SMC_KV.put('worker-scan:meta', JSON.stringify(staleMeta));
   await env.SMC_KV.put('worker-scan:rows', JSON.stringify({}));
-  await env.SMC_KV.put('worker-scan:cursor', '10'); // 候選池共 12 檔，10 + 5 應該繞回 3（10+5-12）
+  await env.SMC_KV.put('worker-scan:cursor', JSON.stringify({ '1h': 10 })); // 候選池共 12 檔，10 + 5 應該繞回 3（10+5-12）
   globalThis.fetch = async (url, init) => {
     const u = String(url);
     if (u.includes('discord')) { discord.push(JSON.parse(init.body)); return new Response(null, { status: 204 }); }
     throw new Error('未預期的請求：' + u);
   };
   await runWorker(env);
-  assert.equal(await env.SMC_KV.get('worker-scan:cursor'), '3');
+  const cursor = JSON.parse(await env.SMC_KV.get('worker-scan:cursor'));
+  assert.equal(cursor['1h'], 3);
+});
+
+/* -------------------------------------------------------- 多個進場週期 */
+
+test('WORKER_SCAN_INTERVAL 設多個週期時，一個 tick 只真的重新掃描最久沒更新的那個週期', async () => {
+  const discord = [];
+  const env = makeEnv({
+    WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_PROVIDERS: 'demo', WORKER_SCAN_TOP: '12',
+    WORKER_SCAN_BATCH_SIZE: '5', WORKER_SCAN_BATCH_INTERVAL_MIN: '15', WORKER_SCAN_INTERVAL: '3m,1h',
+    MIN_SCORE: '999',
+  });
+  // 3m 比 1h 更久沒更新（120 分鐘 vs 20 分鐘前，都已經超過 15 分鐘的批次間隔，
+  // 兩個都到期了），照「最久沒更新優先」的邏輯，這次 tick 應該挑 3m。
+  const meta = {
+    '3m': { provider: 'demo', interval: '3m', htfInterval: '1h', poolTotal: 12, lastBatchAt: new Date(Date.now() - 120 * 60000).toISOString() },
+    '1h': { provider: 'OLD-1H-MARKER', interval: '1h', htfInterval: '1d', poolTotal: 12, lastBatchAt: new Date(Date.now() - 20 * 60000).toISOString() },
+  };
+  await env.SMC_KV.put('worker-scan:meta', JSON.stringify(meta));
+  await env.SMC_KV.put('worker-scan:rows', JSON.stringify({}));
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    if (u.includes('discord')) { discord.push(JSON.parse(init.body)); return new Response(null, { status: 204 }); }
+    throw new Error('未預期的請求：' + u);
+  };
+  await runWorker(env);
+  const after = JSON.parse(await env.SMC_KV.get('worker-scan:meta'));
+  assert.ok(after['3m'].lastBatchAt !== meta['3m'].lastBatchAt, '3m 最久沒更新，這次 tick 應該真的重新掃描它');
+  assert.equal(after['1h'].provider, 'OLD-1H-MARKER', '1h 這次不該被動到，留給下一個 tick');
+  const cursor = JSON.parse(await env.SMC_KV.get('worker-scan:cursor'));
+  assert.equal(cursor['3m'], 5, '3m 的游標應該往前推 batchSize（5）');
+  assert.equal(cursor['1h'], undefined, '1h 這次沒掃到，游標不該被動到');
+});
+
+test('多個週期各自累積結果，同一個 symbol 不同週期不會互相覆蓋', async () => {
+  const discord = [];
+  const env = makeEnv({
+    WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_PROVIDERS: 'demo', WORKER_SCAN_TOP: '12',
+    WORKER_SCAN_BATCH_SIZE: '5', WORKER_SCAN_BATCH_INTERVAL_MIN: '15', WORKER_SCAN_INTERVAL: '3m,1h',
+    MIN_SCORE: '999',
+  });
+  // 假裝 1h 上一輪已經算出一筆 BTCUSDT 的計畫；3m 這個週期完全還沒掃過
+  // （沒有 meta），這次 tick 應該輪到 3m（沒 meta 的視為最久沒更新）。
+  const meta = {
+    '1h': { provider: 'demo', interval: '1h', htfInterval: '1d', poolTotal: 12, lastBatchAt: new Date().toISOString() },
+  };
+  await env.SMC_KV.put('worker-scan:meta', JSON.stringify(meta));
+  await env.SMC_KV.put('worker-scan:rows', JSON.stringify({ '1h::BTCUSDT': row({ symbol: 'BTCUSDT', interval: '1h' }) }));
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    if (u.includes('discord')) { discord.push(JSON.parse(init.body)); return new Response(null, { status: 204 }); }
+    throw new Error('未預期的請求：' + u);
+  };
+  await runWorker(env);
+  const rows = JSON.parse(await env.SMC_KV.get('worker-scan:rows'));
+  assert.ok('1h::BTCUSDT' in rows, '1h 這筆舊資料應該還在，不會被 3m 這批蓋掉');
+  const after = JSON.parse(await env.SMC_KV.get('worker-scan:meta'));
+  assert.ok(after['3m'], '沒 meta 的週期（3m）這次應該被排到，補上 meta');
 });
 
 /* -------------------------------------------------- 把掃描結果寫回 data/market.json */
@@ -393,7 +488,7 @@ test('游標繞完候選池一圈會回到開頭（round-robin）', async () => 
 test('沒設定 GITHUB_API_TOKEN 時，完全不會呼叫 GitHub API', async () => {
   const discord = [];
   const env = makeEnv({ WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_PROVIDERS: 'demo', WORKER_SCAN_TOP: '12', WORKER_SCAN_BATCH_SIZE: '5', WORKER_SCAN_BATCH_INTERVAL_MIN: '15', MIN_SCORE: '999' });
-  const staleMeta = { provider: 'demo', interval: '1h', htfInterval: '1d', poolTotal: 12, lastBatchAt: new Date(Date.now() - 100 * 60000).toISOString() };
+  const staleMeta = { '1h': { provider: 'demo', interval: '1h', htfInterval: '1d', poolTotal: 12, lastBatchAt: new Date(Date.now() - 100 * 60000).toISOString() } };
   await env.SMC_KV.put('worker-scan:meta', JSON.stringify(staleMeta));
   await env.SMC_KV.put('worker-scan:rows', JSON.stringify({}));
   globalThis.fetch = async (url, init) => {
@@ -411,7 +506,7 @@ test('設定了 GITHUB_API_TOKEN：輪到下一批時把結果寫回 data/market
     WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_PROVIDERS: 'demo', WORKER_SCAN_TOP: '12', WORKER_SCAN_BATCH_SIZE: '5',
     WORKER_SCAN_BATCH_INTERVAL_MIN: '15', MIN_SCORE: '0', GITHUB_API_TOKEN: 'ghp_fake', GITHUB_REPO: 'me/repo',
   });
-  const staleMeta = { provider: 'demo', interval: '1h', htfInterval: '1d', poolTotal: 12, lastBatchAt: new Date(Date.now() - 100 * 60000).toISOString() };
+  const staleMeta = { '1h': { provider: 'demo', interval: '1h', htfInterval: '1d', poolTotal: 12, lastBatchAt: new Date(Date.now() - 100 * 60000).toISOString() } };
   await env.SMC_KV.put('worker-scan:meta', JSON.stringify(staleMeta));
   await env.SMC_KV.put('worker-scan:rows', JSON.stringify({}));
 
@@ -458,7 +553,7 @@ test('GitHub 寫入失敗不影響主流程，Discord 通知照常運作', async
     WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_PROVIDERS: 'demo', WORKER_SCAN_TOP: '12', WORKER_SCAN_BATCH_SIZE: '5',
     WORKER_SCAN_BATCH_INTERVAL_MIN: '15', MIN_SCORE: '999', GITHUB_API_TOKEN: 'ghp_fake',
   });
-  const staleMeta = { provider: 'demo', interval: '1h', htfInterval: '1d', poolTotal: 12, lastBatchAt: new Date(Date.now() - 100 * 60000).toISOString() };
+  const staleMeta = { '1h': { provider: 'demo', interval: '1h', htfInterval: '1d', poolTotal: 12, lastBatchAt: new Date(Date.now() - 100 * 60000).toISOString() } };
   await env.SMC_KV.put('worker-scan:meta', JSON.stringify(staleMeta));
   await env.SMC_KV.put('worker-scan:rows', JSON.stringify({}));
   globalThis.fetch = async (url, init) => {
@@ -474,7 +569,7 @@ test('GitHub 寫入失敗不影響主流程，Discord 通知照常運作', async
 test('還沒輪到下一批的 tick，不會嘗試寫回 GitHub', async () => {
   const discord = [];
   const env = makeEnv({ WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_BATCH_INTERVAL_MIN: '15', GITHUB_API_TOKEN: 'ghp_fake' });
-  const fakeMeta = { provider: 'CACHED', interval: '1h', htfInterval: '1d', poolTotal: 12, lastBatchAt: new Date().toISOString() };
+  const fakeMeta = { '1h': { provider: 'CACHED', interval: '1h', htfInterval: '1d', poolTotal: 12, lastBatchAt: new Date().toISOString() } };
   await env.SMC_KV.put('worker-scan:meta', JSON.stringify(fakeMeta));
   await env.SMC_KV.put('worker-scan:rows', JSON.stringify({}));
   globalThis.fetch = async (url, init) => {

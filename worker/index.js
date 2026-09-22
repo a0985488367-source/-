@@ -55,7 +55,11 @@
  *   Variable  WORKER_SCAN_BATCH_SIZE          每批真的重新掃描幾檔（預設 20；
  *             愈大單批 CPU 愈吃緊，愈小一輪要花愈久才能涵蓋整個候選池）
  *   Variable  WORKER_SCAN_BATCH_INTERVAL_MIN  幾分鐘算下一批（預設 10）
- *   Variable  WORKER_SCAN_INTERVAL            進場週期（預設 1h，跟 GitHub 那份一致）
+ *   Variable  WORKER_SCAN_INTERVAL            進場週期，可以逗號分隔開多個
+ *             （例如 "3m,15m,30m,1h"，預設 1h，跟 GitHub 那份一致）：每個
+ *             週期各自輪流掃描，同一個 tick 只會真的重新掃描一個到期的
+ *             週期，不會因為多加週期就讓單批的請求量變大——細節見
+ *             getFreshMarket() 的說明
  *   Variable  WORKER_SCAN_MIN_SCORE           掃描累積門檻（預設 0，幾乎不濾）
  *   Variable  WORKER_SCAN_CONCURRENCY         單批內同時發出的請求數（預設 3；
  *             Cloudflare 邊緣節點是共用 IP，愈大愈容易被交易所限流擋掉）
@@ -194,24 +198,44 @@ export default {
       if (workerScanEnabled && env.SMC_KV) {
         const metaRaw = await env.SMC_KV.get(WORKER_SCAN_META_KEY).catch(() => null);
         if (metaRaw) {
-          const meta = JSON.parse(metaRaw);
+          const metaByInterval = JSON.parse(metaRaw);
           const rowsRaw = await env.SMC_KV.get(WORKER_SCAN_ROWS_KEY).catch(() => null);
           const rows = rowsRaw ? JSON.parse(rowsRaw) : {};
+          const entries = Object.entries(metaByInterval);
+          // 有多個週期（WORKER_SCAN_INTERVAL 逗號分隔）時，每個週期是各自
+          // 分開輪流掃描的，所以每個週期都有自己的 lastBatchAt／診斷欄位——
+          // perInterval 逐一列出；下面幾個頂層欄位則是取「最新更新的那個
+          // 週期」當代表，方便一眼看整體狀態。
+          const latestEntry = entries.reduce(
+            (a, b) => (!a || new Date(b[1].lastBatchAt) > new Date(a[1].lastBatchAt) ? b : a),
+            null,
+          );
+          const latest = latestEntry?.[1] ?? null;
           workerScanCache = {
-            lastBatchAt: meta.lastBatchAt,
-            lastBatchAgeMinutes: Math.round((Date.now() - new Date(meta.lastBatchAt).getTime()) / 60000),
-            provider: meta.provider,
+            lastBatchAt: latest?.lastBatchAt ?? null,
+            lastBatchAgeMinutes: latest ? Math.round((Date.now() - new Date(latest.lastBatchAt).getTime()) / 60000) : null,
+            provider: latest?.provider ?? null,
             coveredSymbols: Object.keys(rows).length,
-            poolTotal: meta.poolTotal,
+            poolTotal: latest?.poolTotal ?? null,
             // coveredSymbols 是 0 的時候，靠這幾個欄位分辨是「這一批真的都沒
             // 通過門檻」還是「資料源這批幾乎都要不到資料」（lastBatchErrors
             // 接近 lastBatchScanned 就是後者——這種情況調 WORKER_SCAN_MIN_SCORE
-            // 沒有用，要查的是資料源本身）
-            lastBatchScanned: meta.lastBatchScanned ?? null,
-            lastBatchSkippedLowVolatility: meta.lastBatchSkippedLowVolatility ?? null,
-            lastBatchErrors: meta.lastBatchErrors ?? null,
-            lastBatchQualified: meta.lastBatchQualified ?? null,
-            lastBatchSampleError: meta.lastBatchSampleError ?? null,
+            // 沒有用，要查的是資料源本身）。這些數字是最新更新那個週期的，
+            // 其他週期各自的數字看 perInterval。
+            lastBatchScanned: latest?.lastBatchScanned ?? null,
+            lastBatchSkippedLowVolatility: latest?.lastBatchSkippedLowVolatility ?? null,
+            lastBatchErrors: latest?.lastBatchErrors ?? null,
+            lastBatchQualified: latest?.lastBatchQualified ?? null,
+            lastBatchSampleError: latest?.lastBatchSampleError ?? null,
+            perInterval: entries.map(([interval, m]) => ({
+              interval,
+              lastBatchAt: m.lastBatchAt,
+              lastBatchAgeMinutes: Math.round((Date.now() - new Date(m.lastBatchAt).getTime()) / 60000),
+              provider: m.provider,
+              poolTotal: m.poolTotal,
+              lastBatchErrors: m.lastBatchErrors ?? null,
+              lastBatchQualified: m.lastBatchQualified ?? null,
+            })),
           };
         }
       }
@@ -363,14 +387,30 @@ const WORKER_SCAN_ROWS_KEY = 'worker-scan:rows';
 const WORKER_SCAN_META_KEY = 'worker-scan:meta';
 const WORKER_SCAN_CURSOR_KEY = 'worker-scan:cursor';
 
-/** 把 SMC_KV 裡累積的批次結果組成跟 data/market.json 一樣的結構 */
-function assembleMarket(meta, rows) {
+/**
+ * 支援多個進場週期（WORKER_SCAN_INTERVAL 可以是逗號分隔的清單，例如
+ * "3m,15m,30m,1h"）之後，同一個 symbol 在不同週期會有不同的計畫，
+ * 存進 worker-scan:rows 時要用「週期+symbol」當 key，不然不同週期的
+ * 計畫會互相覆蓋掉。
+ */
+const scanRowKey = (interval, symbol) => `${interval}::${symbol}`;
+
+/**
+ * 把 SMC_KV 裡累積的批次結果組成跟 data/market.json 一樣的結構。
+ * meta 現在是「每個週期各自的 meta」（{ [interval]: {...} }），因為每個
+ * 週期是分開輪流掃描的；用最新一次的那個週期的 meta 當代表（provider、
+ * generatedAt 這些欄位本來就只是給人看的摘要，真正要看的資料在 rows，
+ * 每一列都自己帶著 interval 欄位）。
+ */
+function assembleMarket(metaByInterval, rows) {
+  const metas = Object.values(metaByInterval);
+  const latest = metas.reduce((a, b) => (!a || new Date(b.lastBatchAt) > new Date(a.lastBatchAt) ? b : a), null);
   return {
-    generatedAt: meta.lastBatchAt,
-    provider: meta.provider,
-    interval: meta.interval,
-    htfInterval: meta.htfInterval,
-    universe: meta.poolTotal,
+    generatedAt: latest?.lastBatchAt ?? null,
+    provider: latest?.provider ?? null,
+    interval: metas.map((m) => m.interval).join(','),
+    htfInterval: latest?.htfInterval ?? null,
+    universe: latest?.poolTotal ?? null,
     rows: Object.values(rows),
   };
 }
@@ -471,6 +511,15 @@ async function publishMarketToGitHub(env, rows, meta) {
  * 「這一批剛好有幾檔當下就超過門檻」，候選池繞完一輪也不會有多少標的
  * 留下來；分開之後，只要是有效計畫都會先留著，run() 檢查現價那一步才會
  * 真的照 MIN_SCORE 篩要不要繼續看。
+ *
+ * WORKER_SCAN_INTERVAL 可以是逗號分隔的多個週期（例如 "3m,15m,30m,1h"）：
+ * 每個週期各自有自己的批次進度（rows/meta/cursor 三個 KV 值內部都是用
+ * 「週期」當 key 的物件），每個 tick 只挑「一個」最久沒更新的週期真的
+ * 重新掃描一批，其他到期的週期留給下一個 tick——這樣同一個 tick 的請求量
+ * （固定是一批 WORKER_SCAN_BATCH_SIZE 檔）不會因為多加週期而變大，只是
+ * 把原本大部分 tick 都空著沒用的時間拿來輪流服務其他週期；每個週期各自
+ * 涵蓋一輪候選池的時間跟只有單一週期時一樣（≈ TOP/BATCH_SIZE ×
+ * BATCH_INTERVAL_MIN），不會因為週期變多就變慢。
  */
 async function getFreshMarket(env) {
   if (cfg(env, 'WORKER_SCAN_ENABLED') !== 'true') return getMarket(env);
@@ -478,7 +527,7 @@ async function getFreshMarket(env) {
   const providerIds = env.WORKER_SCAN_PROVIDERS ? env.WORKER_SCAN_PROVIDERS.split(',') : undefined;
   const top = Number(cfg(env, 'WORKER_SCAN_TOP'));
   const batchSize = Number(cfg(env, 'WORKER_SCAN_BATCH_SIZE'));
-  const interval = cfg(env, 'WORKER_SCAN_INTERVAL');
+  const intervals = cfg(env, 'WORKER_SCAN_INTERVAL').split(',').map((s) => s.trim()).filter(Boolean);
   // 掃描階段刻意用很低的門檻（不是拿來決定要不要推播的 MIN_SCORE）：
   // 存起來的候選池要盡量完整，真正的評分門檻在 run() 檢查現價那一步才套用。
   const scanMinScore = Number(cfg(env, 'WORKER_SCAN_MIN_SCORE'));
@@ -487,23 +536,42 @@ async function getFreshMarket(env) {
   const concurrency = Number(cfg(env, 'WORKER_SCAN_CONCURRENCY'));
 
   if (!env.SMC_KV) {
-    // 沒有 KV 就沒辦法記住批次進度／累積結果，退化成每次都整批重掃
-    // WORKER_SCAN_TOP 檔——請求量大時一樣容易被限流，沒設 KV 的話務必
-    // 把它調小，或是拉高 WORKER_SCAN_BATCH_INTERVAL_MIN 降低整體頻率。
-    return scanMarket({ providerIds, top, detailTop: top, interval, minScore: scanMinScore, concurrency });
+    // 沒有 KV 就沒辦法記住批次進度／累積結果，退化成每個週期都整批重掃
+    // WORKER_SCAN_TOP 檔——請求量會隨週期數等比增加，沒設 KV 的話務必
+    // 把 TOP 調小或只留一個週期。
+    const results = [];
+    for (const interval of intervals) {
+      results.push(await scanMarket({ providerIds, top, detailTop: top, interval, minScore: scanMinScore, concurrency }));
+    }
+    return { ...results[0], rows: results.flatMap((r) => r.rows) };
   }
 
   const intervalMin = Number(cfg(env, 'WORKER_SCAN_BATCH_INTERVAL_MIN'));
   const metaRaw = await env.SMC_KV.get(WORKER_SCAN_META_KEY);
-  const meta = metaRaw ? JSON.parse(metaRaw) : null;
-  const dueForBatch = !meta || (Date.now() - new Date(meta.lastBatchAt).getTime()) / 60000 >= intervalMin;
+  const metaByInterval = metaRaw ? JSON.parse(metaRaw) : {};
 
-  if (!dueForBatch) {
+  // 找出「到期該重新掃描」的週期，優先處理最久沒更新的那個（沒 meta 的
+  // 當成最久沒更新，第一次一定會被排到）——同一個 tick 只真的重新掃描
+  // 一個週期，其他到期的留給下一個 tick，避免一次塞爆對外請求。
+  const due = intervals
+    .filter((iv) => !metaByInterval[iv] || (Date.now() - new Date(metaByInterval[iv].lastBatchAt).getTime()) / 60000 >= intervalMin)
+    .sort((a, b) => {
+      const at = metaByInterval[a]?.lastBatchAt;
+      const bt = metaByInterval[b]?.lastBatchAt;
+      if (!at) return -1;
+      if (!bt) return 1;
+      return new Date(at) - new Date(bt);
+    });
+
+  if (!due.length) {
     const rowsRaw = await env.SMC_KV.get(WORKER_SCAN_ROWS_KEY);
-    return assembleMarket(meta, rowsRaw ? JSON.parse(rowsRaw) : {});
+    return assembleMarket(metaByInterval, rowsRaw ? JSON.parse(rowsRaw) : {});
   }
 
-  const cursor = Number((await env.SMC_KV.get(WORKER_SCAN_CURSOR_KEY)) || '0');
+  const interval = due[0];
+  const cursorRaw = await env.SMC_KV.get(WORKER_SCAN_CURSOR_KEY);
+  const cursorByInterval = cursorRaw ? JSON.parse(cursorRaw) : {};
+  const cursor = cursorByInterval[interval] || 0;
   const batch = await scanMarket({ providerIds, top, offset: cursor, batchSize, interval, minScore: scanMinScore, detailTop: batchSize, concurrency });
 
   const rowsRaw = await env.SMC_KV.get(WORKER_SCAN_ROWS_KEY);
@@ -512,11 +580,12 @@ async function getFreshMarket(env) {
   // 這一批考慮過但沒通過門檻的，要從累積結果裡刪掉——不然分數掉下去的
   // 標的會卡在舊資料裡，一直到下一輪才被清掉都不夠即時
   for (const symbol of batch.universeSymbols) {
-    if (qualified.has(symbol)) rows[symbol] = qualified.get(symbol);
-    else delete rows[symbol];
+    const key = scanRowKey(interval, symbol);
+    if (qualified.has(symbol)) rows[key] = qualified.get(symbol);
+    else delete rows[key];
   }
 
-  const newMeta = {
+  metaByInterval[interval] = {
     provider: batch.provider,
     interval: batch.interval,
     htfInterval: batch.htfInterval,
@@ -532,21 +601,22 @@ async function getFreshMarket(env) {
     lastBatchQualified: batch.rows.length,
     lastBatchSampleError: batch.sampleError,
   };
-  const nextCursor = batch.poolTotal ? (cursor + batch.universe) % batch.poolTotal : 0;
+  cursorByInterval[interval] = batch.poolTotal ? (cursor + batch.universe) % batch.poolTotal : 0;
 
   await Promise.all([
     env.SMC_KV.put(WORKER_SCAN_ROWS_KEY, JSON.stringify(rows)),
-    env.SMC_KV.put(WORKER_SCAN_META_KEY, JSON.stringify(newMeta)),
-    env.SMC_KV.put(WORKER_SCAN_CURSOR_KEY, String(nextCursor)),
+    env.SMC_KV.put(WORKER_SCAN_META_KEY, JSON.stringify(metaByInterval)),
+    env.SMC_KV.put(WORKER_SCAN_CURSOR_KEY, JSON.stringify(cursorByInterval)),
   ]);
 
-  // 選用：把這批更新後的累積結果順便寫回 data/market.json，讓 App 網站的
-  // 全市場掃描頁面也能跟著即時更新。只在真的算出新一批時才寫（不會每 2
-  // 分鐘都寫一次），沒設定 GITHUB_API_TOKEN 就完全不會呼叫。失敗不影響
-  // 主流程——「這次比對現價、判斷有沒有進場」永遠比「有沒有寫成 GitHub」重要。
-  await publishMarketToGitHub(env, Object.values(rows), newMeta).catch(() => {});
+  // 選用：把這批更新後的累積結果（所有週期合併）順便寫回 data/market.json，
+  // 讓 App 網站的全市場掃描頁面也能跟著即時更新。只在真的算出新一批時才寫
+  // （不會每 2 分鐘都寫一次），沒設定 GITHUB_API_TOKEN 就完全不會呼叫。
+  // 失敗不影響主流程——「這次比對現價、判斷有沒有進場」永遠比「有沒有寫成
+  // GitHub」重要。
+  await publishMarketToGitHub(env, Object.values(rows), metaByInterval[interval]).catch(() => {});
 
-  return assembleMarket(newMeta, rows);
+  return assembleMarket(metaByInterval, rows);
 }
 
 /**

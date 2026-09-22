@@ -321,11 +321,19 @@ WORKER_SCAN_ENABLED = "true"
 WORKER_SCAN_TOP = "120"                 # 候選池總大小，依成交量排序取前 N 檔
 WORKER_SCAN_BATCH_SIZE = "20"           # 每批真的重新掃描幾檔
 WORKER_SCAN_BATCH_INTERVAL_MIN = "10"   # 幾分鐘算下一批
-WORKER_SCAN_INTERVAL = "1h"
+WORKER_SCAN_INTERVAL = "3m,15m,30m,1h"  # 逗號分隔可以同時開多個進場週期
 WORKER_SCAN_MIN_SCORE = "0"             # 掃描累積門檻，故意很低（幾乎不濾）
 WORKER_SCAN_CONCURRENCY = "3"           # 單批內同時發出的請求數，共用 IP 別調太大
 WORKER_SCAN_PROVIDERS = "bybit,binance,okx"  # 資料源順序，預設優先用 Bybit
 ```
+
+`WORKER_SCAN_INTERVAL` 可以同時開多個週期：每個週期各自輪流掃描候選池，
+同一個 tick 只真的重新掃描「一個」最久沒更新的週期，其他到期的留給下一
+個 tick——所以同一個 tick 的請求量（固定是一批 `WORKER_SCAN_BATCH_SIZE`
+檔）不會因為多開週期而變大，只是把原本大部分 tick 都空著沒用的時間拿來
+輪流服務其他週期；每個週期各自涵蓋一輪候選池的時間跟只開一個週期時一樣
+（見下面的算法），不會因為週期變多就變慢，等於是用同樣的請求預算換到
+更多組獨立的訊號來源（同一檔幣種在不同週期會有不同的計畫，彼此不衝突）。
 
 `WORKER_SCAN_MIN_SCORE` 跟 `MIN_SCORE`（要不要因此推播／下單的門檻）是
 **兩件事**，刻意分開：掃描累積這一步只要「是個有效計畫」就先存起來（跟
