@@ -11,8 +11,21 @@
 
 import { $, setHTML, toast } from './dom.js';
 import { createClient, explainError, planToOrder, roundTick, MODE_LABELS, isRealMoney } from '../exchange/bybit.js';
+import { escapeHtml } from '../core/utils.js';
 
 const KEY_STORE = 'smc-terminal:bybit';
+const AUTOTRADE_KEY_STORE = 'smc-terminal:autotrade';
+
+/** Worker 網址跟 token 一樣只存本機，理由跟 Bybit 金鑰完全一樣。 */
+function loadAutoTradeConfig() {
+  try {
+    const raw = localStorage.getItem(AUTOTRADE_KEY_STORE);
+    return raw ? JSON.parse(raw) : {};
+  } catch { return {}; }
+}
+function saveAutoTradeConfig(v) {
+  try { localStorage.setItem(AUTOTRADE_KEY_STORE, JSON.stringify(v)); } catch { /* 隱私模式下會失敗，忽略 */ }
+}
 
 /** 金鑰存在瀏覽器本機。這裡刻意不加密：加密金鑰也得存在同一台機器，
  *  只是讓人誤以為更安全。真正的防護是「不要在公用裝置上填」與「不要開提領權限」。 */
@@ -48,6 +61,8 @@ export function createTradePanel(deps) {
   let instrument = null;
   let lastQuote = null;
   let liveArmed = false;
+  let atCfg = loadAutoTradeConfig();
+  let atStatus = null;
 
   const isZh = () => deps.lang() === 'zh';
   const cur = () => keys[keys.mode] ?? {};
@@ -96,8 +111,20 @@ export function createTradePanel(deps) {
         </header>
         <div id="bbPositions" class="muted small">—</div>
       </div>
+
+      <div class="card">
+        <header class="card__head"><h3>${isZh() ? '自動下單（Cloudflare Worker）' : 'Auto-trade (Worker)'}</h3></header>
+        <p class="muted small">${isZh()
+          ? 'Worker 每 2 分鐘比對現價，價格到了就用 Bybit <b>模擬交易（Demo）</b>帳戶自動下單——跟上面手動下單是兩回事，這裡只是幫你開關那個開關。網址跟 token 只存在這台裝置，不會上傳。'
+          : 'The Worker checks prices every 2 minutes and auto-places Demo (fake-money) orders when price returns to the entry zone. This is separate from manual orders above — it just flips that switch. URL and token stay on this device only.'}</p>
+        <div class="form-row"><label>Worker URL</label><input id="atUrl" class="input" type="text" autocomplete="off" placeholder="https://smc-signals.xxx.workers.dev" value="${escapeHtml(atCfg.workerUrl ?? '')}" /></div>
+        <div class="form-row"><label>Token</label><input id="atToken" class="input" type="password" autocomplete="off" value="${escapeHtml(atCfg.token ?? '')}" /></div>
+        <button class="btn btn--block" id="atCheck">${isZh() ? '儲存並檢查狀態' : 'Save & check status'}</button>
+        <div id="atStatusBox" class="muted small">${isZh() ? '尚未檢查。' : 'Not checked yet.'}</div>
+      </div>
     `);
     bind();
+    if (atCfg.workerUrl && atCfg.token) refreshAutoTradeStatus().then(renderAutoTradeCard);
     renderTicket();
   }
 
@@ -151,6 +178,75 @@ export function createTradePanel(deps) {
     };
 
     $('#bbRefresh').onclick = refreshPositions;
+
+    $('#atCheck').onclick = async () => {
+      atCfg = {
+        workerUrl: ($('#atUrl').value || '').trim().replace(/\/+$/, ''),
+        token: ($('#atToken').value || '').trim(),
+      };
+      saveAutoTradeConfig(atCfg);
+      if (!atCfg.workerUrl) return toast(isZh() ? '請先填 Worker 網址' : 'Enter the Worker URL first', 'error');
+      $('#atStatusBox').textContent = isZh() ? '檢查中…' : 'Checking…';
+      await refreshAutoTradeStatus();
+      renderAutoTradeCard();
+    };
+  }
+
+  /** 讀 Worker 的 /auto-trade/status，唯讀、不需要 token。 */
+  async function refreshAutoTradeStatus() {
+    if (!atCfg.workerUrl) { atStatus = null; return; }
+    try {
+      const res = await fetch(`${atCfg.workerUrl}/auto-trade/status`, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      atStatus = await res.json();
+    } catch (e) {
+      atStatus = { error: e.message || String(e) };
+    }
+  }
+
+  function renderAutoTradeCard() {
+    const el = $('#atStatusBox');
+    if (!el) return;
+    if (!atStatus) { el.textContent = isZh() ? '尚未檢查。' : 'Not checked yet.'; return; }
+    if (atStatus.error) {
+      el.innerHTML = `<span class="pill pill--down">${isZh() ? '連不到 Worker' : 'Unreachable'}</span> ${escapeHtml(atStatus.error)}`;
+      return;
+    }
+    const on = atStatus.enabled;
+    el.innerHTML = `
+      <div class="rows">
+        <div class="row"><span>${isZh() ? '狀態' : 'Status'}</span><b class="${on ? 'down' : 'up'}">${on ? (isZh() ? '已開啟' : 'ON') : (isZh() ? '已關閉' : 'OFF')}</b></div>
+        <div class="row"><span>${isZh() ? 'Bybit Demo 金鑰' : 'Bybit Demo keys'}</span><b>${atStatus.hasKeys ? (isZh() ? '已設定' : 'set') : (isZh() ? '未設定' : 'missing')}</b></div>
+        <div class="row"><span>${isZh() ? '風險 / 槓桿' : 'Risk / leverage'}</span><b>${atStatus.riskPct}% · ${atStatus.leverage}x</b></div>
+      </div>
+      <button class="btn btn--block ${on ? 'btn--danger' : 'btn--primary'}" id="atToggle">
+        ${on ? (isZh() ? '關閉自動下單' : 'Turn off') : (isZh() ? '開啟自動下單' : 'Turn on')}
+      </button>
+    `;
+    $('#atToggle').onclick = toggleAutoTrade;
+  }
+
+  async function toggleAutoTrade() {
+    if (!atCfg.workerUrl || !atCfg.token) {
+      return toast(isZh() ? '請先填 Worker 網址與 token' : 'Enter the Worker URL and token first', 'error');
+    }
+    const enable = !(atStatus && atStatus.enabled);
+    if (enable && !confirm(isZh()
+      ? '確定要開啟自動下單嗎？之後價格到了進場區，會用 Bybit Demo 帳戶自動下單（不是真錢，但會真的送出委託）。'
+      : 'Turn on auto-trade? Future signals will auto-place Demo (fake-money) orders on Bybit.')) return;
+    const btn = $('#atToggle');
+    if (btn) { btn.disabled = true; btn.textContent = isZh() ? '處理中…' : 'Working…'; }
+    try {
+      const res = await fetch(`${atCfg.workerUrl}/auto-trade/${enable ? 'on' : 'off'}?token=${encodeURIComponent(atCfg.token)}`, { cache: 'no-store' });
+      const text = await res.text();
+      if (!res.ok) throw new Error(text || `HTTP ${res.status}`);
+      toast(text);
+      await refreshAutoTradeStatus();
+      renderAutoTradeCard();
+    } catch (e) {
+      toast((isZh() ? '操作失敗：' : 'Failed: ') + (e.message || e), 'error');
+      if (btn) { btn.disabled = false; renderAutoTradeCard(); }
+    }
   }
 
   async function renderTicket() {

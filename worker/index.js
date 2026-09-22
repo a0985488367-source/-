@@ -91,14 +91,14 @@ export default {
     }
     if (url.pathname === '/auto-trade/on' || url.pathname === '/auto-trade/off') {
       if (!env.AUTO_TRADE_TOKEN || url.searchParams.get('token') !== env.AUTO_TRADE_TOKEN) {
-        return new Response('未授權：token 錯誤，或還沒設定 AUTO_TRADE_TOKEN 這個 secret。', { status: 403 });
+        return new Response('未授權：token 錯誤，或還沒設定 AUTO_TRADE_TOKEN 這個 secret。', { status: 403, headers: CORS_HEADERS });
       }
-      if (!env.SMC_KV) return new Response('沒有設定 SMC_KV，無法記住開關狀態。', { status: 500 });
+      if (!env.SMC_KV) return new Response('沒有設定 SMC_KV，無法記住開關狀態。', { status: 500, headers: CORS_HEADERS });
       const enable = url.pathname === '/auto-trade/on';
       await env.SMC_KV.put('auto-trade:enabled', String(enable));
       return new Response(
         enable ? '✅ 自動下單已開啟（Demo 模擬交易，非真錢）' : '⛔ 自動下單已關閉',
-        { headers: { 'content-type': 'text/plain; charset=utf-8' } },
+        { headers: { 'content-type': 'text/plain; charset=utf-8', ...CORS_HEADERS } },
       );
     }
     return new Response(
@@ -113,7 +113,11 @@ export default {
   },
 };
 
-const json = (o) => new Response(JSON.stringify(o, null, 2), { headers: { 'content-type': 'application/json; charset=utf-8' } });
+// App（跟這支 Worker不同網域）要能直接用 fetch() 打 /auto-trade/* 這幾個端點，
+// 才能在 App 裡放開關按鈕，不用手動貼網址；這裡的資訊本來就設計成公開唯讀
+// 或需要 token 才能寫，加開 CORS 不會多暴露什麼。
+const CORS_HEADERS = { 'access-control-allow-origin': '*' };
+const json = (o) => new Response(JSON.stringify(o, null, 2), { headers: { 'content-type': 'application/json; charset=utf-8', ...CORS_HEADERS } });
 
 /* ------------------------------------------------------------------ 主流程 */
 
