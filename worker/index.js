@@ -31,6 +31,10 @@
  *             倉位大小是兩回事，倉位大小目前刻意維持固定 %，不分評分。
  *   KV        SMC_KV 的 auto-trade:enabled 這個 key，預設不存在＝關閉
  *
+ * 下單成功後會把這筆部位記進 SMC_KV（key 開頭 open-pos:），之後每次執行都
+ * 會比對「追蹤中的部位」跟 Bybit 現在實際的持倉，少了的就代表平倉了，
+ * 推一則結算通知（用偵測到平倉當下的市價估算 R，不是交易所的精確成交價）。
+ *
  * 開關（開啟後才會真的下單，就算金鑰都設定好了）：
  *   GET /auto-trade/status         查看目前開/關（不需要 token，唯讀）
  *   GET /auto-trade/on?token=xxx   開啟
@@ -143,16 +147,22 @@ const json = (o) => new Response(JSON.stringify(o, null, 2), { headers: { 'conte
 
 async function run(env, { dry = false } = {}) {
   const t0 = Date.now();
+
+  // 部位關閉偵測跟這次掃描的新訊號完全獨立，放在 market.json 新鮮度檢查
+  // 之前執行——不然 market.json 剛好太舊的那幾分鐘，已經開倉的部位就算真的
+  // 平倉了也不會被通知到。
+  const closedPositions = dry ? { checked: 0, closed: 0 } : await checkClosedPositions(env).catch(() => ({ checked: 0, closed: 0, error: true }));
+
   const market = await getMarket(env);
   const ageMin = (Date.now() - new Date(market.generatedAt).getTime()) / 60000;
   if (ageMin > Number(cfg(env, 'MAX_MARKET_AGE_MIN'))) {
-    return { skipped: 'market-too-old', ageMinutes: Math.round(ageMin) };
+    return { skipped: 'market-too-old', ageMinutes: Math.round(ageMin), closedPositions };
   }
 
   const minScore = Number(cfg(env, 'MIN_SCORE'));
   const nearPct = Number(cfg(env, 'NEAR_PCT'));
   const watch = market.rows.filter((r) => r.valid && r.status === 'waiting' && r.score >= minScore);
-  if (!watch.length) return { checked: 0, alerts: 0, ageMinutes: Math.round(ageMin) };
+  if (!watch.length) return { checked: 0, alerts: 0, ageMinutes: Math.round(ageMin), closedPositions };
 
   const prices = await getPrices(watch.map((r) => r.symbol));
   const hits = [];
@@ -195,6 +205,7 @@ async function run(env, { dry = false } = {}) {
     alerts: sent.length,
     sent,
     autoTradeOn,
+    closedPositions,
     ageMinutes: Math.round(ageMin),
     ms: Date.now() - t0,
     dry,
@@ -408,8 +419,82 @@ async function autoTradeOrder(env, hit) {
       ...(r.targets?.[0] ? { takeProfit: String(roundTick(r.targets[0].price, tickSize)), tpTriggerBy: 'LastPrice' } : {}),
     });
 
+    // 記住這筆倉位，之後每次執行才知道要去比對它是不是已經平倉了。
+    // 同一個「幣種＋方向」如果本來就有追蹤中的紀錄會直接覆蓋——Bybit 單向模式下
+    // 同幣種同方向本來就只會有一個聚合部位，第二筆訂單是加碼到同一個部位，
+    // 不是開一個新的；代價是進場價會變成「最後一次加碼的價格」而不是均價，
+    // 這裡先接受這個簡化，不做加權平均。
+    if (env.SMC_KV) {
+      await env.SMC_KV.put(`open-pos:${r.symbol}:${r.dir}`, JSON.stringify({
+        symbol: r.symbol, dir: r.dir, entry: r.entry, stop: r.stop, targets: r.targets,
+        qty, riskAmount, leverage, grade: r.grade, score: r.score, openedAt: Date.now(),
+      }));
+    }
+
     return { orderId: order?.orderId, qty, riskAmount, leverage };
   } catch (e) {
     return { error: e.message };
   }
+}
+
+/**
+ * 比對追蹤中的部位跟 Bybit 現在實際的持倉：追蹤中但現在不在了 = 平倉了，
+ * 推一則結算通知。跟 /v5/position/closed-pnl 不一樣——那個端點官方文件跟
+ * 社群回報都提到對 Demo 帳戶不穩定，這裡改用已經在用、確定可靠的
+ * /v5/position/list（App 的「目前持倉」也是靠它），只是換一個角度：
+ * 「原本追蹤的部位不見了」就代表平倉，用偵測到當下的市價回推大概的 R，
+ * 不是交易所回報的精確成交價，這點會清楚寫在推播裡，不假裝比實際準確。
+ */
+async function checkClosedPositions(env) {
+  if (!env.SMC_KV || !env.BYBIT_DEMO_API_KEY || !env.BYBIT_DEMO_API_SECRET) return { checked: 0, closed: 0 };
+  const tracked = await env.SMC_KV.list({ prefix: 'open-pos:' });
+  if (!tracked.keys.length) return { checked: 0, closed: 0 };
+
+  const real = await bybitCall(env, 'GET', '/v5/position/list', { category: 'linear', settleCoin: 'USDT' });
+  const stillOpen = new Set(
+    (real?.list ?? [])
+      .filter((p) => Number(p.size) > 0)
+      .map((p) => `open-pos:${p.symbol}:${p.side === 'Buy' ? 'long' : 'short'}`),
+  );
+
+  let closed = 0;
+  for (const { name: key } of tracked.keys) {
+    if (stillOpen.has(key)) continue;
+    const raw = await env.SMC_KV.get(key);
+    if (raw) {
+      const pos = JSON.parse(raw);
+      try {
+        const prices = await getPrices([pos.symbol]);
+        const exitPrice = prices[pos.symbol];
+        if (exitPrice) await postDiscord(env, buildCloseEmbed(pos, exitPrice));
+      } catch { /* 平倉通知失敗也要把追蹤紀錄刪掉，不然會卡住一直重試同一筆 */ }
+    }
+    await env.SMC_KV.delete(key);
+    closed++;
+  }
+  return { checked: tracked.keys.length, closed };
+}
+
+function buildCloseEmbed(pos, exitPrice) {
+  const base = pos.symbol.replace(/USDT$/, '');
+  const long = pos.dir === 'long';
+  const perUnit = Math.abs(pos.entry - pos.stop);
+  const r = perUnit > 0 ? ((long ? exitPrice - pos.entry : pos.entry - exitPrice) / perUnit) : 0;
+  const win = r > 0;
+  return {
+    username: 'SMC 即時守門員',
+    embeds: [{
+      title: `${win ? '✅' : '❌'} ${base}/USDT ${long ? '做多' : '做空'} 已平倉（Demo）· ${r >= 0 ? '+' : ''}${r.toFixed(2)}R`,
+      color: win ? 0x26a69a : 0xef5350,
+      description: `進場 ${fmt(pos.entry)} → 平倉當下市價約 ${fmt(exitPrice)}（用偵測到平倉那一刻的市價估算，不是交易所回報的精確成交價，會有些微誤差）`,
+      fields: [
+        { name: '數量', value: String(pos.qty), inline: true },
+        { name: '槓桿', value: `${pos.leverage}x`, inline: true },
+        { name: '當初風險', value: `${fmt(pos.riskAmount)} USDT`, inline: true },
+        { name: '等級', value: `${pos.grade}（${pos.score} 分）`, inline: true },
+      ],
+      footer: { text: '僅供研究，非投資建議' },
+      timestamp: new Date().toISOString(),
+    }],
+  };
 }
