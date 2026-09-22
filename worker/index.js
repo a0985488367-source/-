@@ -17,26 +17,35 @@
  *   KV        SMC_KV                用來記住已經通知過的標的，避免重複洗頻
  *
  * ── Worker 自己掃描（選用，預設關閉，需要 Workers Paid）───────────────
- * 開啟後不再讀 data/market.json，改成 Worker 自己即時分析一份縮小範圍的
- * 市場（預設前 25 檔），把「新機會多久出現一次」從 GitHub 排程實際上的
- * 2～4 小時一次拉到 WORKER_SCAN_STALE_MIN 分鐘一次（預設 15）。這份即時
- * 掃描只給這支 Worker 自己用，**不會**寫回 data/market.json，App 網站的
- * 全市場掃描頁面看到的還是 GitHub 那份（120 檔、含資金費率），兩邊互不
- * 取代。
+ * 開啟後不再讀 data/market.json，改成 Worker 自己即時分析市場，把「新機會
+ * 多久出現一次」從 GitHub 排程實際上的 2～4 小時一次拉到每一批幾分鐘的
+ * 等級。這份即時掃描只給這支 Worker 自己用，**不會**寫回 data/market.json，
+ * App 網站的全市場掃描頁面看到的還是 GitHub 那份（120 檔、含資金費率），
+ * 兩邊互不取代。
  *
- * 「重新掃描」跟「Worker 每 2 分鐘的 cron 頻率」是兩回事：真的掃描的結果
- * 存進 SMC_KV 當快取，未過期就直接沿用，不會每 2 分鐘都重新掃一次——
- * 比對現價、自動下單這些仍然是每 2 分鐘執行，只有「找新機會」這一步
- * 照 WORKER_SCAN_STALE_MIN 的頻率跑。
+ * 採「分批」架構，不是一次掃完整個候選池：Workers Paid 的 30 秒 CPU 上限
+ * 撐不住一次把 WORKER_SCAN_TOP 檔都做完整的兩階段結構分析，所以每次真的
+ * 重新掃描只處理 WORKER_SCAN_BATCH_SIZE 檔（候選池裡的一小段，循環索引），
+ * 每隔 WORKER_SCAN_BATCH_INTERVAL_MIN 分鐘才算下一批，結果累積進 SMC_KV，
+ * 繞完一輪候選池（≈ TOP / BATCH_SIZE 批）就等於整個候選池都更新過一次。
+ * 例如 TOP=120、BATCH_SIZE=20、INTERVAL=10 分鐘 → 6 批 × 10 分鐘 ≈ 1 小時
+ * 涵蓋 120 檔；拉長 INTERVAL 或縮小 BATCH_SIZE 可以再降低單批的運算量。
  *
- *   Variable  WORKER_SCAN_ENABLED     'true' 才會啟用（預設關閉）
- *   Variable  WORKER_SCAN_TOP         掃描範圍（預設 25；範圍愈大愈接近
- *             Workers Paid 的請求數與 CPU 時間上限）
- *   Variable  WORKER_SCAN_INTERVAL    進場週期（預設 1h，跟 GitHub 那份一致）
- *   Variable  WORKER_SCAN_STALE_MIN   幾分鐘內算新鮮、不用重新掃描（預設 15）
+ * 「算下一批」跟「Worker 每 2 分鐘的 cron 頻率」是兩回事：比對現價、自動
+ * 下單這些仍然每 2 分鐘執行，只有「輪到的那一批要不要重新分析」照
+ * WORKER_SCAN_BATCH_INTERVAL_MIN 的頻率跑，沒輪到批次的 tick 只讀 KV
+ * 累積的結果，幾乎不用額外的請求或 CPU。
  *
- * 注意：即使有快取，還是會讓對外部交易所 API 的請求量比原本 GitHub 排程
- * 高不少（頻率拉高了好幾倍），開啟前請留意交易所的速率限制。
+ *   Variable  WORKER_SCAN_ENABLED             'true' 才會啟用（預設關閉）
+ *   Variable  WORKER_SCAN_TOP                 候選池總大小（預設 120，依成交額
+ *             排序取前 N 檔，循環一輪會全部掃過一次）
+ *   Variable  WORKER_SCAN_BATCH_SIZE          每批真的重新掃描幾檔（預設 20；
+ *             愈大單批 CPU 愈吃緊，愈小一輪要花愈久才能涵蓋整個候選池）
+ *   Variable  WORKER_SCAN_BATCH_INTERVAL_MIN  幾分鐘算下一批（預設 10）
+ *   Variable  WORKER_SCAN_INTERVAL            進場週期（預設 1h，跟 GitHub 那份一致）
+ *
+ * 注意：即使有分批，長期下來對外部交易所 API 的請求量還是會比原本 GitHub
+ * 排程高（頻率拉高了），開啟前請留意交易所的速率限制。
  *
  * ── 自動下單（選用，預設關閉）──────────────────────────────────────────
  * 價格到了進場區時，除了推播 Discord，也可以順手在 Bybit **模擬交易（Demo）**
@@ -84,9 +93,10 @@ const DEFAULTS = {
   AUTO_TRADE_LEVERAGE_MIN: '3',
   AUTO_TRADE_LEVERAGE_MAX: '10',
   WORKER_SCAN_ENABLED: 'false',
-  WORKER_SCAN_TOP: '25',
+  WORKER_SCAN_TOP: '120',              // 候選池總大小：想涵蓋幾檔（循環一輪會全部算過）
+  WORKER_SCAN_BATCH_SIZE: '20',        // 每次真的重新掃描只算這麼多檔，CPU 才不會爆
+  WORKER_SCAN_BATCH_INTERVAL_MIN: '10', // 幾分鐘算下一批；一輪時間 ≈ (TOP/BATCH_SIZE) × 這個值
   WORKER_SCAN_INTERVAL: '1h',
-  WORKER_SCAN_STALE_MIN: '15', // 掃描結果快取多久內算新鮮，未過期就不重新掃描
 };
 
 const cfg = (env, key) => env[key] ?? DEFAULTS[key];
@@ -122,17 +132,22 @@ export default {
       // 完整掃描。真正在跑的資料源看 workerScanEnabled 這個欄位就知道。
       const market = await getMarket(env).catch((e) => ({ error: e.message }));
       const workerScanEnabled = cfg(env, 'WORKER_SCAN_ENABLED') === 'true';
-      // 只讀 KV，不會觸發真正的掃描——用來確認「快取到底有沒有照
-      // WORKER_SCAN_STALE_MIN 在更新」，不用另外查 Cloudflare 後台。
+      // 只讀 KV，不會觸發真正的掃描——用來確認「分批掃描到底有沒有照
+      // WORKER_SCAN_BATCH_INTERVAL_MIN 在跑、涵蓋到候選池多少比例」，
+      // 不用另外查 Cloudflare 後台。
       let workerScanCache = null;
       if (workerScanEnabled && env.SMC_KV) {
-        const cached = await env.SMC_KV.get('worker-scan:cache').catch(() => null);
-        if (cached) {
-          const parsed = JSON.parse(cached);
+        const metaRaw = await env.SMC_KV.get(WORKER_SCAN_META_KEY).catch(() => null);
+        if (metaRaw) {
+          const meta = JSON.parse(metaRaw);
+          const rowsRaw = await env.SMC_KV.get(WORKER_SCAN_ROWS_KEY).catch(() => null);
+          const rows = rowsRaw ? JSON.parse(rowsRaw) : {};
           workerScanCache = {
-            generatedAt: parsed.generatedAt,
-            ageMinutes: Math.round((Date.now() - new Date(parsed.generatedAt).getTime()) / 60000),
-            provider: parsed.provider,
+            lastBatchAt: meta.lastBatchAt,
+            lastBatchAgeMinutes: Math.round((Date.now() - new Date(meta.lastBatchAt).getTime()) / 60000),
+            provider: meta.provider,
+            coveredSymbols: Object.keys(rows).length,
+            poolTotal: meta.poolTotal,
           };
         }
       }
@@ -142,7 +157,8 @@ export default {
         minScore: Number(cfg(env, 'MIN_SCORE')),
         workerScanEnabled,
         workerScanTop: workerScanEnabled ? Number(cfg(env, 'WORKER_SCAN_TOP')) : null,
-        workerScanStaleMin: workerScanEnabled ? Number(cfg(env, 'WORKER_SCAN_STALE_MIN')) : null,
+        workerScanBatchSize: workerScanEnabled ? Number(cfg(env, 'WORKER_SCAN_BATCH_SIZE')) : null,
+        workerScanBatchIntervalMin: workerScanEnabled ? Number(cfg(env, 'WORKER_SCAN_BATCH_INTERVAL_MIN')) : null,
         workerScanCache,
         market: market.error
           ? market
@@ -274,45 +290,90 @@ async function getMarket(env) {
   return res.json();
 }
 
+const WORKER_SCAN_ROWS_KEY = 'worker-scan:rows';
+const WORKER_SCAN_META_KEY = 'worker-scan:meta';
+const WORKER_SCAN_CURSOR_KEY = 'worker-scan:cursor';
+
+/** 把 SMC_KV 裡累積的批次結果組成跟 data/market.json 一樣的結構 */
+function assembleMarket(meta, rows) {
+  return {
+    generatedAt: meta.lastBatchAt,
+    provider: meta.provider,
+    interval: meta.interval,
+    htfInterval: meta.htfInterval,
+    universe: meta.poolTotal,
+    rows: Object.values(rows),
+  };
+}
+
 /**
  * 讀「這次要用哪份市場掃描結果」：預設沿用 GitHub Actions 算好的
  * data/market.json（每小時排程，GitHub 免費版實際上常常是 2～4 小時一次）；
- * 開啟 WORKER_SCAN_ENABLED 後改成 Worker 自己即時算一份（範圍縮小到
- * WORKER_SCAN_TOP 檔，跟 GitHub 那份 120 檔互不取代，只給這支 Worker
+ * 開啟 WORKER_SCAN_ENABLED 後改成 Worker 自己即時算一份，只給這支 Worker
  * 自己的即時比價／自動下單用，不會寫回 data/market.json，App 網站看到的
- * 全市場掃描頁面不受影響）。
+ * 全市場掃描頁面不受影響。
  *
- * 「重新掃描」跟「比對現價」是兩個不同頻率：Worker 的 cron 固定每 2 分鐘
- * 執行一次（反應要快），但真的重新掃描很花請求數，沒必要跟著每 2 分鐘
- * 做一次。掃描結果存進 SMC_KV，未滿 WORKER_SCAN_STALE_MIN 分鐘就直接沿用
- * 快取，只有真的過期才重新掃描——效果類似 scripts/market-scan.mjs 的
- * --if-stale 參數，只是存的地方換成 KV。
+ * 分批架構（細節見檔案開頭的說明）：候選池 WORKER_SCAN_TOP 檔，每次真的
+ * 重新掃描只算 WORKER_SCAN_BATCH_SIZE 檔（用 SMC_KV 記住掃到候選池的第幾
+ * 個位置，下次接著算，繞一圈就等於整個候選池都更新過），結果累積進
+ * worker-scan:rows；還沒輪到下一批的 tick 直接沿用累積的結果，不會真的
+ * 打任何外部 API。
  */
 async function getFreshMarket(env) {
   if (cfg(env, 'WORKER_SCAN_ENABLED') !== 'true') return getMarket(env);
 
-  const CACHE_KEY = 'worker-scan:cache';
-  const staleMin = Number(cfg(env, 'WORKER_SCAN_STALE_MIN'));
-  if (env.SMC_KV) {
-    const cached = await env.SMC_KV.get(CACHE_KEY);
-    if (cached) {
-      const parsed = JSON.parse(cached);
-      const ageMin = (Date.now() - new Date(parsed.generatedAt).getTime()) / 60000;
-      if (ageMin < staleMin) return parsed;
-    }
+  const providerIds = env.WORKER_SCAN_PROVIDERS ? env.WORKER_SCAN_PROVIDERS.split(',') : undefined;
+  const top = Number(cfg(env, 'WORKER_SCAN_TOP'));
+  const batchSize = Number(cfg(env, 'WORKER_SCAN_BATCH_SIZE'));
+  const interval = cfg(env, 'WORKER_SCAN_INTERVAL');
+  const minScore = Number(cfg(env, 'MIN_SCORE'));
+
+  if (!env.SMC_KV) {
+    // 沒有 KV 就沒辦法記住批次進度／累積結果，退化成每次都整批重掃
+    // WORKER_SCAN_TOP 檔——這個數字如果照預設值 120，很容易在 Workers Paid
+    // 的 30 秒 CPU 上限內跑不完，沒設 KV 的話務必自己把它調小。
+    return scanMarket({ providerIds, top, detailTop: top, interval, minScore });
   }
 
-  const fresh = await scanMarket({
-    // 正式環境不用設這個，只有測試會覆寫成 'demo' 來跑離線合成行情，
-    // 不必 mock 一堆交易所端點。
-    providerIds: env.WORKER_SCAN_PROVIDERS ? env.WORKER_SCAN_PROVIDERS.split(',') : undefined,
-    top: Number(cfg(env, 'WORKER_SCAN_TOP')),
-    detailTop: Number(cfg(env, 'WORKER_SCAN_TOP')),
-    interval: cfg(env, 'WORKER_SCAN_INTERVAL'),
-    minScore: Number(cfg(env, 'MIN_SCORE')),
-  });
-  if (env.SMC_KV) await env.SMC_KV.put(CACHE_KEY, JSON.stringify(fresh));
-  return fresh;
+  const intervalMin = Number(cfg(env, 'WORKER_SCAN_BATCH_INTERVAL_MIN'));
+  const metaRaw = await env.SMC_KV.get(WORKER_SCAN_META_KEY);
+  const meta = metaRaw ? JSON.parse(metaRaw) : null;
+  const dueForBatch = !meta || (Date.now() - new Date(meta.lastBatchAt).getTime()) / 60000 >= intervalMin;
+
+  if (!dueForBatch) {
+    const rowsRaw = await env.SMC_KV.get(WORKER_SCAN_ROWS_KEY);
+    return assembleMarket(meta, rowsRaw ? JSON.parse(rowsRaw) : {});
+  }
+
+  const cursor = Number((await env.SMC_KV.get(WORKER_SCAN_CURSOR_KEY)) || '0');
+  const batch = await scanMarket({ providerIds, top, offset: cursor, batchSize, interval, minScore, detailTop: batchSize });
+
+  const rowsRaw = await env.SMC_KV.get(WORKER_SCAN_ROWS_KEY);
+  const rows = rowsRaw ? JSON.parse(rowsRaw) : {};
+  const qualified = new Map(batch.rows.map((r) => [r.symbol, r]));
+  // 這一批考慮過但沒通過門檻的，要從累積結果裡刪掉——不然分數掉下去的
+  // 標的會卡在舊資料裡，一直到下一輪才被清掉都不夠即時
+  for (const symbol of batch.universeSymbols) {
+    if (qualified.has(symbol)) rows[symbol] = qualified.get(symbol);
+    else delete rows[symbol];
+  }
+
+  const newMeta = {
+    provider: batch.provider,
+    interval: batch.interval,
+    htfInterval: batch.htfInterval,
+    poolTotal: batch.poolTotal,
+    lastBatchAt: batch.generatedAt,
+  };
+  const nextCursor = batch.poolTotal ? (cursor + batch.universe) % batch.poolTotal : 0;
+
+  await Promise.all([
+    env.SMC_KV.put(WORKER_SCAN_ROWS_KEY, JSON.stringify(rows)),
+    env.SMC_KV.put(WORKER_SCAN_META_KEY, JSON.stringify(newMeta)),
+    env.SMC_KV.put(WORKER_SCAN_CURSOR_KEY, String(nextCursor)),
+  ]);
+
+  return assembleMarket(newMeta, rows);
 }
 
 /**

@@ -305,23 +305,33 @@ https://smc-signals.<你的子網域>.workers.dev/run?dry=1 立刻試跑一次�
 分鐘的執行預設只做「比對現價」這種輕量工作，不夠格自己重新分析。
 
 升級到 **Workers Paid**（$5/月，CPU 時間上限從 10ms 拉到 30 秒）之後，
-可以讓 Worker 自己做一份縮小範圍的即時分析，把「新機會多久出現一次」
-從 2～4 小時拉到大約 15 分鐘一次：
+可以讓 Worker 自己做即時分析。但 30 秒 CPU 上限撐不住「一次把 120 檔都
+做完整的兩階段結構分析」，所以採**分批**架構：候選池（依成交量排序取前
+`WORKER_SCAN_TOP` 檔）不是一次掃完，而是每隔 `WORKER_SCAN_BATCH_INTERVAL_MIN`
+分鐘只真的重新掃描其中 `WORKER_SCAN_BATCH_SIZE` 檔，結果累積進 KV，繞完
+一輪候選池就等於整個候選池都更新過一次：
 
 ```toml
 # worker/wrangler.toml 的 [vars]
 WORKER_SCAN_ENABLED = "true"
-WORKER_SCAN_TOP = "25"        # 掃描範圍：愈大愈接近 Paid 方案的額度上限
+WORKER_SCAN_TOP = "120"                 # 候選池總大小，依成交量排序取前 N 檔
+WORKER_SCAN_BATCH_SIZE = "20"           # 每批真的重新掃描幾檔
+WORKER_SCAN_BATCH_INTERVAL_MIN = "10"   # 幾分鐘算下一批
 WORKER_SCAN_INTERVAL = "1h"
-WORKER_SCAN_STALE_MIN = "15"  # 掃描結果快取幾分鐘內算新鮮，不用真的重新掃
 WORKER_SCAN_PROVIDERS = "bybit,binance,okx"  # 資料源順序，預設優先用 Bybit
 ```
 
+上面這組預設值：120 檔 ÷ 20 檔一批 = 6 批，6 批 × 10 分鐘 ≈ **1 小時**
+把整個候選池都掃過一次；同一檔幣種平均要等將近 1 小時才會被重新分析一次，
+但因為是分批輪流掃，實際上**每 10 分鐘就有一批新資料進來**，不是整批
+一次到齊、一次過期。想要更即時可以縮小 `WORKER_SCAN_TOP`（候選池變小，
+繞一輪更快）或拉大 `WORKER_SCAN_BATCH_SIZE`（單批算更多檔，但更接近 CPU
+上限，請斟酌）。
+
 Worker 每 2 分鐘還是會照排程執行一次，但那是「比對現價、判斷有沒有進場」
-的輕量工作；真正重新掃描全市場（呼叫交易所 API、算分數）則是把結果存進
-KV 快取，`WORKER_SCAN_STALE_MIN` 分鐘內重複觸發都直接沿用快取，超過才會
-真的重新掃描一次並更新快取。等於「每 2 分鐘反應一次價格，但大約每 15
-分鐘才重新掃一次市場」，兩個頻率分開設定、互不影響。
+的輕量工作；還沒輪到下一批時直接沿用 KV 累積的結果，完全不會打外部 API，
+只有真的輪到那一批才會重新分析——兩個頻率（2 分鐘反應價格、批次輪替掃描
+全池）分開設定、互不影響。
 
 改完推到 `main`，GitHub Actions 會用 esbuild 把 Worker 跟它需要的 SMC
 引擎打包成一個檔案再部署（部署流程已經處理好，不用自己動手）。
@@ -331,12 +341,16 @@ KV 快取，`WORKER_SCAN_STALE_MIN` 分鐘內重複觸發都直接沿用快取�
 GitHub Actions 算的那份（120 檔、含資金費率），兩邊互不取代、各自獨立。
 
 ⚠️ **開啟前要知道的取捨**：
-- 掃描範圍縮小到前 `WORKER_SCAN_TOP` 檔（預設 25），不是 GitHub 那份的 120 檔
-- 對外部交易所 API 的請求量會增加（大約每 15 分鐘一次完整掃描），
-  請留意交易所本身的速率限制
+- 分批架構下，同一檔幣種平均要等接近一輪的時間才會重新分析一次
+  （預設約 1 小時），不是每一檔都即時更新——真正即時的只有「現價有沒有
+  碰到已經算好的進場區」這一步
+- 對外部交易所 API 的請求量會增加（每 `WORKER_SCAN_BATCH_INTERVAL_MIN`
+  分鐘一批），請留意交易所本身的速率限制
 - 沒有資金費率／未平倉量資料（GitHub 那份才有）
 
-`/status` 的 `workerScanEnabled` 欄位可以確認目前是不是真的在用這個模式。
+`/status` 的 `workerScanEnabled`、`workerScanCache`（`coveredSymbols` /
+`poolTotal` / `lastBatchAgeMinutes`）可以確認目前是不是真的在用這個模式、
+分批進度到哪、涵蓋了候選池裡幾檔。
 
 ### 🤖 自動下單（Demo 模擬交易，選用，預設關閉）
 

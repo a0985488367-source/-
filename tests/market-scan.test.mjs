@@ -68,3 +68,41 @@ test('rows 依評分排序（高到低）', async () => {
     assert.ok(out.rows[i - 1].score >= out.rows[i].score, '應該是高分排在前面');
   }
 });
+
+/* ------------------------------------------------------- batching（分批掃描） */
+
+test('batchSize 只算這一批，不是整個候選池；poolTotal 回報候選池總大小', async () => {
+  const out = await scanMarket({ providerIds: ['demo'], top: 12, batchSize: 5, offset: 0, detailTop: 0, minScore: 0 });
+  assert.equal(out.universe, 5, '這一批只算 5 檔');
+  assert.equal(out.poolTotal, 12, '候選池總共有 12 檔可以循環');
+  assert.equal(out.universeSymbols.length, 5);
+});
+
+test('universeSymbols 含這一批算過的所有代號，即使沒通過門檻也在裡面', async () => {
+  const out = await scanMarket({ providerIds: ['demo'], top: 12, batchSize: 5, offset: 0, detailTop: 0, minScore: 999 });
+  assert.equal(out.rows.length, 0, '門檻設 999 分不會有任何計畫通過');
+  assert.equal(out.universeSymbols.length, 5, '但 universeSymbols 還是要列出這一批考慮過的 5 檔');
+});
+
+test('offset 往前推可以拿到候選池裡不同的那一批', async () => {
+  const first = await scanMarket({ providerIds: ['demo'], top: 12, batchSize: 4, offset: 0, detailTop: 0, minScore: 0 });
+  const second = await scanMarket({ providerIds: ['demo'], top: 12, batchSize: 4, offset: 4, detailTop: 0, minScore: 0 });
+  assert.deepEqual(
+    first.universeSymbols.filter((s) => second.universeSymbols.includes(s)),
+    [],
+    '兩批應該是候選池裡不重疊的兩段',
+  );
+});
+
+test('offset 超過候選池長度會循環回開頭（round-robin）', async () => {
+  const out = await scanMarket({ providerIds: ['demo'], top: 12, batchSize: 5, offset: 10, detailTop: 0, minScore: 0 });
+  const first = await scanMarket({ providerIds: ['demo'], top: 12, batchSize: 3, offset: 0, detailTop: 0, minScore: 0 });
+  // offset=10、batchSize=5、池子共 12 檔：10,11,0,1,2 → 算完第 10、11 檔後應該繞回第 0、1、2 檔
+  assert.deepEqual(out.universeSymbols.slice(-3), first.universeSymbols);
+});
+
+test('不帶 offset/batchSize 時維持舊行為：等同一次算完整個候選池', async () => {
+  const out = await scanMarket({ providerIds: ['demo'], top: 12, detailTop: 0, minScore: 0 });
+  assert.equal(out.universe, 12);
+  assert.equal(out.poolTotal, 12);
+});

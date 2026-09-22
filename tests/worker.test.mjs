@@ -221,26 +221,25 @@ test('/status 回報 Worker 自己掃描有沒有開', async () => {
   assert.equal(on.workerScanTop, 30);
 });
 
-test('/status 回報 Worker 自己掃描的快取新鮮度，不會觸發真的重新掃描', async () => {
-  const env = makeEnv({ WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_STALE_MIN: '15' });
+test('/status 回報 Worker 自己掃描分批進度，不會觸發真的重新掃描', async () => {
+  const env = makeEnv({ WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_BATCH_SIZE: '20', WORKER_SCAN_BATCH_INTERVAL_MIN: '10' });
   globalThis.fetch = async (url) => {
     throw new Error('查 /status 不該打任何外部 API：' + url);
   };
 
   const empty = await (await worker.fetch(new Request('https://w.test/status'), env)).json();
   assert.equal(empty.workerScanCache, null, '還沒掃過時，快取欄位應該是 null');
-  assert.equal(empty.workerScanStaleMin, 15);
+  assert.equal(empty.workerScanBatchSize, 20);
+  assert.equal(empty.workerScanBatchIntervalMin, 10);
 
-  const cached = {
-    generatedAt: new Date(Date.now() - 3 * 60000).toISOString(),
-    provider: 'bybit',
-    interval: '1h', htfInterval: '1d', universe: 1, scanned: 1, skippedLowVolatility: 0, minScore: 0,
-    counts: { ready: 0, waiting: 0, total: 0 }, rows: [],
-  };
-  await env.SMC_KV.put('worker-scan:cache', JSON.stringify(cached));
+  const meta = { provider: 'bybit', interval: '1h', htfInterval: '1d', poolTotal: 120, lastBatchAt: new Date(Date.now() - 3 * 60000).toISOString() };
+  await env.SMC_KV.put('worker-scan:meta', JSON.stringify(meta));
+  await env.SMC_KV.put('worker-scan:rows', JSON.stringify({ ABCUSDT: row(), DEFUSDT: row({ symbol: 'DEFUSDT' }) }));
   const withCache = await (await worker.fetch(new Request('https://w.test/status'), env)).json();
   assert.equal(withCache.workerScanCache.provider, 'bybit');
-  assert.equal(withCache.workerScanCache.ageMinutes, 3);
+  assert.equal(withCache.workerScanCache.lastBatchAgeMinutes, 3);
+  assert.equal(withCache.workerScanCache.coveredSymbols, 2);
+  assert.equal(withCache.workerScanCache.poolTotal, 120);
 });
 
 /* -------------------------------------------------------- Worker 自己掃描 */
@@ -271,46 +270,86 @@ test('WORKER_SCAN_ENABLED 關閉（預設）時，還是照舊讀 data/market.js
   assert.equal(out.alerts, 1, '預設行為不該被這次改動影響');
 });
 
-test('掃描結果快取還新鮮時，直接沿用，不會真的重新掃描', async () => {
+test('還沒輪到下一批時，直接沿用累積結果，不會真的重新掃描', async () => {
   const discord = [];
-  const env = makeEnv({ WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_PROVIDERS: 'demo', WORKER_SCAN_STALE_MIN: '15' });
-  const fakeCached = {
-    generatedAt: new Date().toISOString(), // 剛剛，遠比 15 分鐘新鮮
-    provider: 'CACHED-FAKE-MARKER',
-    interval: '1h', htfInterval: '1d', universe: 1, scanned: 1, skippedLowVolatility: 0, minScore: 0,
-    counts: { ready: 0, waiting: 0, total: 0 }, rows: [],
+  const env = makeEnv({ WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_PROVIDERS: 'demo', WORKER_SCAN_BATCH_INTERVAL_MIN: '15' });
+  const fakeMeta = {
+    provider: 'CACHED-FAKE-MARKER', interval: '1h', htfInterval: '1d', poolTotal: 12,
+    lastBatchAt: new Date().toISOString(), // 剛剛，遠比 15 分鐘新鮮
   };
-  await env.SMC_KV.put('worker-scan:cache', JSON.stringify(fakeCached));
+  await env.SMC_KV.put('worker-scan:meta', JSON.stringify(fakeMeta));
+  await env.SMC_KV.put('worker-scan:rows', JSON.stringify({}));
   globalThis.fetch = async (url, init) => {
     const u = String(url);
     if (u.includes('discord')) { discord.push(JSON.parse(init.body)); return new Response(null, { status: 204 }); }
-    throw new Error('快取還新鮮，不該打任何外部 API：' + u);
+    throw new Error('還沒輪到下一批，不該打任何外部 API：' + u);
   };
   await runWorker(env);
-  const after = JSON.parse(await env.SMC_KV.get('worker-scan:cache'));
-  assert.equal(after.provider, 'CACHED-FAKE-MARKER', '快取沒過期就不該被覆寫');
+  const after = JSON.parse(await env.SMC_KV.get('worker-scan:meta'));
+  assert.equal(after.provider, 'CACHED-FAKE-MARKER', '還沒到批次間隔就不該被覆寫');
+  assert.equal(await env.SMC_KV.get('worker-scan:cursor'), null, '沒有真的掃描，游標也不該被動到');
 });
 
-test('掃描結果快取過期後，真的重新掃描，並把新結果寫回快取', async () => {
+test('輪到下一批時，真的重新掃描那一批，並把結果累積進去、游標往前推', async () => {
   const discord = [];
-  const env = makeEnv({ WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_PROVIDERS: 'demo', WORKER_SCAN_STALE_MIN: '15' });
-  const staleCached = {
-    generatedAt: new Date(Date.now() - 100 * 60000).toISOString(), // 100 分鐘前，遠超過 15 分鐘
-    provider: 'STALE-FAKE-MARKER',
-    interval: '1h', htfInterval: '1d', universe: 1, scanned: 1, skippedLowVolatility: 0, minScore: 0,
-    counts: { ready: 0, waiting: 0, total: 0 }, rows: [],
+  const env = makeEnv({ WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_PROVIDERS: 'demo', WORKER_SCAN_TOP: '12', WORKER_SCAN_BATCH_SIZE: '5', WORKER_SCAN_BATCH_INTERVAL_MIN: '15' });
+  const staleMeta = {
+    provider: 'STALE-FAKE-MARKER', interval: '1h', htfInterval: '1d', poolTotal: 12,
+    lastBatchAt: new Date(Date.now() - 100 * 60000).toISOString(), // 100 分鐘前，遠超過 15 分鐘
   };
-  await env.SMC_KV.put('worker-scan:cache', JSON.stringify(staleCached));
+  await env.SMC_KV.put('worker-scan:meta', JSON.stringify(staleMeta));
+  await env.SMC_KV.put('worker-scan:rows', JSON.stringify({}));
   globalThis.fetch = async (url, init) => {
     const u = String(url);
-    if (u.includes('api.bybit.com/v5/market/tickers')) return new Response(JSON.stringify({ retCode: 0, retMsg: 'OK', result: { list: [] } }), { status: 200 });
-    if (u.includes('binance.com')) return new Response(JSON.stringify([]), { status: 200 });
     if (u.includes('discord')) { discord.push(JSON.parse(init.body)); return new Response(null, { status: 204 }); }
     throw new Error('未預期的請求：' + u);
   };
   await runWorker(env);
-  const after = JSON.parse(await env.SMC_KV.get('worker-scan:cache'));
-  assert.equal(after.provider, 'demo', '過期的快取應該被真的重新掃描的結果取代');
+  const after = JSON.parse(await env.SMC_KV.get('worker-scan:meta'));
+  assert.equal(after.provider, 'demo', '過期後應該真的重新掃描這一批，結果來自 demo');
+  assert.equal(await env.SMC_KV.get('worker-scan:cursor'), '5', '游標應該往前推 batchSize（5）');
+});
+
+test('分批結果會累積：這批沒掃到的舊資料要保留，不會被清空', async () => {
+  const discord = [];
+  // MIN_SCORE 故意設超高，確保這次分批算出來不會有任何計畫進入監看名單，
+  // 才不用連帶 mock 現價 API（這個測試只關心批次累積的邏輯本身）
+  const env = makeEnv({ WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_PROVIDERS: 'demo', WORKER_SCAN_TOP: '12', WORKER_SCAN_BATCH_SIZE: '5', WORKER_SCAN_BATCH_INTERVAL_MIN: '15', MIN_SCORE: '999' });
+  const staleMeta = {
+    provider: 'demo', interval: '1h', htfInterval: '1d', poolTotal: 12,
+    lastBatchAt: new Date(Date.now() - 100 * 60000).toISOString(),
+  };
+  await env.SMC_KV.put('worker-scan:meta', JSON.stringify(staleMeta));
+  // 假裝上一輪已經掃過某個這次批次不會碰到的幣種（游標從 0 開始只會碰前 5 檔）
+  await env.SMC_KV.put('worker-scan:rows', JSON.stringify({ 'UNTOUCHED-FAKE-SYMBOL': row({ symbol: 'UNTOUCHED-FAKE-SYMBOL' }) }));
+  await env.SMC_KV.put('worker-scan:cursor', '0');
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    if (u.includes('discord')) { discord.push(JSON.parse(init.body)); return new Response(null, { status: 204 }); }
+    throw new Error('未預期的請求：' + u);
+  };
+  await runWorker(env);
+  const rows = JSON.parse(await env.SMC_KV.get('worker-scan:rows'));
+  assert.ok('UNTOUCHED-FAKE-SYMBOL' in rows, '這批沒碰到的舊資料應該還在，不會被這次的批次結果蓋掉');
+});
+
+test('游標繞完候選池一圈會回到開頭（round-robin）', async () => {
+  const discord = [];
+  const env = makeEnv({ WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_PROVIDERS: 'demo', WORKER_SCAN_TOP: '12', WORKER_SCAN_BATCH_SIZE: '5', WORKER_SCAN_BATCH_INTERVAL_MIN: '15', MIN_SCORE: '999' });
+  const staleMeta = {
+    provider: 'demo', interval: '1h', htfInterval: '1d', poolTotal: 12,
+    lastBatchAt: new Date(Date.now() - 100 * 60000).toISOString(),
+  };
+  await env.SMC_KV.put('worker-scan:meta', JSON.stringify(staleMeta));
+  await env.SMC_KV.put('worker-scan:rows', JSON.stringify({}));
+  await env.SMC_KV.put('worker-scan:cursor', '10'); // 候選池共 12 檔，10 + 5 應該繞回 3（10+5-12）
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    if (u.includes('discord')) { discord.push(JSON.parse(init.body)); return new Response(null, { status: 204 }); }
+    throw new Error('未預期的請求：' + u);
+  };
+  await runWorker(env);
+  assert.equal(await env.SMC_KV.get('worker-scan:cursor'), '3');
 });
 
 test('dry 模式只回報不推播、也不寫入 KV', async () => {
