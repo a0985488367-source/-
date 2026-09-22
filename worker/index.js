@@ -93,6 +93,26 @@
  * 沒有 import ../src/exchange/bybit.js——純粹是因為那份程式碼很小、改動
  * 頻率低，獨立一份比較不會被市場掃描那邊的改動意外牽動；行為刻意對齊
  * src/exchange/bybit.js，改動風控或簽章邏輯時兩邊都要看。
+ *
+ * ── 把 Worker 自己的掃描結果寫回 data/market.json（選用，預設關閉）────────
+ * 開了 WORKER_SCAN_ENABLED 之後，Worker 自己算的那份預設只給自己用，
+ * App 網站「全市場掃描」頁面看到的還是 GitHub Actions 那份（會被 GitHub
+ * 免費版的排程節流，常常 2～4 小時才更新一次）。設定這個 secret 之後，
+ * Worker 每算完一批（約每 WORKER_SCAN_BATCH_INTERVAL_MIN 分鐘一次）就會
+ * 順便透過 GitHub Contents API 把累積的結果寫回 data/market.json，
+ * App 頁面也會跟著即時更新，不用再等 GitHub 的排程。
+ *
+ * 資金費率／未平倉量（GitHub 那份才有算）不會因此消失：寫回前會先讀舊檔，
+ * 把舊資料裡每個標的的 `deriv` 欄位原封不動接到新資料同一個標的上，沒有
+ * 對到的（Worker 這批新掃到、舊檔沒有的標的）就沒有這欄，UI 會顯示「—」。
+ *
+ *   Secret    GITHUB_API_TOKEN   GitHub fine-grained PAT，只需要這個倉庫的
+ *             Contents 讀寫權限（Settings → Developer settings →
+ *             Fine-grained tokens），絕對不要給超出這個倉庫的權限
+ *   Variable  GITHUB_REPO        預設 a0985488367-source/-
+ *   Variable  GITHUB_MARKET_PATH 預設 data/market.json
+ *
+ * 沒設定 GITHUB_API_TOKEN 就完全不會嘗試寫入，行為跟現在一樣。
  */
 
 import { scanMarket } from '../src/market/scan.js';
@@ -112,6 +132,8 @@ const DEFAULTS = {
   WORKER_SCAN_BATCH_SIZE: '20',        // 每次真的重新掃描只算這麼多檔，CPU 才不會爆
   WORKER_SCAN_BATCH_INTERVAL_MIN: '10', // 幾分鐘算下一批；一輪時間 ≈ (TOP/BATCH_SIZE) × 這個值
   WORKER_SCAN_INTERVAL: '1h',
+  GITHUB_REPO: 'a0985488367-source/-',
+  GITHUB_MARKET_PATH: 'data/market.json',
 };
 
 const cfg = (env, key) => env[key] ?? DEFAULTS[key];
@@ -324,6 +346,82 @@ function assembleMarket(meta, rows) {
   };
 }
 
+/** UTF-8 安全的 base64 編碼／解碼——GitHub Contents API 的 content 欄位是 base64，
+ *  但市場資料裡的中文欄位（regimeZh 等）用 btoa/atob 直接轉會壞掉，要先過 TextEncoder。 */
+function b64EncodeUtf8(str) {
+  const bytes = new TextEncoder().encode(str);
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  return btoa(binary);
+}
+function b64DecodeUtf8(b64) {
+  const binary = atob(b64.replace(/\n/g, ''));
+  const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+/**
+ * 把 Worker 自己累積的掃描結果透過 GitHub Contents API 寫回 data/market.json，
+ * 讓 App 網站「全市場掃描」頁面也能即時更新，不用再等 GitHub Actions 那個
+ * 會被排程節流的排程。選用功能：沒設定 GITHUB_API_TOKEN 就完全不會嘗試。
+ *
+ * 資金費率／未平倉量（`row.deriv`）是 GitHub Actions 那份才會另外去抓的，
+ * Worker 自己的掃描沒有算這個——寫入前先讀舊檔，把舊資料裡每個標的的
+ * `deriv` 原封不動接到新資料同一個標的上，沒對到的就沒有這欄（UI 會顯示
+ * 「—」，不是壞掉）。
+ */
+async function publishMarketToGitHub(env, rows, meta) {
+  if (!env.GITHUB_API_TOKEN) return { skipped: 'no-token' };
+  const repo = cfg(env, 'GITHUB_REPO');
+  const path = cfg(env, 'GITHUB_MARKET_PATH');
+  const url = `https://api.github.com/repos/${repo}/contents/${path}`;
+  const headers = {
+    'Authorization': `Bearer ${env.GITHUB_API_TOKEN}`,
+    'Accept': 'application/vnd.github+json',
+    'User-Agent': 'smc-signals-worker',
+  };
+  try {
+    const getRes = await fetch(url, { headers });
+    if (!getRes.ok) throw new Error(`GitHub GET ${getRes.status}`);
+    const file = await getRes.json();
+    const existing = JSON.parse(b64DecodeUtf8(file.content));
+    const derivBySymbol = new Map((existing.rows ?? []).filter((r) => r.deriv).map((r) => [r.symbol, r.deriv]));
+
+    const merged = rows.map((r) => (derivBySymbol.has(r.symbol) ? { ...r, deriv: derivBySymbol.get(r.symbol) } : r));
+    const ready = merged.filter((r) => r.status === 'ready' && r.valid).length;
+    const waiting = merged.filter((r) => r.status === 'waiting' && r.valid).length;
+    const out = {
+      generatedAt: meta.lastBatchAt,
+      provider: meta.provider,
+      interval: meta.interval,
+      htfInterval: meta.htfInterval,
+      universe: merged.length,
+      poolTotal: meta.poolTotal,
+      universeSymbols: merged.map((r) => r.symbol),
+      scanned: merged.length,
+      skippedLowVolatility: 0,
+      minScore: Number(cfg(env, 'MIN_SCORE')),
+      counts: { ready, waiting, total: merged.length },
+      rows: merged,
+    };
+
+    const putRes = await fetch(url, {
+      method: 'PUT',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: `chore: Worker 即時更新市場掃描（${merged.length} 檔）`,
+        content: b64EncodeUtf8(JSON.stringify(out)),
+        sha: file.sha,
+      }),
+    });
+    if (!putRes.ok) throw new Error(`GitHub PUT ${putRes.status}`);
+    return { ok: true, rows: merged.length };
+  } catch (e) {
+    return { error: e.message };
+  }
+}
+
 /**
  * 讀「這次要用哪份市場掃描結果」：預設沿用 GitHub Actions 算好的
  * data/market.json（每小時排程，GitHub 免費版實際上常常是 2～4 小時一次）；
@@ -390,6 +488,12 @@ async function getFreshMarket(env) {
     env.SMC_KV.put(WORKER_SCAN_META_KEY, JSON.stringify(newMeta)),
     env.SMC_KV.put(WORKER_SCAN_CURSOR_KEY, String(nextCursor)),
   ]);
+
+  // 選用：把這批更新後的累積結果順便寫回 data/market.json，讓 App 網站的
+  // 全市場掃描頁面也能跟著即時更新。只在真的算出新一批時才寫（不會每 2
+  // 分鐘都寫一次），沒設定 GITHUB_API_TOKEN 就完全不會呼叫。失敗不影響
+  // 主流程——「這次比對現價、判斷有沒有進場」永遠比「有沒有寫成 GitHub」重要。
+  await publishMarketToGitHub(env, Object.values(rows), newMeta).catch(() => {});
 
   return assembleMarket(newMeta, rows);
 }
