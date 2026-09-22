@@ -321,7 +321,7 @@ WORKER_SCAN_ENABLED = "true"
 WORKER_SCAN_TOP = "120"                 # 候選池總大小，依成交量排序取前 N 檔
 WORKER_SCAN_BATCH_SIZE = "20"           # 每批真的重新掃描幾檔
 WORKER_SCAN_BATCH_INTERVAL_MIN = "10"   # 幾分鐘算下一批
-WORKER_SCAN_INTERVAL = "3m,15m,30m,1h"  # 逗號分隔可以同時開多個進場週期
+WORKER_SCAN_INTERVAL = "4h,1h,30m"      # 逗號分隔可以同時開多個進場週期
 WORKER_SCAN_MIN_SCORE = "0"             # 掃描累積門檻，故意很低（幾乎不濾）
 WORKER_SCAN_CONCURRENCY = "3"           # 單批內同時發出的請求數，共用 IP 別調太大
 WORKER_SCAN_PROVIDERS = "bybit,binance,okx"  # 資料源順序，預設優先用 Bybit
@@ -454,7 +454,7 @@ Worker）」卡片，填一次 Worker 網址跟 token（只存這台裝置，不
   跟 Discord 通知共用同一個去重機制：同一個進場區只會下單一次
 - 判斷「價格回到進場區了沒」用的現價，優先抓 **Bybit** 的報價（跟實際下單
   的合約類別一致），打不到才退到 Binance，兩者都失敗最後退到 OKX
-- 數量 = Demo 帳戶目前可用餘額 × `AUTO_TRADE_RISK_PCT`（預設 1%，**固定值，
+- 數量 = Demo 帳戶目前可用餘額 × `AUTO_TRADE_RISK_PCT`（**固定值，
   不分評分高低**）÷ 停損距離，市價進場單一律帶停損
 - **出場套用本文開頭「部位管理」那段 A/B 實測驗證過的同一組規則**
   （`src/smc/manage.js`，跟回測、模擬盤追蹤共用同一份常數，不是另外憑感覺
@@ -484,7 +484,7 @@ Worker）」卡片，填一次 Worker 網址跟 token（只存這台裝置，不
 
 | 變數 | 預設 | 意思 |
 |---|---|---|
-| `AUTO_TRADE_RISK_PCT` | 1 | 每筆風險占 Demo 帳戶可用餘額的 % |
+| `AUTO_TRADE_RISK_PCT` | 5 | 每筆風險占 Demo 帳戶可用餘額的 %（調高會讓單筆賺賠都放大，同時能同時撐住的倉位數會變少） |
 | `AUTO_TRADE_LEVERAGE_MIN` | 3 | 評分等於 `MIN_SCORE` 時用的槓桿倍數 |
 | `AUTO_TRADE_LEVERAGE_MAX` | 10 | 評分 100 分時用的槓桿倍數 |
 
