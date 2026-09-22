@@ -272,6 +272,44 @@ test('/status 的 perInterval 逐一列出每個週期各自的批次進度', as
   assert.equal(byInterval['1h'].lastBatchAgeMinutes, 8);
 });
 
+test('WORKER_SCAN_INTERVAL 拿掉某個週期後，那個週期的舊資料不會繼續混進監看名單', async () => {
+  // 實測踩過的坑：把 WORKER_SCAN_INTERVAL 從含 3m 改成不含 3m 之後，KV 裡
+  // 3m 那個週期累積的舊資料不會自動消失，會一直卡在 checked／監看名單裡，
+  // 明明已經不想再看這個週期了，卻還是可能觸發推播或下單。
+  const discord = [];
+  const env = makeEnv({
+    WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_INTERVAL: '1h', // 現在只設定 1h，3m 已經被拿掉
+    MIN_SCORE: '0',
+  });
+  const meta = {
+    '3m': { provider: 'demo', interval: '3m', htfInterval: '1h', poolTotal: 12, lastBatchAt: new Date().toISOString() },
+    '1h': { provider: 'demo', interval: '1h', htfInterval: '1d', poolTotal: 12, lastBatchAt: new Date().toISOString() },
+  };
+  await env.SMC_KV.put('worker-scan:meta', JSON.stringify(meta));
+  await env.SMC_KV.put('worker-scan:rows', JSON.stringify({
+    '3m::OLDUSDT': row({ symbol: 'OLDUSDT', interval: '3m' }), // 已經拿掉的週期，應該被濾掉
+    '1h::ABCUSDT': row({ symbol: 'ABCUSDT', interval: '1h' }), // 還在設定裡的週期，應該保留
+  }));
+
+  // /status 要立刻反映：不會再顯示 3m 這個已經拿掉的週期
+  globalThis.fetch = async (url) => { throw new Error('查 /status 不該打任何外部 API：' + url); };
+  const status = await (await worker.fetch(new Request('https://w.test/status'), env)).json();
+  assert.equal(status.workerScanCache.coveredSymbols, 1, '3m 的舊資料不該算進 coveredSymbols');
+  assert.equal(status.workerScanCache.perInterval.length, 1, 'perInterval 不該再列出已經拿掉的 3m');
+  assert.equal(status.workerScanCache.perInterval[0].interval, '1h');
+
+  // /run 的監看名單也不該把 3m::OLDUSDT 算進去
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    if (u.includes('discord')) { discord.push(JSON.parse(init.body)); return new Response(null, { status: 204 }); }
+    if (u.includes('api.bybit.com/v5/market/tickers')) return new Response(JSON.stringify({ retCode: 0, retMsg: 'OK', result: { list: [{ symbol: 'ABCUSDT', lastPrice: '99999' }] } }), { status: 200 });
+    if (u.includes('binance.com')) return new Response(JSON.stringify([]), { status: 200 });
+    throw new Error('未預期的請求：' + u);
+  };
+  const out = await runWorker(env);
+  assert.equal(out.checked, 1, '監看名單應該只剩 1h 那筆，3m 的舊資料不該混進來');
+});
+
 /* -------------------------------------------------------- Worker 自己掃描 */
 
 test('WORKER_SCAN_ENABLED 開啟時，Worker 自己即時掃描，不去讀 data/market.json', async () => {
