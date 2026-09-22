@@ -187,6 +187,44 @@ test('/status 回報設定與資料新鮮度', async () => {
   assert.equal(out.market.ready, 1);
 });
 
+test('/status 回報 Worker 自己掃描有沒有開', async () => {
+  stubFetch({ market: makeMarket([]), prices: {}, discord: [] });
+  const off = await (await worker.fetch(new Request('https://w.test/status'), makeEnv())).json();
+  assert.equal(off.workerScanEnabled, false);
+  assert.equal(off.workerScanTop, null);
+
+  const on = await (await worker.fetch(new Request('https://w.test/status'), makeEnv({ WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_TOP: '30' }))).json();
+  assert.equal(on.workerScanEnabled, true);
+  assert.equal(on.workerScanTop, 30);
+});
+
+/* -------------------------------------------------------- Worker 自己掃描 */
+
+test('WORKER_SCAN_ENABLED 開啟時，Worker 自己即時掃描，不去讀 data/market.json', async () => {
+  const discord = [];
+  const env = makeEnv({ WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_PROVIDERS: 'demo', WORKER_SCAN_TOP: '5' });
+  let marketUrlCalled = false;
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    if (u.startsWith(MARKET_URL)) { marketUrlCalled = true; return new Response('不該被呼叫', { status: 500 }); }
+    if (u.includes('binance.com')) return new Response(JSON.stringify([]), { status: 200 });
+    if (u.includes('discord')) { discord.push(JSON.parse(init.body)); return new Response(null, { status: 204 }); }
+    throw new Error('未預期的請求：' + u);
+  };
+  const out = await runWorker(env);
+  assert.equal(marketUrlCalled, false, '開了 Worker 自己掃描就不該再去讀 data/market.json');
+  assert.equal(typeof out.checked, 'number', '掃描應該正常跑完、回傳正常結構');
+  assert.equal(out.skipped, undefined, '剛掃完的資料一定是新鮮的，不該被判定成太舊');
+});
+
+test('WORKER_SCAN_ENABLED 關閉（預設）時，還是照舊讀 data/market.json', async () => {
+  const discord = [];
+  const env = makeEnv();
+  stubFetch({ market: makeMarket([row()]), prices: { ABCUSDT: 99.9 }, discord });
+  const out = await runWorker(env);
+  assert.equal(out.alerts, 1, '預設行為不該被這次改動影響');
+});
+
 test('dry 模式只回報不推播、也不寫入 KV', async () => {
   const discord = [];
   const env = makeEnv();

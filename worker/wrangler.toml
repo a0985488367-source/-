@@ -1,8 +1,13 @@
 # Cloudflare Worker 設定
 #
 # 部署方式（二選一）：
-#   A. GitHub Actions 自動部署 —— 在倉庫加入 CLOUDFLARE_API_TOKEN 與 CLOUDFLARE_ACCOUNT_ID 兩個 secret
-#   B. Cloudflare 主控台手動貼上 worker/index.js 的內容
+#   A. GitHub Actions 自動部署（推薦）—— 在倉庫加入 CLOUDFLARE_API_TOKEN 與
+#      CLOUDFLARE_ACCOUNT_ID 兩個 secret，deploy-worker.yml 會自動打包再上傳
+#   B. 手動部署 —— index.js 有 import 其他原始碼（見下方 Worker 自己掃描），
+#      不能直接貼進 Cloudflare 主控台。要先在本機打包：
+#        cd worker && npx esbuild index.js --bundle --format=esm \
+#          --platform=neutral --outfile=dist/index.js
+#      再把 dist/index.js 的內容貼進主控台
 #
 # 兩種方式都需要在 Worker 上設定：
 #   Secret        DISCORD_WEBHOOK_URL
@@ -10,6 +15,9 @@
 #
 # 選用：自動下單（Demo 模擬交易，預設關閉，細節見 index.js 開頭的說明）
 #   Secret        BYBIT_DEMO_API_KEY / BYBIT_DEMO_API_SECRET / AUTO_TRADE_TOKEN
+#
+# 選用：Worker 自己即時掃描（預設關閉，需要 Workers Paid，細節見 index.js 開頭的說明）
+#   Variable      WORKER_SCAN_ENABLED / WORKER_SCAN_TOP / WORKER_SCAN_INTERVAL
 
 name = "smc-signals"
 main = "index.js"
@@ -30,6 +38,11 @@ AUTO_TRADE_RISK_PCT = "1"
 # 槓桿照評分線性插值：評分等於 MIN_SCORE 給 MIN 倍，100 分給 MAX 倍
 AUTO_TRADE_LEVERAGE_MIN = "3"
 AUTO_TRADE_LEVERAGE_MAX = "10"
+# Worker 自己即時掃描（選用，預設關閉，需要 Workers Paid；開啟前留意對外部
+# 交易所 API 的請求量會大幅增加，見 index.js 開頭的說明）
+WORKER_SCAN_ENABLED = "false"
+WORKER_SCAN_TOP = "25"
+WORKER_SCAN_INTERVAL = "1h"
 
 # KV 命名空間：部署前請先建立，並把 id 填在這裡
 # （wrangler kv namespace create SMC_KV，或在主控台 Storage → KV 建立）

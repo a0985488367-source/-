@@ -297,6 +297,39 @@ https://smc-signals.<你的子網域>.workers.dev/run?dry=1 立刻試跑一次�
 
 改完推到 `main` 會自動重新部署。
 
+#### ⚡⚡ 讓 Worker 自己即時掃描（選用，需要 Workers Paid）
+
+預設情況下，「新機會多久出現一次」取決於 GitHub Actions 的排程——設定
+是 15 分鐘一次，但 GitHub 免費版對排程會嚴重節流，**實際上常常是 2～4
+小時一次**（GitHub 的已知限制，不是這個專案設定錯）。這支 Worker 每 2
+分鐘的執行預設只做「比對現價」這種輕量工作，不夠格自己重新分析。
+
+升級到 **Workers Paid**（$5/月，CPU 時間上限從 10ms 拉到 30 秒）之後，
+可以讓 Worker 自己做一份縮小範圍的即時分析，把「新機會多久出現一次」
+從 2～4 小時拉到真正的 2 分鐘：
+
+```toml
+# worker/wrangler.toml 的 [vars]
+WORKER_SCAN_ENABLED = "true"
+WORKER_SCAN_TOP = "25"        # 掃描範圍：愈大愈接近 Paid 方案的額度上限
+WORKER_SCAN_INTERVAL = "1h"
+```
+
+改完推到 `main`，GitHub Actions 會用 esbuild 把 Worker 跟它需要的 SMC
+引擎打包成一個檔案再部署（部署流程已經處理好，不用自己動手）。
+
+**這份即時掃描只給這支 Worker 自己用**（即時比對進場區、自動下單），
+**不會**寫回 `data/market.json`，App 網站「全市場掃描」頁面看到的還是
+GitHub Actions 算的那份（120 檔、含資金費率），兩邊互不取代、各自獨立。
+
+⚠️ **開啟前要知道的取捨**：
+- 掃描範圍縮小到前 `WORKER_SCAN_TOP` 檔（預設 25），不是 GitHub 那份的 120 檔
+- 對外部交易所 API 的請求量會大幅增加（一天下來是原本 GitHub 排程的數十倍），
+  請留意交易所本身的速率限制
+- 沒有資金費率／未平倉量資料（GitHub 那份才有）
+
+`/status` 的 `workerScanEnabled` 欄位可以確認目前是不是真的在用這個模式。
+
 ### 🤖 自動下單（Demo 模擬交易，選用，預設關閉）
 
 Worker 偵測到「價格回到進場區」的那一刻，除了推 Discord，也可以順手在

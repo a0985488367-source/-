@@ -1,18 +1,35 @@
 /**
  * SMC 即時進場守門員（Cloudflare Worker）
  *
- * 分工：
+ * 分工（預設）：
  *   GitHub Actions  每小時做全市場 SMC 分析 → data/market.json（重運算）
  *   這支 Worker      每 2 分鐘比對現價與已算好的進場區 → 價格一到就推 Discord（輕運算）
  *
- * 為什麼這樣切：Workers 免費方案的 CPU 時間極短，跑不動完整的結構分析；
+ * 為什麼原本這樣切：Workers 免費方案的 CPU 時間極短，跑不動完整的結構分析；
  * 但「比對價格」只是讀 JSON 加一個迴圈，幾毫秒就結束，非常適合高頻執行。
+ * 升級到 Workers Paid（CPU 時間上限拉到 30 秒）之後，可以選擇性讓 Worker
+ * 自己做縮小範圍的即時掃描，見下方「Worker 自己掃描」。
  *
  * 需要的設定：
  *   Secret    DISCORD_WEBHOOK_URL   Discord webhook 網址
  *   Variable  MARKET_URL            market.json 的網址（預設指向本倉庫）
  *   Variable  MIN_SCORE             只盯幾分以上的計畫（預設 65）
  *   KV        SMC_KV                用來記住已經通知過的標的，避免重複洗頻
+ *
+ * ── Worker 自己掃描（選用，預設關閉，需要 Workers Paid）───────────────
+ * 開啟後不再讀 data/market.json，改成 Worker 自己即時分析一份縮小範圍的
+ * 市場（預設前 25 檔），把「新機會多久出現一次」從 GitHub 排程實際上的
+ * 2～4 小時一次拉到 2 分鐘一次。這份即時掃描只給這支 Worker 自己用，
+ * **不會**寫回 data/market.json，App 網站的全市場掃描頁面看到的還是
+ * GitHub 那份（120 檔、含資金費率），兩邊互不取代。
+ *
+ *   Variable  WORKER_SCAN_ENABLED    'true' 才會啟用（預設關閉）
+ *   Variable  WORKER_SCAN_TOP        掃描範圍（預設 25；範圍愈大愈接近
+ *             Workers Paid 的請求數與 CPU 時間上限）
+ *   Variable  WORKER_SCAN_INTERVAL   進場週期（預設 1h，跟 GitHub 那份一致）
+ *
+ * 注意：這會讓對外部交易所 API 的請求量大幅增加（一天下來是原本 GitHub
+ * 排程的數十倍），開啟前請留意交易所的速率限制。
  *
  * ── 自動下單（選用，預設關閉）──────────────────────────────────────────
  * 價格到了進場區時，除了推播 Discord，也可以順手在 Bybit **模擬交易（Demo）**
@@ -40,11 +57,15 @@
  *   GET /auto-trade/on?token=xxx   開啟
  *   GET /auto-trade/off?token=xxx  關閉 —— 這個網址建議加到手機主畫面當緊急煞車
  *
- * 這裡刻意不 import ../src/exchange/bybit.js：部署走的是單一 index.js 檔案的
- * 經典上傳 API（見 deploy-worker.yml），沒有打包步驟，import 別的檔案在
- * Cloudflare 那邊會直接找不到模組。下面這段簽章/下單邏輯因此是獨立複製、
- * 行為刻意對齊 src/exchange/bybit.js 的一份；改動風控或簽章邏輯時兩邊都要看。
+ * 部署走的是 esbuild 打包（見 deploy-worker.yml），把這個檔案跟它 import
+ * 的 SMC 引擎（src/market/scan.js 及其依賴）打包成一個檔案再上傳，所以這裡
+ * 可以正常 import。但 Bybit 的簽章／下單邏輯是例外：那段刻意獨立複製、
+ * 沒有 import ../src/exchange/bybit.js——純粹是因為那份程式碼很小、改動
+ * 頻率低，獨立一份比較不會被市場掃描那邊的改動意外牽動；行為刻意對齊
+ * src/exchange/bybit.js，改動風控或簽章邏輯時兩邊都要看。
  */
+
+import { scanMarket } from '../src/market/scan.js';
 
 const DEFAULTS = {
   MARKET_URL: 'https://raw.githubusercontent.com/a0985488367-source/-/main/data/market.json',
@@ -55,6 +76,9 @@ const DEFAULTS = {
   AUTO_TRADE_RISK_PCT: '1',
   AUTO_TRADE_LEVERAGE_MIN: '3',
   AUTO_TRADE_LEVERAGE_MAX: '10',
+  WORKER_SCAN_ENABLED: 'false',
+  WORKER_SCAN_TOP: '25',
+  WORKER_SCAN_INTERVAL: '1h',
 };
 
 const cfg = (env, key) => env[key] ?? DEFAULTS[key];
@@ -85,11 +109,17 @@ export default {
       return json(result);
     }
     if (url.pathname === '/status') {
+      // 這裡刻意固定讀 GitHub 那份（不管 WORKER_SCAN_ENABLED 有沒有開），
+      // 讓 /status 維持是一個「秒回」的輕量檢查，不會因為呼叫它而觸發一次
+      // 完整掃描。真正在跑的資料源看 workerScanEnabled 這個欄位就知道。
       const market = await getMarket(env).catch((e) => ({ error: e.message }));
+      const workerScanEnabled = cfg(env, 'WORKER_SCAN_ENABLED') === 'true';
       return json({
         ok: true,
         marketUrl: cfg(env, 'MARKET_URL'),
         minScore: Number(cfg(env, 'MIN_SCORE')),
+        workerScanEnabled,
+        workerScanTop: workerScanEnabled ? Number(cfg(env, 'WORKER_SCAN_TOP')) : null,
         market: market.error
           ? market
           : {
@@ -153,7 +183,7 @@ async function run(env, { dry = false } = {}) {
   // 平倉了也不會被通知到。
   const closedPositions = dry ? { checked: 0, closed: 0 } : await checkClosedPositions(env).catch(() => ({ checked: 0, closed: 0, error: true }));
 
-  const market = await getMarket(env);
+  const market = await getFreshMarket(env);
   const ageMin = (Date.now() - new Date(market.generatedAt).getTime()) / 60000;
   if (ageMin > Number(cfg(env, 'MAX_MARKET_AGE_MIN'))) {
     return { skipped: 'market-too-old', ageMinutes: Math.round(ageMin), closedPositions };
@@ -218,6 +248,27 @@ async function getMarket(env) {
   const res = await fetch(cfg(env, 'MARKET_URL'), { cf: { cacheTtl: 120, cacheEverything: true } });
   if (!res.ok) throw new Error(`market.json HTTP ${res.status}`);
   return res.json();
+}
+
+/**
+ * 讀「這次要用哪份市場掃描結果」：預設沿用 GitHub Actions 算好的
+ * data/market.json（每小時排程，GitHub 免費版實際上常常是 2～4 小時一次）；
+ * 開啟 WORKER_SCAN_ENABLED 後改成 Worker 自己即時算一份（範圍縮小到
+ * WORKER_SCAN_TOP 檔，跟 GitHub 那份 120 檔互不取代，只給這支 Worker
+ * 自己的即時比價／自動下單用，不會寫回 data/market.json，App 網站看到的
+ * 全市場掃描頁面不受影響）。
+ */
+async function getFreshMarket(env) {
+  if (cfg(env, 'WORKER_SCAN_ENABLED') !== 'true') return getMarket(env);
+  return scanMarket({
+    // 正式環境不用設這個，只有測試會覆寫成 'demo' 來跑離線合成行情，
+    // 不必 mock 一堆交易所端點。
+    providerIds: env.WORKER_SCAN_PROVIDERS ? env.WORKER_SCAN_PROVIDERS.split(',') : undefined,
+    top: Number(cfg(env, 'WORKER_SCAN_TOP')),
+    detailTop: Number(cfg(env, 'WORKER_SCAN_TOP')),
+    interval: cfg(env, 'WORKER_SCAN_INTERVAL'),
+    minScore: Number(cfg(env, 'MIN_SCORE')),
+  });
 }
 
 /**

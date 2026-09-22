@@ -14,9 +14,7 @@
  */
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { PROVIDERS } from '../src/data/providers.js';
-import { analyze } from '../src/smc/engine.js';
-import { aggregateBias, tfSuite } from '../src/smc/mtf.js';
+import { scanMarket } from '../src/market/scan.js';
 import { DERIV_PROVIDERS, fetchAllOpenInterest, snapshotChange } from '../src/data/derivatives.js';
 import { derivativesVerdict, oiChangePct } from '../src/smc/derivatives.js';
 
@@ -40,43 +38,9 @@ const DETAIL_TOP = Number(opt('detail', 30));
 /** 要補抓資金費率／未平倉量的檔數（只針對進榜的） */
 const DERIV_TOP = Number(opt('deriv', 80));
 
-/**
- * 排除穩定幣對與槓桿代幣：這些的 SMC 結構沒有參考價值。
- * 名稱黑名單擋得掉大部分，但新的穩定幣一直出現（BFUSD、XUSD…），
- * 所以另外用「波動度過低」當第二道防線。
- */
-const EXCLUDE = /(USDC|FDUSD|TUSD|BUSD|DAI|USDP|USDE|USD1|USDF|PYUSD|AEUR|EURI|XUSD|BFUSD|EUR|GBP|TRY|BRL|ARS|JPY|UP|DOWN|BULL|BEAR)USDT$/;
-/** 近期波動度低於此值（相對價格）就視為穩定幣或殭屍幣，直接跳過 */
-const MIN_ATR_PCT = 0.15;
-
 const log = (...a) => console.log(...a);
 const digitsFor = (p) => (Math.abs(p) >= 10000 ? 1 : Math.abs(p) >= 100 ? 2 : Math.abs(p) >= 1 ? 4 : Math.abs(p) >= 0.01 ? 5 : 7);
 const price = (v) => (v == null || !isFinite(v) ? '—' : Number(v).toLocaleString('en-US', { minimumFractionDigits: digitsFor(v), maximumFractionDigits: digitsFor(v) }));
-
-async function withFallback(fn) {
-  let err;
-  for (const id of PROVIDER_IDS) {
-    const p = PROVIDERS[id];
-    if (!p) continue;
-    try { return { result: await fn(p), provider: id }; } catch (e) { err = e; }
-  }
-  throw err || new Error('沒有可用的資料源');
-}
-
-/** 簡單的並行池：控制同時進行的請求數，避免打爆交易所的速率限制 */
-async function pool(items, size, worker) {
-  const out = [];
-  let i = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(size, items.length) }, async () => {
-      while (i < items.length) {
-        const idx = i++;
-        try { out[idx] = await worker(items[idx], idx); } catch (e) { out[idx] = { error: e?.message || String(e) }; }
-      }
-    }),
-  );
-  return out;
-}
 
 async function isFresh() {
   if (!STALE_MIN) return false;
@@ -91,53 +55,7 @@ async function isFresh() {
   return false;
 }
 
-const r8 = (v) => (v == null || !isFinite(v) ? null : Number(Number(v).toPrecision(8)));
 const r2 = (v) => (v == null || !isFinite(v) ? null : Math.round(v * 100) / 100);
-
-function toRow(symbol, a, provider, quoteVolume) {
-  const s = a.setup;
-  if (!s || s.none) return null;
-  const distancePct = ((s.entry - a.price) / a.price) * 100;
-  // 近 24 根的價格變化：判讀「價格與未平倉量同向還是背離」時要用到
-  const recent = a.candles.slice(-24);
-  const changePct = recent.length > 1
-    ? ((recent.at(-1).close - recent[0].close) / recent[0].close) * 100
-    : 0;
-  return {
-    symbol,
-    price: r8(a.price),
-    changePct: r2(changePct),
-    quoteVolume: Math.round(quoteVolume ?? 0),
-    provider,
-    interval: INTERVAL,
-    bias: a.bias.score,
-    biasLabel: a.bias.label,
-    pd: a.pd ? { zone: a.pd.zone, pct: r2(a.pd.pct) } : null,
-    dir: s.dir,
-    grade: s.grade,
-    score: s.score,
-    rr: r2(s.rrFinal),
-    rr1: r2(s.rr1),
-    entry: r8(s.entry),
-    stop: r8(s.stop),
-    riskPct: r2(s.riskPct),
-    targets: s.targets.map((t) => ({ name: t.name, price: r8(t.price), rr: r2(t.rr), label: t.label })),
-    poiType: s.poi?.type,
-    poiState: s.poi?.state,
-    entryType: s.entryType,
-    status: s.entryType === 'market' ? 'ready' : 'waiting',
-    distancePct: r2(distancePct),
-    valid: s.valid,
-    conflict: !!s.conflict,
-    checksPassed: s.checklist.filter((c) => c.ok).length,
-    checksTotal: s.checklist.length,
-    structure: a.structure.swing.trendLabel,
-    lastEvent: a.structure.internal.lastEvent
-      ? { type: a.structure.internal.lastEvent.type, dir: a.structure.internal.lastEvent.dir }
-      : null,
-    updatedAt: a.candles.at(-1).time,
-  };
-}
 
 /**
  * 補上資金費率與未平倉量。
@@ -224,77 +142,24 @@ async function main() {
   if (await isFresh()) return;
   const t0 = Date.now();
 
-  log(`取得交易對清單…`);
-  const { result: tickers, provider } = await withFallback((p) => p.fetchSymbols());
-  const universe = tickers
-    .filter((t) => !EXCLUDE.test(t.symbol))
-    .slice(0, TOP);
-  log(`資料源 ${provider}｜候選 ${universe.length} 個交易對（依 24h 成交額排序）\n`);
-
-  // ── 第一階段：單週期粗篩 ──
-  let done = 0;
-  const stage1 = await pool(universe, CONCURRENCY, async (t) => {
-    const p = PROVIDERS[provider];
-    const candles = await p.fetchKlines(t.symbol, INTERVAL, { limit: 320 });
-    const a = analyze(candles.slice(0, -1));
-    done++;
-    if (done % 20 === 0) log(`  已掃描 ${done}/${universe.length}`);
-    if (a.empty) return null;
-    // 第二道防線：波動度太低（穩定幣、殭屍幣）的訊號沒有意義
-    const atrPct = (a.atrValue / a.price) * 100;
-    if (atrPct < MIN_ATR_PCT) return { skipped: 'low-volatility', symbol: t.symbol };
-    return toRow(t.symbol, a, provider, t.quoteVolume);
+  log(`取得交易對清單…掃描前 ${TOP} 名（${PROVIDER_IDS.join('/')}）…`);
+  const out = await scanMarket({
+    providerIds: PROVIDER_IDS,
+    top: TOP,
+    interval: INTERVAL,
+    concurrency: CONCURRENCY,
+    minScore: MIN_SCORE,
+    detailTop: DETAIL_TOP,
   });
+  log(`資料源 ${out.provider}｜候選 ${out.universe} 個交易對（依 24h 成交額排序）`);
+  log(`粗篩完成：掃了 ${out.scanned} 個（另有 ${out.skippedLowVolatility} 個因波動度過低被排除）`);
 
-  const skipped = stage1.filter((r) => r?.skipped).length;
-  const candidates = stage1
-    .filter((r) => r && !r.error && !r.skipped && r.score >= MIN_SCORE)
-    .sort((a, b) => b.score - a.score);
-  log(`\n粗篩完成：${candidates.length} 個達到 ${MIN_SCORE} 分（另有 ${skipped} 個因波動度過低被排除）`);
-
-  // ── 第二階段：對前段補抓高週期偏向，重新精算 ──
-  const htfInterval = tfSuite(INTERVAL).htf;
-  const detail = candidates.slice(0, DETAIL_TOP);
-  log(`精算前 ${detail.length} 名（補上 ${htfInterval} 高週期偏向）…`);
-  const refined = await pool(detail, CONCURRENCY, async (row) => {
-    const p = PROVIDERS[provider];
-    let htf = null;
-    try {
-      const h = await p.fetchKlines(row.symbol, htfInterval, { limit: 260 });
-      const ha = analyze(h.slice(0, -1));
-      if (!ha.empty) htf = aggregateBias([{ interval: htfInterval, bias: ha.bias }]);
-    } catch {}
-    const candles = await p.fetchKlines(row.symbol, INTERVAL, { limit: 320 });
-    const a = analyze(candles.slice(0, -1), { htfBias: htf });
-    if (a.empty) return row;
-    const fresh = toRow(row.symbol, a, provider, row.quoteVolume);
-    return fresh ? { ...fresh, htfBias: htf?.score ?? null } : row;
-  });
-
-  const rows = [
-    ...refined.filter((r) => r && !r.error),
-    ...candidates.slice(DETAIL_TOP),
-  ].sort((a, b) => b.score - a.score);
-
-  const ready = rows.filter((r) => r.status === 'ready' && r.valid);
-  const waiting = rows.filter((r) => r.status === 'waiting' && r.valid);
+  const ready = out.rows.filter((r) => r.status === 'ready' && r.valid);
+  const waiting = out.rows.filter((r) => r.status === 'waiting' && r.valid);
 
   // 只對真的會出現在清單上的幣抓資金費率與未平倉量。
   // 全部 120 檔都抓沒有意義（多數不會進榜），而且會拖慢整個掃描。
   await attachDerivatives([...ready, ...waiting].slice(0, DERIV_TOP), await previousRows());
-
-  const out = {
-    generatedAt: new Date().toISOString(),
-    provider,
-    interval: INTERVAL,
-    htfInterval,
-    universe: universe.length,
-    scanned: stage1.filter((r) => r && !r.skipped).length,
-    skippedLowVolatility: skipped,
-    minScore: MIN_SCORE,
-    counts: { ready: ready.length, waiting: waiting.length, total: rows.length },
-    rows,
-  };
 
   await mkdir(DATA_DIR, { recursive: true });
   await writeFile(OUT_JSON, JSON.stringify(out));

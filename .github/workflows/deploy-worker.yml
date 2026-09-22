@@ -256,6 +256,18 @@ jobs:
           echo "KV 命名空間 ID：$ID"
           echo "KV_ID=$ID" >> "$GITHUB_ENV"
 
+      - name: 打包 Worker（含它 import 的 SMC 引擎），才能真的做全市場掃描
+        # worker/index.js 現在會 import ../src/market/scan.js（進而 import 到
+        # SMC 引擎一大串檔案），但部署走的經典上傳 API 只能傳一個檔案，
+        # 沒有打包步驟就會找不到模組。用 esbuild 把它跟它需要的原始碼
+        # 一起打包成一個自包含的檔案，再上傳這個打包後的版本。
+        if: ${{ steps.check.outputs.ready == 'true' }}
+        working-directory: worker
+        run: |
+          set -e
+          npx --yes esbuild@0.24 index.js --bundle --format=esm --platform=neutral --outfile=dist/index.js
+          echo "打包完成：$(wc -c < dist/index.js) bytes"
+
       - name: 部署 Worker（改用 Cloudflare 經典上傳 API，不走 wrangler 的版本化部署）
         if: ${{ steps.check.outputs.ready == 'true' }}
         working-directory: worker
@@ -299,10 +311,13 @@ jobs:
             console.log(JSON.stringify({ main_module: main, compatibility_date: compat, bindings }));
           ' "$KV_ID")"
 
+          # 上傳打包後的檔案（dist/index.js），不是原始的 index.js——metadata 裡
+          # main_module 寫的是 "index.js"，Cloudflare 是用這個表單欄位名稱去對應
+          # main_module，欄位名稱不變，只是內容換成打包後的版本。
           RESP="$(curl -sS -X PUT \
             "${AUTH_HEADERS[@]}" \
             -F "metadata=$METADATA;type=application/json" \
-            -F "index.js=@index.js;type=application/javascript+module" \
+            -F "index.js=@dist/index.js;type=application/javascript+module" \
             "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/smc-signals")"
 
           if ! printf '%s' "$RESP" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.exit(JSON.parse(s||"{}").success?0:1))' 2>/dev/null; then
