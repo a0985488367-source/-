@@ -18,7 +18,8 @@
 #
 # 選用：Worker 自己即時掃描（需要 Workers Paid，細節見 index.js 開頭的說明）
 #   Variable      WORKER_SCAN_ENABLED / WORKER_SCAN_TOP / WORKER_SCAN_BATCH_SIZE /
-#                 WORKER_SCAN_BATCH_INTERVAL_MIN / WORKER_SCAN_INTERVAL / WORKER_SCAN_PROVIDERS
+#                 WORKER_SCAN_BATCH_INTERVAL_MIN / WORKER_SCAN_INTERVAL / WORKER_SCAN_PROVIDERS /
+#                 WORKER_SCAN_MIN_SCORE（掃描累積門檻，跟推播/下單門檻 MIN_SCORE 是分開的）
 #
 # 選用：把 Worker 自己的掃描結果寫回 data/market.json（細節見 index.js 開頭的說明）
 #   Secret        GITHUB_API_TOKEN（fine-grained PAT，只給這個倉庫的 Contents 讀寫權限）
@@ -53,6 +54,11 @@ WORKER_SCAN_TOP = "120"
 WORKER_SCAN_BATCH_SIZE = "20"
 WORKER_SCAN_BATCH_INTERVAL_MIN = "10"
 WORKER_SCAN_INTERVAL = "1h"
+# 掃描累積門檻，故意設很低（幾乎不濾）：跟上面的 MIN_SCORE（推播/下單
+# 門檻）是兩件事，掃描這一步只要是有效計畫就先存起來，要不要因此推播、
+# 下單留到比對現價那一步才照 MIN_SCORE 篩——這樣累積結果才不會被鎖死在
+# 「這一批剛好有幾檔當下超過推播門檻」，候選池繞完一輪才能真的都留下來
+WORKER_SCAN_MIN_SCORE = "0"
 # 資料源照這個順序嘗試，優先用 Bybit（跟自動下單實際交易的交易所一致）
 WORKER_SCAN_PROVIDERS = "bybit,binance,okx"
 

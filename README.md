@@ -318,8 +318,17 @@ WORKER_SCAN_TOP = "120"                 # 候選池總大小，依成交量排�
 WORKER_SCAN_BATCH_SIZE = "20"           # 每批真的重新掃描幾檔
 WORKER_SCAN_BATCH_INTERVAL_MIN = "10"   # 幾分鐘算下一批
 WORKER_SCAN_INTERVAL = "1h"
+WORKER_SCAN_MIN_SCORE = "0"             # 掃描累積門檻，故意很低（幾乎不濾）
 WORKER_SCAN_PROVIDERS = "bybit,binance,okx"  # 資料源順序，預設優先用 Bybit
 ```
+
+`WORKER_SCAN_MIN_SCORE` 跟 `MIN_SCORE`（要不要因此推播／下單的門檻）是
+**兩件事**，刻意分開：掃描累積這一步只要「是個有效計畫」就先存起來（跟
+GitHub Actions 那份 `data/market.json` 的做法一致），`MIN_SCORE` 只在
+比對現價那一步決定要不要因此推播／下單。如果掃描這一步直接套用
+`MIN_SCORE` 當篩選門檻，累積結果會被鎖死在「這一批剛好有幾檔當下超過
+門檻」，候選池繞完一輪也留不下多少標的——這是實測踩過的坑，`WORKER_SCAN_MIN_SCORE`
+就是修這個問題加的，不要把它跟 `MIN_SCORE` 設成同一個值。
 
 上面這組預設值：120 檔 ÷ 20 檔一批 = 6 批，6 批 × 10 分鐘 ≈ **1 小時**
 把整個候選池都掃過一次；同一檔幣種平均要等將近 1 小時才會被重新分析一次，

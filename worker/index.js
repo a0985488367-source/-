@@ -36,6 +36,13 @@
  * WORKER_SCAN_BATCH_INTERVAL_MIN 的頻率跑，沒輪到批次的 tick 只讀 KV
  * 累積的結果，幾乎不用額外的請求或 CPU。
  *
+ * 累積門檻（WORKER_SCAN_MIN_SCORE）刻意跟推播／下單門檻（MIN_SCORE）分開，
+ * 不能搞混：掃描階段只要「這是個有效計畫」就先存起來（跟 GitHub Actions
+ * 那份 data/market.json 的做法一致），要不要因此推播、下單留到 run() 檢查
+ * 現價那一步才照 MIN_SCORE 篩。如果掃描這一步就直接套用 MIN_SCORE，等於
+ * 「這一批剛好有幾檔當下超過門檻」才留得下來，候選池繞完一輪也累積不了
+ * 多少標的——這是實測踩到的坑，記錄下來避免以後又改回去。
+ *
  *   Variable  WORKER_SCAN_ENABLED             'true' 才會啟用（預設關閉）
  *   Variable  WORKER_SCAN_TOP                 候選池總大小（預設 120，依成交額
  *             排序取前 N 檔，循環一輪會全部掃過一次）
@@ -43,6 +50,7 @@
  *             愈大單批 CPU 愈吃緊，愈小一輪要花愈久才能涵蓋整個候選池）
  *   Variable  WORKER_SCAN_BATCH_INTERVAL_MIN  幾分鐘算下一批（預設 10）
  *   Variable  WORKER_SCAN_INTERVAL            進場週期（預設 1h，跟 GitHub 那份一致）
+ *   Variable  WORKER_SCAN_MIN_SCORE           掃描累積門檻（預設 0，幾乎不濾）
  *
  * 注意：即使有分批，長期下來對外部交易所 API 的請求量還是會比原本 GitHub
  * 排程高（頻率拉高了），開啟前請留意交易所的速率限制。
@@ -132,6 +140,7 @@ const DEFAULTS = {
   WORKER_SCAN_BATCH_SIZE: '20',        // 每次真的重新掃描只算這麼多檔，CPU 才不會爆
   WORKER_SCAN_BATCH_INTERVAL_MIN: '10', // 幾分鐘算下一批；一輪時間 ≈ (TOP/BATCH_SIZE) × 這個值
   WORKER_SCAN_INTERVAL: '1h',
+  WORKER_SCAN_MIN_SCORE: '0', // 掃描時累積用的門檻，故意很低；真正要不要推播/下單看 MIN_SCORE
   GITHUB_REPO: 'a0985488367-source/-',
   GITHUB_MARKET_PATH: 'data/market.json',
 };
@@ -196,6 +205,7 @@ export default {
         workerScanTop: workerScanEnabled ? Number(cfg(env, 'WORKER_SCAN_TOP')) : null,
         workerScanBatchSize: workerScanEnabled ? Number(cfg(env, 'WORKER_SCAN_BATCH_SIZE')) : null,
         workerScanBatchIntervalMin: workerScanEnabled ? Number(cfg(env, 'WORKER_SCAN_BATCH_INTERVAL_MIN')) : null,
+        workerScanMinScore: workerScanEnabled ? Number(cfg(env, 'WORKER_SCAN_MIN_SCORE')) : null,
         workerScanCache,
         market: market.error
           ? market
@@ -401,7 +411,7 @@ async function publishMarketToGitHub(env, rows, meta) {
       universeSymbols: merged.map((r) => r.symbol),
       scanned: merged.length,
       skippedLowVolatility: 0,
-      minScore: Number(cfg(env, 'MIN_SCORE')),
+      minScore: Number(cfg(env, 'WORKER_SCAN_MIN_SCORE')),
       counts: { ready, waiting, total: merged.length },
       rows: merged,
     };
@@ -434,6 +444,14 @@ async function publishMarketToGitHub(env, rows, meta) {
  * 個位置，下次接著算，繞一圈就等於整個候選池都更新過），結果累積進
  * worker-scan:rows；還沒輪到下一批的 tick 直接沿用累積的結果，不會真的
  * 打任何外部 API。
+ *
+ * 累積用的門檻刻意跟「要不要推播／下單」的門檻（MIN_SCORE）分開：掃描這
+ * 一步只濾掉根本沒有有效計畫的（SCAN_MIN_SCORE，預設 0），跟 GitHub
+ * Actions 那份 data/market.json 的做法一致——存全部有效計畫，篩選留到
+ * 之後那一層。如果掃描這一步就直接套用 MIN_SCORE，累積結果會被鎖死在
+ * 「這一批剛好有幾檔當下就超過門檻」，候選池繞完一輪也不會有多少標的
+ * 留下來；分開之後，只要是有效計畫都會先留著，run() 檢查現價那一步才會
+ * 真的照 MIN_SCORE 篩要不要繼續看。
  */
 async function getFreshMarket(env) {
   if (cfg(env, 'WORKER_SCAN_ENABLED') !== 'true') return getMarket(env);
@@ -442,13 +460,15 @@ async function getFreshMarket(env) {
   const top = Number(cfg(env, 'WORKER_SCAN_TOP'));
   const batchSize = Number(cfg(env, 'WORKER_SCAN_BATCH_SIZE'));
   const interval = cfg(env, 'WORKER_SCAN_INTERVAL');
-  const minScore = Number(cfg(env, 'MIN_SCORE'));
+  // 掃描階段刻意用很低的門檻（不是拿來決定要不要推播的 MIN_SCORE）：
+  // 存起來的候選池要盡量完整，真正的評分門檻在 run() 檢查現價那一步才套用。
+  const scanMinScore = Number(cfg(env, 'WORKER_SCAN_MIN_SCORE'));
 
   if (!env.SMC_KV) {
     // 沒有 KV 就沒辦法記住批次進度／累積結果，退化成每次都整批重掃
     // WORKER_SCAN_TOP 檔——這個數字如果照預設值 120，很容易在 Workers Paid
     // 的 30 秒 CPU 上限內跑不完，沒設 KV 的話務必自己把它調小。
-    return scanMarket({ providerIds, top, detailTop: top, interval, minScore });
+    return scanMarket({ providerIds, top, detailTop: top, interval, minScore: scanMinScore });
   }
 
   const intervalMin = Number(cfg(env, 'WORKER_SCAN_BATCH_INTERVAL_MIN'));
@@ -462,7 +482,7 @@ async function getFreshMarket(env) {
   }
 
   const cursor = Number((await env.SMC_KV.get(WORKER_SCAN_CURSOR_KEY)) || '0');
-  const batch = await scanMarket({ providerIds, top, offset: cursor, batchSize, interval, minScore, detailTop: batchSize });
+  const batch = await scanMarket({ providerIds, top, offset: cursor, batchSize, interval, minScore: scanMinScore, detailTop: batchSize });
 
   const rowsRaw = await env.SMC_KV.get(WORKER_SCAN_ROWS_KEY);
   const rows = rowsRaw ? JSON.parse(rowsRaw) : {};

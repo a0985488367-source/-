@@ -317,6 +317,35 @@ test('輪到下一批時，真的重新掃描那一批，並把結果累積進�
   assert.equal(await env.SMC_KV.get('worker-scan:cursor'), '5', '游標應該往前推 batchSize（5）');
 });
 
+test('掃描累積用的門檻（WORKER_SCAN_MIN_SCORE）不受推播門檻（MIN_SCORE）影響', async () => {
+  // 實測踩過的坑：如果掃描這一步直接套用 MIN_SCORE 當篩選門檻，候選池
+  // 繞完一輪也留不下幾檔——這裡故意把 MIN_SCORE（推播/下單門檻）設超高，
+  // 確認累積結果不會被這個門檻鎖死，掃描本身只看 WORKER_SCAN_MIN_SCORE
+  // （預設 0，幾乎不濾），MIN_SCORE 只影響 run() 要不要因此推播/下單。
+  const discord = [];
+  const env = makeEnv({
+    WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_PROVIDERS: 'demo', WORKER_SCAN_TOP: '12',
+    WORKER_SCAN_BATCH_SIZE: '5', WORKER_SCAN_BATCH_INTERVAL_MIN: '15', MIN_SCORE: '999',
+  });
+  const staleMeta = {
+    provider: 'demo', interval: '1h', htfInterval: '1d', poolTotal: 12,
+    lastBatchAt: new Date(Date.now() - 100 * 60000).toISOString(),
+  };
+  await env.SMC_KV.put('worker-scan:meta', JSON.stringify(staleMeta));
+  await env.SMC_KV.put('worker-scan:rows', JSON.stringify({}));
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    if (u.includes('discord')) { discord.push(JSON.parse(init.body)); return new Response(null, { status: 204 }); }
+    throw new Error('未預期的請求：' + u);
+  };
+  await runWorker(env);
+  const rows = JSON.parse(await env.SMC_KV.get('worker-scan:rows'));
+  assert.ok(
+    Object.keys(rows).length > 0,
+    'MIN_SCORE=999（推播門檻）不該讓累積結果變成空的——掃描階段該用 WORKER_SCAN_MIN_SCORE（預設 0）',
+  );
+});
+
 test('分批結果會累積：這批沒掃到的舊資料要保留，不會被清空', async () => {
   const discord = [];
   // MIN_SCORE 故意設超高，確保這次分批算出來不會有任何計畫進入監看名單，
