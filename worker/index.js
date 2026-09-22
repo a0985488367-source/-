@@ -68,6 +68,20 @@
  * 會比對「追蹤中的部位」跟 Bybit 現在實際的持倉，少了的就代表平倉了，
  * 推一則結算通知（用偵測到平倉當下的市價估算 R，不是交易所的精確成交價）。
  *
+ * ── 部位管理（保本鏢／移到成本價／追蹤停損）─────────────────────────────
+ * 下單套用的是 README「部位管理」那段 A/B 實測驗證過的同一組規則
+ * （src/smc/manage.js 的 DEFAULT_MANAGEMENT／buildLadder，跟模擬盤追蹤、
+ * 回測共用同一份常數，三條規則綁在一起才有實測的 75% 勝率）：
+ *   1. 保本鏢：開倉當下就把 +0.5R 的分批出場單（34% 部位）掛成真的 Bybit
+ *      reduce-only 限價單，剩餘部位平均分給原本的目標價，也都掛成限價單——
+ *      價格到了交易所自己成交，不用等 Worker 輪詢才發現。
+ *   2. 移到成本價：獲利到 +0.5R 之後，把停損搬到進場價 +0.05R（多單，空單反向）。
+ *   3. 追蹤停損：獲利超過 +1.5R 之後，停損改成跟著最高獲利走，距離 0.8R，
+ *      只會愈移愈緊，不會反向鬆開。
+ * 這兩條停損規則靠 Worker 每 2 分鐘輪詢現價、算目前的 maxFavorableR 有沒有
+ * 過門檻，過了就呼叫 Bybit 的 /v5/position/trading-stop 把停損單搬過去
+ * （分批出場單是開倉當下就掛好的真實限價單，不需要輪詢）。
+ *
  * 開關（開啟後才會真的下單，就算金鑰都設定好了）：
  *   GET /auto-trade/status         查看目前開/關（不需要 token，唯讀）
  *   GET /auto-trade/on?token=xxx   開啟
@@ -82,6 +96,7 @@
  */
 
 import { scanMarket } from '../src/market/scan.js';
+import { DEFAULT_MANAGEMENT, buildLadder } from '../src/smc/manage.js';
 
 const DEFAULTS = {
   MARKET_URL: 'https://raw.githubusercontent.com/a0985488367-source/-/main/data/market.json',
@@ -220,19 +235,21 @@ async function run(env, { dry = false } = {}) {
 
   // 部位關閉偵測跟這次掃描的新訊號完全獨立，放在 market.json 新鮮度檢查
   // 之前執行——不然 market.json 剛好太舊的那幾分鐘，已經開倉的部位就算真的
-  // 平倉了也不會被通知到。
+  // 平倉了也不會被通知到。停損的移動（成本價／追蹤）也一樣獨立，接在關閉
+  // 偵測後面：先把已經不在的部位清掉，剩下的才需要考慮搬停損。
   const closedPositions = dry ? { checked: 0, closed: 0 } : await checkClosedPositions(env).catch(() => ({ checked: 0, closed: 0, error: true }));
+  const trailingStops = dry ? { checked: 0, moved: 0 } : await updateTrailingStops(env).catch(() => ({ checked: 0, moved: 0, error: true }));
 
   const market = await getFreshMarket(env);
   const ageMin = (Date.now() - new Date(market.generatedAt).getTime()) / 60000;
   if (ageMin > Number(cfg(env, 'MAX_MARKET_AGE_MIN'))) {
-    return { skipped: 'market-too-old', ageMinutes: Math.round(ageMin), closedPositions };
+    return { skipped: 'market-too-old', ageMinutes: Math.round(ageMin), closedPositions, trailingStops };
   }
 
   const minScore = Number(cfg(env, 'MIN_SCORE'));
   const nearPct = Number(cfg(env, 'NEAR_PCT'));
   const watch = market.rows.filter((r) => r.valid && r.status === 'waiting' && r.score >= minScore);
-  if (!watch.length) return { checked: 0, alerts: 0, ageMinutes: Math.round(ageMin), closedPositions };
+  if (!watch.length) return { checked: 0, alerts: 0, ageMinutes: Math.round(ageMin), closedPositions, trailingStops };
 
   const prices = await getPrices(watch.map((r) => r.symbol));
   const hits = [];
@@ -276,6 +293,7 @@ async function run(env, { dry = false } = {}) {
     sent,
     autoTradeOn,
     closedPositions,
+    trailingStops,
     ageMinutes: Math.round(ageMin),
     ms: Date.now() - t0,
     dry,
@@ -541,9 +559,29 @@ function roundTick(value, tick) {
 }
 
 /**
- * 用 Demo 帳戶目前的可用餘額 × 風險 % 算出下單數量，附停損與第一個停利，
- * 送出市價單。任何一步失敗都回傳 { error }——「有訊號要通知」永遠比
- * 「這筆有沒有下成」重要，所以呼叫端不會因為這裡失敗就不推播 Discord。
+ * 把 buildLadder() 算出來的階梯（保本鏢 + 原本目標）轉成「每一段各自的
+ * 絕對出場比例」。buildLadder 是給回測用的循序模擬器寫的，最後一段的
+ * fraction 故意是 0（代表「不管剩多少，全部出清」），但這裡是要一次把
+ * 所有分批單都掛成真實的限價單（互相獨立、平行存在），所以要把最後一段
+ * 換成「扣掉前面幾段之後真正剩下的比例」，掛單的量才會真的加起來等於 1。
+ */
+function ladderWithAbsoluteFractions(ladder) {
+  const legs = ladder.map((t) => ({ ...t }));
+  const last = legs[legs.length - 1];
+  if (last && !last.scalp) {
+    const sumOthers = legs.slice(0, -1).reduce((s, t) => s + (t.fraction || 0), 0);
+    last.fraction = Math.max(0, 1 - sumOthers);
+  }
+  return legs;
+}
+
+/**
+ * 用 Demo 帳戶目前的可用餘額 × 風險 % 算出下單數量，送出市價進場單並帶
+ * 停損；出場則套用 README「部位管理」那組驗證過的規則（src/smc/manage.js）
+ * ——保本鏢跟原本的目標價都在這裡就掛成真的 reduce-only 限價單，停損的
+ * 移動（成本價／追蹤）交給 updateTrailingStops() 每次執行時輪詢處理。
+ * 任何一步失敗都回傳 { error }——「有訊號要通知」永遠比「這筆有沒有下成」
+ * 重要，所以呼叫端不會因為這裡失敗就不推播 Discord。
  */
 async function autoTradeOrder(env, hit) {
   if (!env.BYBIT_DEMO_API_KEY || !env.BYBIT_DEMO_API_SECRET) return { skipped: 'no-keys' };
@@ -584,22 +622,49 @@ async function autoTradeOrder(env, hit) {
       timeInForce: 'IOC',
       stopLoss: String(roundTick(r.stop, tickSize)),
       slTriggerBy: 'LastPrice',
-      ...(r.targets?.[0] ? { takeProfit: String(roundTick(r.targets[0].price, tickSize)), tpTriggerBy: 'LastPrice' } : {}),
+      // 不在這裡設 takeProfit：分批出場單另外用下面的限價單掛，
+      // 交易所原生的單一 takeProfit 欄位放不下「保本鏢 + 好幾段目標」。
     });
 
-    // 記住這筆倉位，之後每次執行才知道要去比對它是不是已經平倉了。
-    // 同一個「幣種＋方向」如果本來就有追蹤中的紀錄會直接覆蓋——Bybit 單向模式下
-    // 同幣種同方向本來就只會有一個聚合部位，第二筆訂單是加碼到同一個部位，
-    // 不是開一個新的；代價是進場價會變成「最後一次加碼的價格」而不是均價，
-    // 這裡先接受這個簡化，不做加權平均。
+    // 保本鏢 + 原本目標，一次全部掛成真的 reduce-only 限價單——價格到了
+    // 交易所自己成交，不用等 Worker 下次輪詢才發現、才補下單。
+    const ladder = ladderWithAbsoluteFractions(buildLadder(r.entry, r.stop, r.targets, DEFAULT_MANAGEMENT));
+    const legOrders = [];
+    for (const leg of ladder) {
+      const legQty = roundStep(qty * (leg.fraction || 0), qtyStep);
+      if (!(legQty >= minQty)) continue; // 比例太小、算出來的量掛不了單就跳過這一段
+      try {
+        const legOrder = await bybitCall(env, 'POST', '/v5/order/create', {
+          category: 'linear',
+          symbol: r.symbol,
+          side: r.dir === 'long' ? 'Sell' : 'Buy', // 出場方向跟進場相反
+          orderType: 'Limit',
+          qty: String(legQty),
+          price: String(roundTick(leg.price, tickSize)),
+          reduceOnly: true,
+          timeInForce: 'GTC',
+        });
+        legOrders.push({ name: leg.name, price: leg.price, fraction: leg.fraction, qty: legQty, orderId: legOrder?.orderId });
+      } catch (e) {
+        legOrders.push({ name: leg.name, price: leg.price, fraction: leg.fraction, qty: legQty, error: e.message });
+      }
+    }
+
+    // 記住這筆倉位，之後每次執行才知道要去比對它是不是已經平倉了、
+    // 獲利有沒有過門檻要搬停損。同一個「幣種＋方向」如果本來就有追蹤中的
+    // 紀錄會直接覆蓋——Bybit 單向模式下同幣種同方向本來就只會有一個聚合
+    // 部位，第二筆訂單是加碼到同一個部位，不是開一個新的；代價是進場價會
+    // 變成「最後一次加碼的價格」而不是均價，這裡先接受這個簡化，不做加權平均。
     if (env.SMC_KV) {
       await env.SMC_KV.put(`open-pos:${r.symbol}:${r.dir}`, JSON.stringify({
-        symbol: r.symbol, dir: r.dir, entry: r.entry, stop: r.stop, targets: r.targets,
+        symbol: r.symbol, dir: r.dir, entry: r.entry, stop: r.stop, initialStop: r.stop,
+        targets: r.targets, ladder: legOrders, tickSize,
+        maxFavorableR: 0, beMoved: false, trailing: false,
         qty, riskAmount, leverage, grade: r.grade, score: r.score, openedAt: Date.now(),
       }));
     }
 
-    return { orderId: order?.orderId, qty, riskAmount, leverage };
+    return { orderId: order?.orderId, qty, riskAmount, leverage, ladder: legOrders };
   } catch (e) {
     return { error: e.message };
   }
@@ -636,11 +701,80 @@ async function checkClosedPositions(env) {
         const exitPrice = prices[pos.symbol];
         if (exitPrice) await postDiscord(env, buildCloseEmbed(pos, exitPrice));
       } catch { /* 平倉通知失敗也要把追蹤紀錄刪掉，不然會卡住一直重試同一筆 */ }
+      // 部位平倉了（不管是停損還是分批出場單打到），開倉時掛的那批分批
+      // 出場限價單如果還有沒成交的殘單，取消掉——reduce-only 單獨留著不會
+      // 加碼部位，但留著容易讓人誤會這幣種還在追蹤中。
+      await bybitCall(env, 'POST', '/v5/order/cancel-all', { category: 'linear', symbol: pos.symbol }).catch(() => {});
     }
     await env.SMC_KV.delete(key);
     closed++;
   }
   return { checked: tracked.keys.length, closed };
+}
+
+/**
+ * 追蹤中的部位如果獲利超過門檻，把 Bybit 上的停損單往有利的方向搬——
+ * 套用跟 README「部位管理」那段驗證過的同一組規則（src/smc/manage.js 的
+ * DEFAULT_MANAGEMENT）：
+ *   maxFavorableR ≥ breakevenAtR（0.5）→ 停損搬到成本價 + 0.05R（多單）
+ *   maxFavorableR ≥ trailFromR（1.5）  → 停損跟著最高獲利走，距離 0.8R
+ * 停損只會愈移愈緊，不會反向鬆開；分批出場的限價單開倉當下就掛好了，
+ * 不需要在這裡處理。
+ */
+async function updateTrailingStops(env) {
+  if (!env.SMC_KV || !env.BYBIT_DEMO_API_KEY || !env.BYBIT_DEMO_API_SECRET) return { checked: 0, moved: 0 };
+  const tracked = await env.SMC_KV.list({ prefix: 'open-pos:' });
+  if (!tracked.keys.length) return { checked: 0, moved: 0 };
+
+  const positions = [];
+  for (const { name: key } of tracked.keys) {
+    const raw = await env.SMC_KV.get(key);
+    if (raw) positions.push({ key, pos: JSON.parse(raw) });
+  }
+  if (!positions.length) return { checked: 0, moved: 0 };
+
+  const prices = await getPrices(positions.map(({ pos }) => pos.symbol));
+  let moved = 0;
+  for (const { key, pos } of positions) {
+    const price = prices[pos.symbol];
+    if (!price) continue;
+    const long = pos.dir === 'long';
+    const initialStop = Number.isFinite(pos.initialStop) ? pos.initialStop : pos.stop;
+    const risk = Math.abs(pos.entry - initialStop);
+    if (!(risk > 0)) continue;
+
+    const favorableR = (long ? price - pos.entry : pos.entry - price) / risk;
+    pos.maxFavorableR = Math.max(pos.maxFavorableR ?? 0, favorableR);
+
+    let nextStop = pos.stop;
+    if (!pos.beMoved && pos.maxFavorableR >= DEFAULT_MANAGEMENT.breakevenAtR) {
+      const be = long
+        ? pos.entry + risk * DEFAULT_MANAGEMENT.breakevenOffsetR
+        : pos.entry - risk * DEFAULT_MANAGEMENT.breakevenOffsetR;
+      if (long ? be > nextStop : be < nextStop) { nextStop = be; pos.beMoved = true; }
+    }
+    if (pos.maxFavorableR >= DEFAULT_MANAGEMENT.trailFromR) {
+      const lockR = pos.maxFavorableR - DEFAULT_MANAGEMENT.trailGapR;
+      const trailPx = long ? pos.entry + risk * lockR : pos.entry - risk * lockR;
+      if (long ? trailPx > nextStop : trailPx < nextStop) { nextStop = trailPx; pos.trailing = true; }
+    }
+
+    if (nextStop !== pos.stop) {
+      try {
+        await bybitCall(env, 'POST', '/v5/position/trading-stop', {
+          category: 'linear',
+          symbol: pos.symbol,
+          positionIdx: 0,
+          stopLoss: String(roundTick(nextStop, pos.tickSize || 0.01)),
+          slTriggerBy: 'LastPrice',
+        });
+        pos.stop = nextStop;
+        moved++;
+      } catch { /* 這次搬不動就算了，下次執行再試，不影響其他部位 */ }
+    }
+    await env.SMC_KV.put(key, JSON.stringify(pos));
+  }
+  return { checked: positions.length, moved };
 }
 
 function buildCloseEmbed(pos, exitPrice) {
