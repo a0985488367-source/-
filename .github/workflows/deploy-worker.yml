@@ -425,3 +425,21 @@ jobs:
           sync_secret BYBIT_DEMO_API_KEY "$BYBIT_DEMO_API_KEY"
           sync_secret BYBIT_DEMO_API_SECRET "$BYBIT_DEMO_API_SECRET"
           sync_secret AUTO_TRADE_TOKEN "$AUTO_TRADE_TOKEN"
+
+      - name: 部署完直接打 /status 確認現在的狀態（不需要另外開瀏覽器查）
+        if: ${{ steps.check.outputs.ready == 'true' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ env.CF_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ env.CF_ACCOUNT }}
+        run: |
+          SUB="$(curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain")"
+          HOST="$(printf '%s' "$SUB" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s||"{}").result?.subdomain||""))')"
+          if [ -z "$HOST" ]; then
+            echo "::warning::讀不到 workers.dev 子網域，略過這次的 /status 確認"
+            exit 0
+          fi
+          # 部署跟排程剛生效，給它幾秒再打，避免打到還沒切換完成的舊版本
+          sleep 5
+          curl -sS "https://smc-signals.$HOST.workers.dev/status" \
+            | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.stringify(JSON.parse(s),null,2))}catch{console.log("回應不是 JSON：",s)}})'
