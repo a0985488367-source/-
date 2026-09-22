@@ -27,7 +27,9 @@ ALERT_TTL_SEC = "21600"
 NEAR_PCT = "0.08"
 # 自動下單（選用，預設關閉，開關另外看 KV 的 auto-trade:enabled）
 AUTO_TRADE_RISK_PCT = "1"
-AUTO_TRADE_LEVERAGE = "5"
+# 槓桿照評分線性插值：評分等於 MIN_SCORE 給 MIN 倍，100 分給 MAX 倍
+AUTO_TRADE_LEVERAGE_MIN = "3"
+AUTO_TRADE_LEVERAGE_MAX = "10"
 
 # KV 命名空間：部署前請先建立，並把 id 填在這裡
 # （wrangler kv namespace create SMC_KV，或在主控台 Storage → KV 建立）

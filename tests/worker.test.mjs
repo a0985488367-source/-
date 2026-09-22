@@ -257,6 +257,34 @@ test('開啟後價格到了：用可用餘額 × 風險 % 算數量，送出市�
   const field = discord[0].embeds[0].fields.find((f) => f.name.includes('自動下單'));
   assert.match(field.value, /✅/);
   assert.match(field.value, /2/);
+  // score 75、MIN_SCORE 65、槓桿範圍 3~10 倍 → (75-65)/(100-65)=0.29 → 3+0.29*7≈5 倍
+  const leverageCall = bybit.calls.find((c) => c.url.includes('/v5/position/set-leverage'));
+  assert.equal(leverageCall.body.buyLeverage, '5');
+  assert.match(field.value, /5x 槓桿/);
+});
+
+test('槓桿照評分線性插值：高分給接近上限的槓桿，低分給接近下限的槓桿', async () => {
+  const discord = [];
+  const bybit = { calls: [], wallet: demoWallet, instrument: demoInstrument };
+  const env = makeEnv({ BYBIT_DEMO_API_KEY: 'k', BYBIT_DEMO_API_SECRET: 's' });
+  await env.SMC_KV.put('auto-trade:enabled', 'true');
+  stubFetch({ market: makeMarket([row({ score: 99 })]), prices: { ABCUSDT: 99.9 }, discord, bybit });
+  await runWorker(env);
+  const leverageCall = bybit.calls.find((c) => c.url.includes('/v5/position/set-leverage'));
+  // (99-65)/(100-65)=0.97 → 3+0.97*7≈10 倍（上限）
+  assert.equal(leverageCall.body.buyLeverage, '10');
+});
+
+test('槓桿不會超過該合約本身的上限', async () => {
+  const discord = [];
+  const lowMaxInstrument = { list: [{ ...demoInstrument.list[0], leverageFilter: { maxLeverage: '4' } }] };
+  const bybit = { calls: [], wallet: demoWallet, instrument: lowMaxInstrument };
+  const env = makeEnv({ BYBIT_DEMO_API_KEY: 'k', BYBIT_DEMO_API_SECRET: 's' });
+  await env.SMC_KV.put('auto-trade:enabled', 'true');
+  stubFetch({ market: makeMarket([row({ score: 99 })]), prices: { ABCUSDT: 99.9 }, discord, bybit });
+  await runWorker(env);
+  const leverageCall = bybit.calls.find((c) => c.url.includes('/v5/position/set-leverage'));
+  assert.equal(leverageCall.body.buyLeverage, '4', '算出來是 10 倍，但合約上限只有 4 倍');
 });
 
 test('沒設定 Demo 金鑰時開啟自動下單：標記略過，完全不打 Bybit API', async () => {
