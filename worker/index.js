@@ -23,8 +23,12 @@
  *   Secret    BYBIT_DEMO_API_KEY     Bybit 主站「模擬交易」的 API Key
  *   Secret    BYBIT_DEMO_API_SECRET  對應的 API Secret（只勾 Trade，絕對不要勾 Withdraw）
  *   Secret    AUTO_TRADE_TOKEN       自己取一串亂碼，用來保護下面的開關網址
- *   Variable  AUTO_TRADE_RISK_PCT    每筆風險占帳戶餘額的 %（預設 1）
- *   Variable  AUTO_TRADE_LEVERAGE    槓桿倍數（預設 5，會自動不超過該合約上限）
+ *   Variable  AUTO_TRADE_RISK_PCT    每筆風險占帳戶餘額的 %（預設 1，固定值，不分評分高低）
+ *   Variable  AUTO_TRADE_LEVERAGE_MIN/MAX  槓桿倍數的範圍（預設 3～10），照訊號評分線性插值，
+ *             評分等於 MIN_SCORE 給 MIN 倍、100 分給 MAX 倍，會自動不超過該合約上限。
+ *             槓桿只影響「用多少保證金」，不影響「這筆最多虧多少錢」（停損永遠先決定風險
+ *             金額），所以照評分調槓桿不會有「分數愈高賭愈大」的問題——這跟照評分調
+ *             倉位大小是兩回事，倉位大小目前刻意維持固定 %，不分評分。
  *   KV        SMC_KV 的 auto-trade:enabled 這個 key，預設不存在＝關閉
  *
  * 開關（開啟後才會真的下單，就算金鑰都設定好了）：
@@ -45,10 +49,25 @@ const DEFAULTS = {
   ALERT_TTL_SEC: '21600', // 同一個進場區 6 小時內只通知一次
   NEAR_PCT: '0.08',       // 距離進場區多近就算「到了」（%）
   AUTO_TRADE_RISK_PCT: '1',
-  AUTO_TRADE_LEVERAGE: '5',
+  AUTO_TRADE_LEVERAGE_MIN: '3',
+  AUTO_TRADE_LEVERAGE_MAX: '10',
 };
 
 const cfg = (env, key) => env[key] ?? DEFAULTS[key];
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+/**
+ * 槓桿照評分線性插值：評分等於 MIN_SCORE（Worker 連看都不會看的下限）給
+ * LEVERAGE_MIN 倍，100 分給 LEVERAGE_MAX 倍。分數不在這個範圍就夾住。
+ */
+function leverageForScore(env, score) {
+  const min = Number(cfg(env, 'AUTO_TRADE_LEVERAGE_MIN'));
+  const max = Number(cfg(env, 'AUTO_TRADE_LEVERAGE_MAX'));
+  const floor = Number(cfg(env, 'MIN_SCORE'));
+  if (!(max > min) || !(100 > floor)) return min;
+  const t = clamp((score - floor) / (100 - floor), 0, 1);
+  return Math.round(min + t * (max - min));
+}
 
 export default {
   async scheduled(event, env, ctx) {
@@ -86,7 +105,8 @@ export default {
         hasKeys: !!(env.BYBIT_DEMO_API_KEY && env.BYBIT_DEMO_API_SECRET),
         mode: 'demo',
         riskPct: Number(cfg(env, 'AUTO_TRADE_RISK_PCT')),
-        leverage: Number(cfg(env, 'AUTO_TRADE_LEVERAGE')),
+        leverageMin: Number(cfg(env, 'AUTO_TRADE_LEVERAGE_MIN')),
+        leverageMax: Number(cfg(env, 'AUTO_TRADE_LEVERAGE_MAX')),
       });
     }
     if (url.pathname === '/auto-trade/on' || url.pathname === '/auto-trade/off') {
@@ -252,7 +272,7 @@ function buildEmbed({ row: r, price }, market, autoTrade) {
 function autoTradeText(t) {
   if (t.skipped === 'no-keys') return '⏭️ 尚未設定 BYBIT_DEMO_API_KEY／SECRET，已略過';
   if (t.error) return `❌ ${t.error}`;
-  return `✅ 已送出市價單 · 數量 ${t.qty} · 這筆最多虧 ${fmt(t.riskAmount)} USDT`;
+  return `✅ 已送出市價單 · 數量 ${t.qty} · ${t.leverage}x 槓桿 · 這筆最多虧 ${fmt(t.riskAmount)} USDT`;
 }
 
 async function postDiscord(env, payload) {
@@ -371,7 +391,7 @@ async function autoTradeOrder(env, hit) {
     const qty = roundStep(riskAmount / perUnit, qtyStep);
     if (qty < minQty) return { error: `算出數量 ${qty} 小於最小下單量 ${minQty}，可調高 AUTO_TRADE_RISK_PCT` };
 
-    const leverage = Math.min(Number(cfg(env, 'AUTO_TRADE_LEVERAGE')), maxLeverage);
+    const leverage = Math.min(leverageForScore(env, r.score), maxLeverage);
     await bybitCall(env, 'POST', '/v5/position/set-leverage', {
       category: 'linear', symbol: r.symbol, buyLeverage: String(leverage), sellLeverage: String(leverage),
     }).catch((e) => { if (e.code !== 110043) throw e; }); // 已經是這個倍數，不算錯誤
@@ -388,7 +408,7 @@ async function autoTradeOrder(env, hit) {
       ...(r.targets?.[0] ? { takeProfit: String(roundTick(r.targets[0].price, tickSize)), tpTriggerBy: 'LastPrice' } : {}),
     });
 
-    return { orderId: order?.orderId, qty, riskAmount };
+    return { orderId: order?.orderId, qty, riskAmount, leverage };
   } catch (e) {
     return { error: e.message };
   }
