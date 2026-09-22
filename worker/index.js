@@ -300,10 +300,22 @@ async function getFreshMarket(env) {
 }
 
 /**
- * 取得現價。Binance 在部分機房會被擋（451），所以自動退到 OKX。
- * 兩者都只用一次請求拿回全部需要的價格。
+ * 取得現價，優先用 Bybit（USDT 永續，跟自動下單實際下單的合約類別一致，
+ * 觸發判斷才會跟真正成交的價格對得上）。Bybit 打不到才退到 Binance，
+ * 兩者都失敗最後退到 OKX。三個都只用一次請求拿回全部需要的價格。
  */
 async function getPrices(symbols) {
+  try {
+    const res = await fetch('https://api.bybit.com/v5/market/tickers?category=linear');
+    if (res.ok) {
+      const data = await res.json();
+      if (data.retCode === 0 && Array.isArray(data.result?.list)) {
+        const out = {};
+        for (const r of data.result.list) out[r.symbol] = Number(r.lastPrice);
+        return out;
+      }
+    }
+  } catch {}
   try {
     const q = encodeURIComponent(JSON.stringify(symbols));
     const res = await fetch(`https://api.binance.com/api/v3/ticker/price?symbols=${q}`);

@@ -43,6 +43,10 @@ function stubFetch({ market, prices, discord, bybit }) {
   globalThis.fetch = async (url, init) => {
     const u = String(url);
     if (u.startsWith(MARKET_URL)) return new Response(JSON.stringify(market), { status: 200 });
+    if (u.includes('api.bybit.com/v5/market/tickers')) {
+      const list = Object.entries(prices).map(([symbol, price]) => ({ symbol, lastPrice: String(price) }));
+      return new Response(JSON.stringify({ retCode: 0, retMsg: 'OK', result: { list } }), { status: 200 });
+    }
     if (u.includes('binance.com')) {
       return new Response(JSON.stringify(Object.entries(prices).map(([symbol, price]) => ({ symbol, price: String(price) }))), { status: 200 });
     }
@@ -161,11 +165,12 @@ test('掃描結果太舊 → 整個跳過，不拿過期資料亂叫', async () 
   assert.equal(discord.length, 0);
 });
 
-test('Binance 失敗時自動改用 OKX 報價', async () => {
+test('Bybit 打不到時改用 Binance，Binance 也失敗才退到 OKX', async () => {
   const discord = [];
   globalThis.fetch = async (url, init) => {
     const u = String(url);
     if (u.startsWith(MARKET_URL)) return new Response(JSON.stringify(makeMarket([row()])), { status: 200 });
+    if (u.includes('api.bybit.com/v5/market/tickers')) return new Response('bybit down', { status: 500 });
     if (u.includes('binance.com')) return new Response('geo-blocked', { status: 451 });
     if (u.includes('okx.com')) {
       return new Response(JSON.stringify({ data: [{ instId: 'ABC-USDT', last: '99.2' }] }), { status: 200 });
@@ -174,7 +179,25 @@ test('Binance 失敗時自動改用 OKX 報價', async () => {
     throw new Error('未預期的請求：' + u);
   };
   const out = await runWorker(makeEnv());
-  assert.equal(out.alerts, 1, 'Binance 被擋時仍應透過 OKX 取得價格');
+  assert.equal(out.alerts, 1, 'Bybit 跟 Binance 都被擋時仍應透過 OKX 取得價格');
+});
+
+test('Bybit 報價可以正常拿到時，優先用它，不會去打 Binance', async () => {
+  const discord = [];
+  let binanceCalled = false;
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    if (u.startsWith(MARKET_URL)) return new Response(JSON.stringify(makeMarket([row()])), { status: 200 });
+    if (u.includes('api.bybit.com/v5/market/tickers')) {
+      return new Response(JSON.stringify({ retCode: 0, retMsg: 'OK', result: { list: [{ symbol: 'ABCUSDT', lastPrice: '99.9' }] } }), { status: 200 });
+    }
+    if (u.includes('binance.com')) { binanceCalled = true; return new Response(JSON.stringify([]), { status: 200 }); }
+    if (u.includes('discord')) { discord.push(JSON.parse(init.body)); return new Response(null, { status: 204 }); }
+    throw new Error('未預期的請求：' + u);
+  };
+  const out = await runWorker(makeEnv());
+  assert.equal(out.alerts, 1, '應該用 Bybit 的報價判斷進場');
+  assert.equal(binanceCalled, false, 'Bybit 拿得到報價就不該再打 Binance');
 });
 
 test('/status 回報設定與資料新鮮度', async () => {
@@ -207,6 +230,7 @@ test('WORKER_SCAN_ENABLED 開啟時，Worker 自己即時掃描，不去讀 data
   globalThis.fetch = async (url, init) => {
     const u = String(url);
     if (u.startsWith(MARKET_URL)) { marketUrlCalled = true; return new Response('不該被呼叫', { status: 500 }); }
+    if (u.includes('api.bybit.com/v5/market/tickers')) return new Response(JSON.stringify({ retCode: 0, retMsg: 'OK', result: { list: [] } }), { status: 200 });
     if (u.includes('binance.com')) return new Response(JSON.stringify([]), { status: 200 });
     if (u.includes('discord')) { discord.push(JSON.parse(init.body)); return new Response(null, { status: 204 }); }
     throw new Error('未預期的請求：' + u);
@@ -257,6 +281,7 @@ test('掃描結果快取過期後，真的重新掃描，並把新結果寫回�
   await env.SMC_KV.put('worker-scan:cache', JSON.stringify(staleCached));
   globalThis.fetch = async (url, init) => {
     const u = String(url);
+    if (u.includes('api.bybit.com/v5/market/tickers')) return new Response(JSON.stringify({ retCode: 0, retMsg: 'OK', result: { list: [] } }), { status: 200 });
     if (u.includes('binance.com')) return new Response(JSON.stringify([]), { status: 200 });
     if (u.includes('discord')) { discord.push(JSON.parse(init.body)); return new Response(null, { status: 204 }); }
     throw new Error('未預期的請求：' + u);

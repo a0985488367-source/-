@@ -17,7 +17,8 @@
 #   Secret        BYBIT_DEMO_API_KEY / BYBIT_DEMO_API_SECRET / AUTO_TRADE_TOKEN
 #
 # 選用：Worker 自己即時掃描（需要 Workers Paid，細節見 index.js 開頭的說明）
-#   Variable      WORKER_SCAN_ENABLED / WORKER_SCAN_TOP / WORKER_SCAN_INTERVAL / WORKER_SCAN_STALE_MIN
+#   Variable      WORKER_SCAN_ENABLED / WORKER_SCAN_TOP / WORKER_SCAN_INTERVAL /
+#                 WORKER_SCAN_STALE_MIN / WORKER_SCAN_PROVIDERS
 
 name = "smc-signals"
 main = "index.js"
@@ -46,6 +47,8 @@ WORKER_SCAN_ENABLED = "true"
 WORKER_SCAN_TOP = "25"
 WORKER_SCAN_INTERVAL = "1h"
 WORKER_SCAN_STALE_MIN = "15"
+# 資料源照這個順序嘗試，優先用 Bybit（跟自動下單實際交易的交易所一致）
+WORKER_SCAN_PROVIDERS = "bybit,binance,okx"
 
 # KV 命名空間：部署前請先建立，並把 id 填在這裡
 # （wrangler kv namespace create SMC_KV，或在主控台 Storage → KV 建立）
