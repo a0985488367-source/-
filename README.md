@@ -297,6 +297,59 @@ https://smc-signals.<你的子網域>.workers.dev/run?dry=1 立刻試跑一次�
 
 改完推到 `main` 會自動重新部署。
 
+### 🤖 自動下單（Demo 模擬交易，選用，預設關閉）
+
+Worker 偵測到「價格回到進場區」的那一刻，除了推 Discord，也可以順手在
+Bybit **模擬交易（Demo）** 帳戶自動送出一張市價單。刻意只接 Demo（假錢）：
+這是先驗證整條自動下單管線本身可不可靠，不是要你直接拿真錢自動交易。
+
+> 目前實測（45 筆已結算模擬單）勝率 37.8%、期望值 +0.12R，其中 A+ 級跟
+> 做空方向實際上是負的（見 App 掃描頁的 ⚠️ 標記）。這個策略還沒有強到
+> 適合真錢自動化，接 Demo 只是為了讓你在不動用真錢的情況下，看到
+> 「自動下單這件事本身」運作起來會是什麼樣子。
+
+#### 設定
+
+1. 到 [bybit.com](https://www.bybit.com) 主站（不是 testnet.bybit.com）→
+   右上角帳號選單切換到 **模擬交易 / Demo Trading** → API 管理 → 建立 API Key
+   - **只勾 Trade，絕對不要勾 Withdraw**
+2. 到 GitHub Repo → Settings → Secrets and variables → Actions → Secrets 分頁，新增：
+   - `BYBIT_DEMO_API_KEY`
+   - `BYBIT_DEMO_API_SECRET`
+   - `AUTO_TRADE_TOKEN`：自己隨便取一長串亂碼（不是 Bybit 的東西），
+     用來保護下面的開關網址，不要用容易猜到的字
+3. 到 **Actions → 部署 Cloudflare Worker → Run workflow** 重新部署一次，
+   讓這三個 secret 同步到 Worker
+
+#### 開關 —— 這是預設關閉的，設定完金鑰也不會自動開始下單
+
+```
+https://smc-signals.<你的子網域>.workers.dev/auto-trade/status         查看目前開/關（唯讀，不用 token）
+https://smc-signals.<你的子網域>.workers.dev/auto-trade/on?token=xxx   開啟
+https://smc-signals.<你的子網域>.workers.dev/auto-trade/off?token=xxx  關閉
+```
+
+`token` 就是上面設定的 `AUTO_TRADE_TOKEN`。建議把 **off** 那個網址加到手機
+主畫面，當作隨時可以按的緊急煞車——不用改任何程式碼或金鑰，開一個網頁
+就能整個關掉。
+
+#### 下單邏輯
+
+- 只在 Worker 判定「等待回測的計畫，價格剛回到進場區」那一刻觸發，
+  跟 Discord 通知共用同一個去重機制：同一個進場區只會下單一次
+- 數量 = Demo 帳戶目前可用餘額 × `AUTO_TRADE_RISK_PCT`（預設 1%）÷ 停損距離，
+  一律帶停損，有目標價的話一併帶第一個停利（跟 App 手動下單同一套「不存
+  在只送進場單」的規則）
+- 目前**不過濾**任何等級或方向，全部訊號都會嘗試下單
+- 下單成功或失敗都會寫進對應的 Discord 訊息，不會有「下單失敗但你不知道」的情況
+
+`worker/wrangler.toml` 的 `[vars]` 可調整：
+
+| 變數 | 預設 | 意思 |
+|---|---|---|
+| `AUTO_TRADE_RISK_PCT` | 1 | 每筆風險占 Demo 帳戶可用餘額的 % |
+| `AUTO_TRADE_LEVERAGE` | 5 | 槓桿倍數（會自動不超過該合約上限） |
+
 ### 每日晨報
 
 每天台灣時間 08:00 推一份總結：各幣種現價與偏向、關鍵時間價位（PDH/PDL/PWH/PWL）、

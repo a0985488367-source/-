@@ -7,6 +7,9 @@
 # 兩種方式都需要在 Worker 上設定：
 #   Secret        DISCORD_WEBHOOK_URL
 #   KV binding    SMC_KV（用來記住已通知過的標的）
+#
+# 選用：自動下單（Demo 模擬交易，預設關閉，細節見 index.js 開頭的說明）
+#   Secret        BYBIT_DEMO_API_KEY / BYBIT_DEMO_API_SECRET / AUTO_TRADE_TOKEN
 
 name = "smc-signals"
 main = "index.js"
@@ -22,6 +25,9 @@ MIN_SCORE = "65"
 MAX_MARKET_AGE_MIN = "240"
 ALERT_TTL_SEC = "21600"
 NEAR_PCT = "0.08"
+# 自動下單（選用，預設關閉，開關另外看 KV 的 auto-trade:enabled）
+AUTO_TRADE_RISK_PCT = "1"
+AUTO_TRADE_LEVERAGE = "5"
 
 # KV 命名空間：部署前請先建立，並把 id 填在這裡
 # （wrangler kv namespace create SMC_KV，或在主控台 Storage → KV 建立）

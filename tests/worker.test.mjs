@@ -34,8 +34,8 @@ function makeKv() {
   };
 }
 
-/** 攔截 fetch：回傳指定的 market 與價格，並收集送往 Discord 的內容*/
-function stubFetch({ market, prices, discord }) {
+/** 攔截 fetch：回傳指定的 market 與價格，並收集送往 Discord 的內容；bybit 選填，用來測自動下單 */
+function stubFetch({ market, prices, discord, bybit }) {
   globalThis.fetch = async (url, init) => {
     const u = String(url);
     if (u.startsWith(MARKET_URL)) return new Response(JSON.stringify(market), { status: 200 });
@@ -46,9 +46,32 @@ function stubFetch({ market, prices, discord }) {
       discord.push(JSON.parse(init.body));
       return new Response(null, { status: 204 });
     }
+    if (u.includes('api-demo.bybit.com')) {
+      if (!bybit) throw new Error('未預期呼叫 Bybit：' + u);
+      bybit.calls?.push({ url: u, method: init.method, body: init.body ? JSON.parse(init.body) : null });
+      const bybitJson = (retCode, retMsg, result) => new Response(JSON.stringify({ retCode, retMsg, result }), { status: 200 });
+      if (u.includes('/v5/account/wallet-balance')) return bybitJson(0, 'OK', bybit.wallet);
+      if (u.includes('/v5/market/instruments-info')) return bybitJson(0, 'OK', bybit.instrument);
+      if (u.includes('/v5/position/set-leverage')) {
+        return bybit.leverageError ? bybitJson(bybit.leverageError.code, bybit.leverageError.msg, {}) : bybitJson(0, 'OK', {});
+      }
+      if (u.includes('/v5/order/create')) {
+        return bybit.orderError ? bybitJson(bybit.orderError.code, bybit.orderError.msg, {}) : bybitJson(0, 'OK', bybit.orderResult ?? { orderId: 'order-123' });
+      }
+      throw new Error('未預期的 Bybit 端點：' + u);
+    }
     throw new Error('未預期的請求：' + u);
   };
 }
+
+const demoWallet = { list: [{ totalAvailableBalance: '1000' }] };
+const demoInstrument = {
+  list: [{
+    lotSizeFilter: { qtyStep: '0.1', minOrderQty: '0.1' },
+    priceFilter: { tickSize: '0.01' },
+    leverageFilter: { maxLeverage: '25' },
+  }],
+};
 
 const makeEnv = (over = {}) => ({
   MARKET_URL,
@@ -168,4 +191,106 @@ test('dry 模式只回報不推播、也不寫入 KV', async () => {
   assert.equal(out.alerts, 1);
   assert.equal(discord.length, 0);
   assert.equal(env.SMC_KV.store.size, 0);
+});
+
+/* -------------------------------------------------------- 自動下單（Demo） */
+
+test('自動下單預設關閉：就算金鑰都設定好了，價格到了也不會呼叫 Bybit', async () => {
+  const discord = [];
+  const bybit = { calls: [], wallet: demoWallet, instrument: demoInstrument };
+  const env = makeEnv({ BYBIT_DEMO_API_KEY: 'k', BYBIT_DEMO_API_SECRET: 's' });
+  stubFetch({ market: makeMarket([row()]), prices: { ABCUSDT: 99.9 }, discord, bybit });
+  const out = await runWorker(env);
+  assert.equal(out.alerts, 1, '沒開自動下單，Discord 還是要照常推播');
+  assert.equal(bybit.calls.length, 0, '沒開自動下單就不該打 Bybit API');
+  assert.doesNotMatch(discord[0].embeds[0].fields.map((f) => f.name).join(','), /自動下單/);
+});
+
+test('/auto-trade/status 回報開關與金鑰狀態', async () => {
+  const env = makeEnv({ BYBIT_DEMO_API_KEY: 'k', BYBIT_DEMO_API_SECRET: 's' });
+  const res = await worker.fetch(new Request('https://w.test/auto-trade/status'), env);
+  const out = await res.json();
+  assert.equal(out.enabled, false);
+  assert.equal(out.hasKeys, true);
+  assert.equal(out.mode, 'demo');
+});
+
+test('/auto-trade/on 沒帶對 token 會被拒絕，也不會真的開啟', async () => {
+  const env = makeEnv({ AUTO_TRADE_TOKEN: 'secret123' });
+  const res = await worker.fetch(new Request('https://w.test/auto-trade/on?token=wrong'), env);
+  assert.equal(res.status, 403);
+  assert.equal(await env.SMC_KV.get('auto-trade:enabled'), null);
+});
+
+test('/auto-trade/on 帶對 token 就會開啟，寫進 KV', async () => {
+  const env = makeEnv({ AUTO_TRADE_TOKEN: 'secret123' });
+  const res = await worker.fetch(new Request('https://w.test/auto-trade/on?token=secret123'), env);
+  assert.equal(res.status, 200);
+  assert.equal(await env.SMC_KV.get('auto-trade:enabled'), 'true');
+});
+
+test('/auto-trade/off 會把 KV 標記關閉', async () => {
+  const env = makeEnv({ AUTO_TRADE_TOKEN: 'secret123' });
+  await env.SMC_KV.put('auto-trade:enabled', 'true');
+  const res = await worker.fetch(new Request('https://w.test/auto-trade/off?token=secret123'), env);
+  assert.equal(res.status, 200);
+  assert.equal(await env.SMC_KV.get('auto-trade:enabled'), 'false');
+});
+
+test('開啟後價格到了：用可用餘額 × 風險 % 算數量，送出市價單並帶停損停利', async () => {
+  const discord = [];
+  const bybit = { calls: [], wallet: demoWallet, instrument: demoInstrument, orderResult: { orderId: 'order-abc123' } };
+  const env = makeEnv({ BYBIT_DEMO_API_KEY: 'k', BYBIT_DEMO_API_SECRET: 's' });
+  await env.SMC_KV.put('auto-trade:enabled', 'true');
+  stubFetch({ market: makeMarket([row()]), prices: { ABCUSDT: 99.9 }, discord, bybit });
+  const out = await runWorker(env);
+
+  assert.equal(out.alerts, 1);
+  const orderCall = bybit.calls.find((c) => c.url.includes('/v5/order/create'));
+  assert.ok(orderCall, '應該呼叫 order/create');
+  // 帳戶 1000 USDT × 1% 風險 ÷ 每單位風險 5（entry 100 - stop 95）= 2，對齊步進 0.1 還是 2
+  assert.equal(orderCall.body.qty, '2');
+  assert.equal(orderCall.body.side, 'Buy');
+  assert.equal(orderCall.body.stopLoss, '95');
+  assert.equal(orderCall.body.takeProfit, '115');
+
+  const field = discord[0].embeds[0].fields.find((f) => f.name.includes('自動下單'));
+  assert.match(field.value, /✅/);
+  assert.match(field.value, /2/);
+});
+
+test('沒設定 Demo 金鑰時開啟自動下單：標記略過，完全不打 Bybit API', async () => {
+  const discord = [];
+  const env = makeEnv();
+  await env.SMC_KV.put('auto-trade:enabled', 'true');
+  stubFetch({ market: makeMarket([row()]), prices: { ABCUSDT: 99.9 }, discord });
+  const out = await runWorker(env);
+  assert.equal(out.alerts, 1);
+  const field = discord[0].embeds[0].fields.find((f) => f.name.includes('自動下單'));
+  assert.match(field.value, /尚未設定/);
+});
+
+test('算出的數量小於最小下單量：回報錯誤，但 Discord 照常推播（下單失敗不能擋住通知）', async () => {
+  const discord = [];
+  const bybit = { calls: [], wallet: demoWallet, instrument: { list: [{ ...demoInstrument.list[0], lotSizeFilter: { qtyStep: '0.1', minOrderQty: '50' } }] } };
+  const env = makeEnv({ BYBIT_DEMO_API_KEY: 'k', BYBIT_DEMO_API_SECRET: 's' });
+  await env.SMC_KV.put('auto-trade:enabled', 'true');
+  stubFetch({ market: makeMarket([row()]), prices: { ABCUSDT: 99.9 }, discord, bybit });
+  const out = await runWorker(env);
+  assert.equal(out.alerts, 1, '下單失敗不該擋住 Discord 通知');
+  const field = discord[0].embeds[0].fields.find((f) => f.name.includes('自動下單'));
+  assert.match(field.value, /❌/);
+  assert.equal(bybit.calls.find((c) => c.url.includes('order/create')), undefined, '數量不足就不該送出訂單');
+});
+
+test('同一個進場區重複執行只會下單一次（跟 Discord 通知共用去重）', async () => {
+  const discord = [];
+  const bybit = { calls: [], wallet: demoWallet, instrument: demoInstrument };
+  const env = makeEnv({ BYBIT_DEMO_API_KEY: 'k', BYBIT_DEMO_API_SECRET: 's' });
+  await env.SMC_KV.put('auto-trade:enabled', 'true');
+  stubFetch({ market: makeMarket([row()]), prices: { ABCUSDT: 99.9 }, discord, bybit });
+  await runWorker(env);
+  await runWorker(env);
+  const orderCalls = bybit.calls.filter((c) => c.url.includes('order/create'));
+  assert.equal(orderCalls.length, 1, '第二次執行不該再下一次單');
 });

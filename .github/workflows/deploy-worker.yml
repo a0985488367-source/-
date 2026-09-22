@@ -355,3 +355,41 @@ jobs:
             echo "::warning::webhook 同步失敗"
             printf '%s' "$RESP" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{for(const e of (JSON.parse(s).errors||[]))console.log("   ["+e.code+"] "+e.message)}catch{}})'
           fi
+
+      - name: 同步自動下單金鑰到 Worker（選用，沒設定就略過——自動下單本來就預設關閉）
+        if: ${{ steps.check.outputs.ready == 'true' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ env.CF_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ env.CF_ACCOUNT }}
+          CF_EMAIL: ${{ secrets.CF_EMAIL }}
+          CF_GLOBAL_KEY: ${{ secrets.CF_GLOBAL_API_KEY }}
+          BYBIT_DEMO_API_KEY: ${{ secrets.BYBIT_DEMO_API_KEY }}
+          BYBIT_DEMO_API_SECRET: ${{ secrets.BYBIT_DEMO_API_SECRET }}
+          AUTO_TRADE_TOKEN: ${{ secrets.AUTO_TRADE_TOKEN }}
+        run: |
+          if [ -n "$CF_EMAIL" ] && [ -n "$CF_GLOBAL_KEY" ]; then
+            AUTH_HEADERS=(-H "X-Auth-Email: $CF_EMAIL" -H "X-Auth-Key: $CF_GLOBAL_KEY")
+          else
+            AUTH_HEADERS=(-H "Authorization: Bearer $CLOUDFLARE_API_TOKEN")
+          fi
+          sync_secret() {
+            NAME="$1"; VALUE="$2"
+            if [ -z "$VALUE" ]; then
+              echo "ℹ️ 沒有設定 $NAME，跳過（自動下單維持關閉，不影響其他功能）"
+              return 0
+            fi
+            PAYLOAD="$(node -e 'console.log(JSON.stringify({name: process.argv[1], text: process.argv[2], type: "secret_text"}))' "$NAME" "$VALUE")"
+            RESP="$(curl -sS -X PUT \
+              "${AUTH_HEADERS[@]}" -H "Content-Type: application/json" \
+              -d "$PAYLOAD" \
+              "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/smc-signals/secrets")"
+            if printf '%s' "$RESP" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.exit(JSON.parse(s||"{}").success?0:1))' 2>/dev/null; then
+              echo "已同步 $NAME 到 Worker"
+            else
+              echo "::warning::$NAME 同步失敗"
+              printf '%s' "$RESP" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{for(const e of (JSON.parse(s).errors||[]))console.log("   ["+e.code+"] "+e.message)}catch{}})'
+            fi
+          }
+          sync_secret BYBIT_DEMO_API_KEY "$BYBIT_DEMO_API_KEY"
+          sync_secret BYBIT_DEMO_API_SECRET "$BYBIT_DEMO_API_SECRET"
+          sync_secret AUTO_TRADE_TOKEN "$AUTO_TRADE_TOKEN"
