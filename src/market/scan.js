@@ -97,23 +97,37 @@ function toRow(symbol, a, provider, quoteVolume, interval) {
 /**
  * @param {object} opts
  *   providerIds   依序嘗試的資料源（預設 binance,okx,bybit）
- *   top           掃描範圍：依成交額排序取前 N 名
+ *   top           候選池大小：依成交額排序取前 N 名（這是「總共想涵蓋幾檔」，
+ *                 不是這一次呼叫要算幾檔——那個是 batchSize）
+ *   offset        從候選池第幾個開始算這一批（batching 用；不設就是 0）
+ *   batchSize     這一批要算幾檔，超過候選池會自動循環回頭（batching 用；
+ *                 不設就等於 top，等同沒有分批、一次算完整個候選池）
  *   interval      進場週期
  *   concurrency   並行請求數
  *   minScore      粗篩門檻
  *   detailTop     精算（補抓高週期偏向）的檔數；0 表示跳過精算，只用粗篩結果
- * @returns 跟 data/market.json 相同的結構，可以直接餵給既有的下游邏輯
+ * @returns 跟 data/market.json 相同的結構，可以直接餵給既有的下游邏輯；
+ *   另外多帶 poolTotal（候選池總大小）與 universeSymbols（這一批實際算了
+ *   哪些代號，含沒有通過門檻的），給呼叫端做 batching 的累積與清理用
  */
 export async function scanMarket({
   providerIds = ['binance', 'okx', 'bybit'],
   top = 120,
+  offset = 0,
+  batchSize,
   interval = '1h',
   concurrency = 8,
   minScore = 50,
   detailTop = 30,
 } = {}) {
   const { result: tickers, provider } = await withFallback(providerIds, (p) => p.fetchSymbols());
-  const universe = tickers.filter((t) => !EXCLUDE_SYMBOL.test(t.symbol)).slice(0, top);
+  const topPool = tickers.filter((t) => !EXCLUDE_SYMBOL.test(t.symbol)).slice(0, top);
+  const size = Math.min(batchSize ?? topPool.length, topPool.length);
+  // 用取模索引做循環：candidatePool 不變的話，offset 每次往前推 size，
+  // 繞一圈剛好把整個候選池都算過一輪
+  const universe = topPool.length
+    ? Array.from({ length: size }, (_, i) => topPool[(offset + i) % topPool.length])
+    : [];
 
   const stage1 = await pool(universe, concurrency, async (t) => {
     const p = PROVIDERS[provider];
@@ -162,6 +176,8 @@ export async function scanMarket({
     interval,
     htfInterval,
     universe: universe.length,
+    poolTotal: topPool.length,
+    universeSymbols: universe.map((t) => t.symbol),
     scanned: stage1.filter((r) => r && !r.skipped).length,
     skippedLowVolatility: skipped,
     minScore,
