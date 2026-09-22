@@ -144,7 +144,10 @@ export async function scanMarket({
   // 記錄這一批裡有幾檔資料源直接失敗（逾時／被擋／格式錯誤）：跟
   // coveredSymbols 一起看，能分辨「候選池真的沒訊號」還是「資料源這批
   // 幾乎都要不到資料」——後者不會被 minScore 篩掉，是完全不同的問題。
+  // 順便留一個範例錯誤訊息：逾時（abort）、被擋（403）、被限流（429）、
+  // 交易所回傳格式錯誤，各自要的處理方式完全不同，光看數量分不出來。
   const errored = stage1.filter((r) => r?.error).length;
+  const sampleError = stage1.find((r) => r?.error)?.error || null;
   const candidates = stage1
     .filter((r) => r && !r.error && !r.skipped && r.score >= minScore)
     .sort((a, b) => b.score - a.score);
@@ -185,6 +188,7 @@ export async function scanMarket({
     scanned: stage1.filter((r) => r && !r.skipped).length,
     skippedLowVolatility: skipped,
     errorCount: errored,
+    sampleError,
     minScore,
     counts: { ready: ready.length, waiting: waiting.length, total: rows.length },
     rows,
