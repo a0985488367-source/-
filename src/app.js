@@ -17,7 +17,7 @@ import { backtest } from './smc/backtest.js';
 import { Chart } from './chart/chart.js';
 import * as P from './ui/panels.js';
 import { runScan, renderScanTable } from './ui/scanner.js';
-import { fetchMarket, renderMarket } from './ui/market.js';
+import { fetchMarket, fetchStats, renderMarket } from './ui/market.js';
 import { AlertEngine, createAlert, renderAlerts } from './ui/alerts.js';
 import { renderGlossary } from './ui/glossary.js';
 import { createTradePanel } from './ui/trade.js';
@@ -831,6 +831,7 @@ function playReplay() {
 /* ------------------------------------------------------------ 全市場掃描 */
 
 let marketData = null;
+let scanStats = null; // 模擬盤實測統計（勝率/期望值），拿不到就是 null，不影響掃描本身
 
 /**
  * 讀取全市場掃描結果。
@@ -851,6 +852,7 @@ async function loadMarket({ force = false } = {}) {
   else host.innerHTML = `<p class="dim pad">${isZh() ? '載入掃描結果…' : 'Loading…'}</p>`;
   try {
     marketData = await fetchMarket();
+    if (!scanStats) fetchStats().then((s) => { scanStats = s; renderMarketPane(); });
     renderMarketPane();
   } catch (e) {
     if (!hadCache) {
@@ -867,7 +869,7 @@ function renderMarketPane() {
   setHTML('#marketResult', renderMarket(marketData, state.lang, {
     minScore: +$('#marketMinScore').value || 0,
     dir: $('#marketDir').value,
-  }));
+  }, scanStats));
   $('#marketResult').onclick = (e) => {
     const row = e.target.closest('[data-symbol]');
     if (!row) return;
@@ -918,7 +920,8 @@ function bindScanner() {
         onProgress: ({ done, total }) => { bar.firstElementChild.style.width = `${(done / total) * 100}%`; },
       });
       const filtered = scanRows.filter((r) => !r.setup || r.setup.score >= minScore);
-      setHTML('#scanResult', renderScanTable(filtered, state.lang));
+      if (!scanStats) scanStats = await fetchStats().catch(() => null);
+      setHTML('#scanResult', renderScanTable(filtered, state.lang, scanStats));
       $('#scanResult').onclick = (e) => {
         const row = e.target.closest('[data-symbol]');
         if (row) selectSymbol(row.dataset.symbol);

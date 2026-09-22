@@ -308,6 +308,7 @@ sup { font-size: 8px; color: var(--accent); margin-left: 2px; }
 .pill--up { color: var(--up); border-color: var(--up); }
 .pill--down { color: var(--down); border-color: var(--down); }
 .pill--warn { color: var(--warn); border-color: var(--warn); }
+.perf-warn { cursor: help; }
 @supports (color: color-mix(in srgb, red 50%, transparent)) {
   .pill--up { border-color: color-mix(in srgb, var(--up) 45%, transparent); background: color-mix(in srgb, var(--up) 12%, transparent); }
   .pill--down { border-color: color-mix(in srgb, var(--down) 45%, transparent); background: color-mix(in srgb, var(--down) 12%, transparent); }

@@ -24,6 +24,7 @@ import { fetchDerivatives } from '../src/data/derivatives.js';
 import { derivativesVerdict, oiChangePct } from '../src/smc/derivatives.js';
 import { COLORS, price, fmtR, buildOutcomeEmbed } from './lib/outcome-embed.mjs';
 import { renderJournalMarkdown } from './lib/journal-markdown.mjs';
+import { perfWarning } from '../src/core/perf-flags.js';
 
 const ARGS = new Set(process.argv.slice(2));
 const opt = (name) => {
@@ -273,7 +274,7 @@ function derivField(deriv) {
   }];
 }
 
-function buildEmbed(sig, cfg) {
+function buildEmbed(sig, cfg, stats) {
   const { symbol, interval, analysis: a } = sig;
   const base = symbol.replace(/USDT$/, '');
   const pdText = a.pd ? `${zhZone(a.pd.zone)} ${a.pd.pct.toFixed(0)}%` : '—';
@@ -305,6 +306,7 @@ function buildEmbed(sig, cfg) {
         ...common,
         ...derivField(sig.deriv),
         ...(s.conflict ? [{ name: '⚠️ 注意', value: '高週期與進場週期方向分歧，建議減碼或等待表態。' }] : []),
+        ...(perfWarning(stats, { grade: s.grade, dir: s.dir }) ? [{ name: '📊 實測提醒', value: perfWarning(stats, { grade: s.grade, dir: s.dir }) }] : []),
         { name: '失效條件', value: s.invalidation },
       ],
       footer,
@@ -398,11 +400,12 @@ async function marketOpportunities(cfg, state) {
     .map((r) => ({ id: `market:${r.symbol}:${r.interval}:${r.dir}:${r.entry}`, kind: 'market', row: r, interval: r.interval, symbol: r.symbol }));
 }
 
-function buildMarketEmbed(sig, cfg) {
+function buildMarketEmbed(sig, cfg, stats) {
   const r = sig.row;
   const base = r.symbol.replace(/USDT$/, '');
   const long = r.dir === 'long';
   const tps = r.targets.map((t) => `**${t.name}** ${price(t.price)} · ${t.rr.toFixed(2)}R　*${t.label}*`).join('\n');
+  const warn = perfWarning(stats, { grade: r.grade, dir: r.dir });
   return {
     title: `${long ? '🟢 做多' : '🔴 做空'} ${base}/USDT · ${r.interval} · ${r.grade} 級　🔎 全市場掃描`,
     url: cfg.siteUrl || undefined,
@@ -417,6 +420,7 @@ function buildMarketEmbed(sig, cfg) {
       { name: '區間位置', value: r.pd ? `${zhZone(r.pd.zone)} ${r.pd.pct.toFixed(0)}%` : '—', inline: true },
       { name: '匯流', value: `${r.checksPassed}/${r.checksTotal} · 評分 ${r.score}`, inline: true },
       ...scanDerivField(r.deriv),
+      ...(warn ? [{ name: '📊 實測提醒', value: warn }] : []),
     ],
     footer: { text: `${r.symbol} · ${r.interval} · 全市場掃描（前 ${cfg.market.top ?? '—'} 名）· 僅供研究，非投資建議` },
     timestamp: new Date(r.updatedAt).toISOString(),
@@ -703,7 +707,7 @@ async function main() {
     if (opportunities.length) log(`\n全市場掃描機會 ${opportunities.length} 則：`);
     for (const sig of opportunities) {
       await safely(`全市場機會 ${sig.symbol}`, async () => {
-        const embed = buildMarketEmbed(sig, cfg);
+        const embed = buildMarketEmbed(sig, cfg, stats);
         if (DRY) { log(`  [dry-run] ${embed.title}`); return; }
         await postDiscord({ embeds: [embed] });
         log(`  已推播：${embed.title}`);
@@ -734,7 +738,7 @@ async function main() {
         if (sig.kind === 'plan' && cfg.derivatives !== false) {
           sig.deriv = await attachDerivatives(sig).catch(() => null);
         }
-        const embed = buildEmbed(sig, cfg);
+        const embed = buildEmbed(sig, cfg, stats);
         if (DRY) {
           log(`  [dry-run] ${embed.title}`);
           if (ARGS.has('--verbose')) log(JSON.stringify(embed, null, 2));
