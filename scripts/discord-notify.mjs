@@ -24,6 +24,7 @@ import { fetchDerivatives } from '../src/data/derivatives.js';
 import { derivativesVerdict, oiChangePct } from '../src/smc/derivatives.js';
 import { COLORS, price, fmtR, buildOutcomeEmbed } from './lib/outcome-embed.mjs';
 import { renderJournalMarkdown } from './lib/journal-markdown.mjs';
+import { buildReviewEmbed } from './lib/review-embed.mjs';
 import { perfWarning } from '../src/core/perf-flags.js';
 
 const ARGS = new Set(process.argv.slice(2));
@@ -34,6 +35,8 @@ const opt = (name) => {
 const PROBE = ARGS.has('--probe');
 const TEST = ARGS.has('--test');
 const BRIEF = ARGS.has('--brief');
+const REVIEW = ARGS.has('--review');
+const REVIEW_DAYS = Number(opt('review-days')) || 3;
 const DRY = ARGS.has('--dry-run');
 
 // 資料目錄可用環境變數覆寫，方便本機測試時不動到正式帳本
@@ -549,8 +552,16 @@ async function main() {
     return log('✓ 測試訊息已送出');
   }
 
-  const state = await loadState();
   const journal = await loadJournal();
+
+  if (REVIEW) {
+    const embed = buildReviewEmbed(journal, REVIEW_DAYS);
+    if (DRY) { log('[dry-run] ' + embed.title); if (ARGS.has('--verbose')) log(JSON.stringify(embed, null, 2)); return; }
+    await postDiscord({ embeds: [embed] });
+    return log('✓ 交易回顧已送出');
+  }
+
+  const state = await loadState();
   const found = [];
   const outcomes = [];
   const snapshots = [];
