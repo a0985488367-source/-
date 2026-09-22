@@ -19,17 +19,24 @@
  * ── Worker 自己掃描（選用，預設關閉，需要 Workers Paid）───────────────
  * 開啟後不再讀 data/market.json，改成 Worker 自己即時分析一份縮小範圍的
  * 市場（預設前 25 檔），把「新機會多久出現一次」從 GitHub 排程實際上的
- * 2～4 小時一次拉到 2 分鐘一次。這份即時掃描只給這支 Worker 自己用，
- * **不會**寫回 data/market.json，App 網站的全市場掃描頁面看到的還是
- * GitHub 那份（120 檔、含資金費率），兩邊互不取代。
+ * 2～4 小時一次拉到 WORKER_SCAN_STALE_MIN 分鐘一次（預設 15）。這份即時
+ * 掃描只給這支 Worker 自己用，**不會**寫回 data/market.json，App 網站的
+ * 全市場掃描頁面看到的還是 GitHub 那份（120 檔、含資金費率），兩邊互不
+ * 取代。
  *
- *   Variable  WORKER_SCAN_ENABLED    'true' 才會啟用（預設關閉）
- *   Variable  WORKER_SCAN_TOP        掃描範圍（預設 25；範圍愈大愈接近
+ * 「重新掃描」跟「Worker 每 2 分鐘的 cron 頻率」是兩回事：真的掃描的結果
+ * 存進 SMC_KV 當快取，未過期就直接沿用，不會每 2 分鐘都重新掃一次——
+ * 比對現價、自動下單這些仍然是每 2 分鐘執行，只有「找新機會」這一步
+ * 照 WORKER_SCAN_STALE_MIN 的頻率跑。
+ *
+ *   Variable  WORKER_SCAN_ENABLED     'true' 才會啟用（預設關閉）
+ *   Variable  WORKER_SCAN_TOP         掃描範圍（預設 25；範圍愈大愈接近
  *             Workers Paid 的請求數與 CPU 時間上限）
- *   Variable  WORKER_SCAN_INTERVAL   進場週期（預設 1h，跟 GitHub 那份一致）
+ *   Variable  WORKER_SCAN_INTERVAL    進場週期（預設 1h，跟 GitHub 那份一致）
+ *   Variable  WORKER_SCAN_STALE_MIN   幾分鐘內算新鮮、不用重新掃描（預設 15）
  *
- * 注意：這會讓對外部交易所 API 的請求量大幅增加（一天下來是原本 GitHub
- * 排程的數十倍），開啟前請留意交易所的速率限制。
+ * 注意：即使有快取，還是會讓對外部交易所 API 的請求量比原本 GitHub 排程
+ * 高不少（頻率拉高了好幾倍），開啟前請留意交易所的速率限制。
  *
  * ── 自動下單（選用，預設關閉）──────────────────────────────────────────
  * 價格到了進場區時，除了推播 Discord，也可以順手在 Bybit **模擬交易（Demo）**
@@ -79,6 +86,7 @@ const DEFAULTS = {
   WORKER_SCAN_ENABLED: 'false',
   WORKER_SCAN_TOP: '25',
   WORKER_SCAN_INTERVAL: '1h',
+  WORKER_SCAN_STALE_MIN: '15', // 掃描結果快取多久內算新鮮，未過期就不重新掃描
 };
 
 const cfg = (env, key) => env[key] ?? DEFAULTS[key];
@@ -257,10 +265,28 @@ async function getMarket(env) {
  * WORKER_SCAN_TOP 檔，跟 GitHub 那份 120 檔互不取代，只給這支 Worker
  * 自己的即時比價／自動下單用，不會寫回 data/market.json，App 網站看到的
  * 全市場掃描頁面不受影響）。
+ *
+ * 「重新掃描」跟「比對現價」是兩個不同頻率：Worker 的 cron 固定每 2 分鐘
+ * 執行一次（反應要快），但真的重新掃描很花請求數，沒必要跟著每 2 分鐘
+ * 做一次。掃描結果存進 SMC_KV，未滿 WORKER_SCAN_STALE_MIN 分鐘就直接沿用
+ * 快取，只有真的過期才重新掃描——效果類似 scripts/market-scan.mjs 的
+ * --if-stale 參數，只是存的地方換成 KV。
  */
 async function getFreshMarket(env) {
   if (cfg(env, 'WORKER_SCAN_ENABLED') !== 'true') return getMarket(env);
-  return scanMarket({
+
+  const CACHE_KEY = 'worker-scan:cache';
+  const staleMin = Number(cfg(env, 'WORKER_SCAN_STALE_MIN'));
+  if (env.SMC_KV) {
+    const cached = await env.SMC_KV.get(CACHE_KEY);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      const ageMin = (Date.now() - new Date(parsed.generatedAt).getTime()) / 60000;
+      if (ageMin < staleMin) return parsed;
+    }
+  }
+
+  const fresh = await scanMarket({
     // 正式環境不用設這個，只有測試會覆寫成 'demo' 來跑離線合成行情，
     // 不必 mock 一堆交易所端點。
     providerIds: env.WORKER_SCAN_PROVIDERS ? env.WORKER_SCAN_PROVIDERS.split(',') : undefined,
@@ -269,6 +295,8 @@ async function getFreshMarket(env) {
     interval: cfg(env, 'WORKER_SCAN_INTERVAL'),
     minScore: Number(cfg(env, 'MIN_SCORE')),
   });
+  if (env.SMC_KV) await env.SMC_KV.put(CACHE_KEY, JSON.stringify(fresh));
+  return fresh;
 }
 
 /**
