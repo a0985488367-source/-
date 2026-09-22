@@ -312,6 +312,23 @@ jobs:
           fi
           echo "✅ Worker 程式碼已部署"
 
+          # 啟用這支 script 的 workers.dev 網址：這是跟「部署程式碼」完全獨立的
+          # 開關（Cloudflare API 文件：POST .../workers/scripts/{name}/subdomain）。
+          # wrangler deploy 會自動做這一步，但這裡繞過 wrangler 直接用經典 API
+          # 上傳程式碼，所以網址開關要自己補上——不補的話程式碼部署會顯示成功，
+          # 但打開 https://smc-signals.<子網域>.workers.dev 只會看到 Cloudflare
+          # 「There is nothing here yet」的預設頁面，跟金鑰或程式碼本身無關。
+          SUBDOMAIN_RESP="$(curl -sS -X POST \
+            "${AUTH_HEADERS[@]}" -H "Content-Type: application/json" \
+            -d '{"enabled":true,"previews_enabled":true}' \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/smc-signals/subdomain")"
+          if printf '%s' "$SUBDOMAIN_RESP" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.exit(JSON.parse(s||"{}").success?0:1))' 2>/dev/null; then
+            echo "✅ workers.dev 網址已啟用"
+          else
+            echo "::warning::啟用 workers.dev 網址失敗，程式碼雖然部署了但網址可能打不開"
+            printf '%s' "$SUBDOMAIN_RESP" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{for(const e of (JSON.parse(s).errors||[]))console.log("   ["+e.code+"] "+e.message)}catch{}})'
+          fi
+
           # 排程觸發器（每 2 分鐘）也是獨立的經典端點，跟上面同一套 API。
           CRON_RESP="$(curl -sS -X PUT \
             "${AUTH_HEADERS[@]}" -H "Content-Type: application/json" \
