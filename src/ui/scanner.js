@@ -5,6 +5,7 @@
 
 import { analyze } from '../smc/engine.js';
 import { fmtPrice, fmtPct, fmtNum } from '../core/utils.js';
+import { perfWarning } from '../core/perf-flags.js';
 
 export async function runScan(feed, { symbols, interval, settings, limit = 260, concurrency = 4, onProgress }) {
   const results = [];
@@ -45,12 +46,13 @@ export async function runScan(feed, { symbols, interval, settings, limit = 260, 
 
 const byScore = (a, b) => (b.setup?.score ?? -1) - (a.setup?.score ?? -1);
 
-export function renderScanTable(rows, lang) {
+export function renderScanTable(rows, lang, stats = null) {
   if (!rows.length) return `<p class="dim pad">${lang === 'zh' ? '尚未掃描。' : 'No scan yet.'}</p>`;
   const body = rows.map((r) => {
     if (r.error) return `<tr class="muted"><td>${r.symbol}</td><td colspan="7" class="dim">${r.error}</td></tr>`;
     const s = r.setup && !r.setup.none ? r.setup : null;
     const dirCls = s ? (s.dir === 'long' ? 'up' : 'down') : 'flat';
+    const warn = s ? perfWarning(stats, { grade: s.grade, dir: s.dir }, lang) : null;
     return `<tr data-symbol="${r.symbol}" class="scan-row">
       <td><b>${r.symbol.replace('USDT', '')}</b><span class="dim">/USDT</span></td>
       <td class="mono">${fmtPrice(r.price)}</td>
@@ -59,7 +61,7 @@ export function renderScanTable(rows, lang) {
       <td>${r.pd ? `<span class="tiny">${r.pd.pct.toFixed(0)}%</span>` : '—'}</td>
       <td>${s ? `<span class="pill pill--sm pill--${dirCls}">${s.dir === 'long' ? 'L' : 'S'}</span>` : '<span class="dim">—</span>'}</td>
       <td class="mono">${s ? s.rrFinal.toFixed(2) + 'R' : '—'}</td>
-      <td class="mono"><b class="${s && s.score >= 68 ? 'up' : ''}">${s ? s.score : '—'}</b>${s ? ` <span class="dim">${s.grade}</span>` : ''}</td>
+      <td class="mono"><b class="${s && s.score >= 68 ? 'up' : ''}">${s ? s.score : '—'}</b>${s ? ` <span class="dim">${s.grade}</span>` : ''}${warn ? ` <span class="perf-warn" title="${warn.replace(/"/g, '&quot;')}">⚠️</span>` : ''}</td>
     </tr>`;
   }).join('');
   return `<table class="table table--scan">

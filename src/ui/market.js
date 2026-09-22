@@ -6,6 +6,7 @@
  */
 
 import { fmtPrice, fmtAgo, escapeHtml } from '../core/utils.js';
+import { perfWarning } from '../core/perf-flags.js';
 
 /**
  * 掃描結果的位置：
@@ -13,23 +14,41 @@ import { fmtPrice, fmtAgo, escapeHtml } from '../core/utils.js';
  *    Pages 上那份會是舊的
  *  - 其他情況（本機開發）直接讀相對路徑
  */
-export function marketDataUrl() {
+function dataFileUrl(name) {
   const bust = `?t=${Math.floor(Date.now() / 60000)}`;
   const { hostname, pathname } = location;
   if (hostname.endsWith('github.io')) {
     const owner = hostname.split('.')[0];
     const repo = pathname.split('/').filter(Boolean)[0];
     if (owner && repo) {
-      return `https://raw.githubusercontent.com/${owner}/${repo}/main/data/market.json${bust}`;
+      return `https://raw.githubusercontent.com/${owner}/${repo}/main/data/${name}${bust}`;
     }
   }
-  return `data/market.json${bust}`;
+  return `data/${name}${bust}`;
 }
+
+export const marketDataUrl = () => dataFileUrl('market.json');
 
 export async function fetchMarket() {
   const res = await fetch(marketDataUrl(), { cache: 'no-store' });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
+}
+
+/**
+ * 模擬盤帳本的統計（勝率、期望值，依等級／方向拆） —— 用來在掃描結果上
+ * 標記「這個等級/方向最近其實在虧錢」。拿不到就靜靜回傳 null，這只是
+ * 提醒用的加分資訊，不能因為它壞了就讓整個掃描頁面掛掉。
+ */
+export async function fetchStats() {
+  try {
+    const res = await fetch(dataFileUrl('signals.json'), { cache: 'no-store' });
+    if (!res.ok) return null;
+    const j = await res.json();
+    return j.stats || null;
+  } catch {
+    return null;
+  }
 }
 
 const dirCls = (d) => (d === 'long' ? 'up' : 'down');
@@ -49,12 +68,13 @@ function fundingCell(d, zh) {
 }
 const gradeCls = (g) => (g === 'A+' || g === 'A' ? 'up' : g === 'B' ? 'warn' : 'dim');
 
-function rowHtml(r, lang) {
+function rowHtml(r, lang, stats) {
   const base = r.symbol.replace(/USDT$/, '');
   const dist = r.distancePct;
+  const warn = perfWarning(stats, { grade: r.grade, dir: r.dir }, lang);
   return `<tr class="scan-row" data-symbol="${r.symbol}" data-interval="${r.interval}">
     <td><b>${base}</b></td>
-    <td><span class="pill pill--sm pill--${r.grade === 'A+' || r.grade === 'A' ? 'up' : r.grade === 'B' ? 'warn' : 'flat'}">${r.grade}</span><span class="dim"> ${r.score}</span></td>
+    <td><span class="pill pill--sm pill--${r.grade === 'A+' || r.grade === 'A' ? 'up' : r.grade === 'B' ? 'warn' : 'flat'}">${r.grade}</span><span class="dim"> ${r.score}</span>${warn ? ` <span class="perf-warn" title="${escapeHtml(warn)}">⚠️</span>` : ''}</td>
     <td class="${dirCls(r.dir)}">${r.dir === 'long' ? (lang === 'zh' ? '多' : 'L') : (lang === 'zh' ? '空' : 'S')}</td>
     <td class="mono">${fmtPrice(r.entry)}</td>
     <td class="mono down">${fmtPrice(r.stop)}</td>
@@ -65,7 +85,7 @@ function rowHtml(r, lang) {
   </tr>`;
 }
 
-export function renderMarket(data, lang, filter = {}) {
+export function renderMarket(data, lang, filter = {}, stats = null) {
   if (!data) return '';
   const zh = lang === 'zh';
   const minScore = filter.minScore ?? 0;
@@ -85,7 +105,7 @@ export function renderMarket(data, lang, filter = {}) {
 
   const table = (rows) =>
     rows.length
-      ? `<div class="scroll-x"><table class="table table--compact table--scan">${head}<tbody>${rows.map((r) => rowHtml(r, lang)).join('')}</tbody></table></div>`
+      ? `<div class="scroll-x"><table class="table table--compact table--scan">${head}<tbody>${rows.map((r) => rowHtml(r, lang, stats)).join('')}</tbody></table></div>`
       : `<p class="dim pad">${zh ? '目前沒有符合條件的標的。' : 'Nothing matches right now.'}</p>`;
 
   return `

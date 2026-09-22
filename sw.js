@@ -7,7 +7,7 @@
  *  - 跨來源請求（交易所 API / WebSocket）：完全不攔截，直接走網路
  */
 
-const VERSION = 'smc-terminal-v6';
+const VERSION = 'smc-terminal-v7';
 const SHELL = [
   './',
   'index.html',
@@ -18,6 +18,7 @@ const SHELL = [
   'assets/icons/apple-touch-icon.png',
   'src/app.js',
   'src/core/utils.js',
+  'src/core/perf-flags.js',
   'src/core/indicators.js',
   'src/core/store.js',
   'src/core/bus.js',
