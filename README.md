@@ -337,8 +337,10 @@ Worker 每 2 分鐘還是會照排程執行一次，但那是「比對現價、�
 引擎打包成一個檔案再部署（部署流程已經處理好，不用自己動手）。
 
 **這份即時掃描只給這支 Worker 自己用**（即時比對進場區、自動下單），
-**不會**寫回 `data/market.json`，App 網站「全市場掃描」頁面看到的還是
-GitHub Actions 算的那份（120 檔、含資金費率），兩邊互不取代、各自獨立。
+**預設不會**寫回 `data/market.json`，App 網站「全市場掃描」頁面看到的還是
+GitHub Actions 算的那份（120 檔、含資金費率），兩邊互不取代、各自獨立
+——除非另外設定下面「把結果寫回 data/market.json」那節，才會讓 App 頁面
+也跟著即時更新。
 
 ⚠️ **開啟前要知道的取捨**：
 - 分批架構下，同一檔幣種平均要等接近一輪的時間才會重新分析一次
@@ -346,11 +348,42 @@ GitHub Actions 算的那份（120 檔、含資金費率），兩邊互不取代�
   碰到已經算好的進場區」這一步
 - 對外部交易所 API 的請求量會增加（每 `WORKER_SCAN_BATCH_INTERVAL_MIN`
   分鐘一批），請留意交易所本身的速率限制
-- 沒有資金費率／未平倉量資料（GitHub 那份才有）
+- 沒有資金費率／未平倉量資料（GitHub 那份才有，除非另外開了下面那節，
+  開了的話會自動保留舊檔裡的資金費率，不會消失）
 
 `/status` 的 `workerScanEnabled`、`workerScanCache`（`coveredSymbols` /
 `poolTotal` / `lastBatchAgeMinutes`）可以確認目前是不是真的在用這個模式、
 分批進度到哪、涵蓋了候選池裡幾檔。
+
+#### 把結果寫回 data/market.json，讓 App 頁面也跟著即時更新（選用）
+
+上面這節預設只給 Worker 自己用，App 網站「全市場掃描」頁面還是得等
+GitHub Actions 的排程（常常被節流成 2～4 小時一次）。設定這個之後，
+Worker 每算完一批（約每 `WORKER_SCAN_BATCH_INTERVAL_MIN` 分鐘一次）就會
+順便把累積的結果寫回 `data/market.json`，App 頁面不用再等 GitHub 排程。
+
+1. 到 [GitHub → 右上角頭像 → Settings → Developer settings →
+   Personal access tokens → Fine-grained tokens](https://github.com/settings/tokens?type=beta)
+   → **Generate new token**
+2. **Repository access** 選 **Only select repositories**，只勾這個倉庫
+   （絕對不要選「All repositories」）
+3. **Permissions → Repository permissions → Contents** 選 **Read and write**，
+   其他權限都不用給
+4. 建立後複製 Token，到 GitHub Repo → **Settings → Secrets and variables →
+   Actions → Secrets** 分頁新增一個名為 `GITHUB_API_TOKEN` 的 secret
+5. 改完推到 `main`，下次部署 Worker 時會自動同步這把 Token
+
+```toml
+# worker/wrangler.toml 的 [vars]，通常不用改，倉庫名對不上才需要設
+GITHUB_REPO = "你的帳號/倉庫名"
+GITHUB_MARKET_PATH = "data/market.json"
+```
+
+資金費率／未平倉量（GitHub Actions 那份才會另外去抓）不會因此消失：
+寫入前會先讀舊檔，把舊資料裡每個標的的資金費率原封不動接到新資料同一個
+標的上，Worker 這批新掃到、舊檔沒有的標的才會沒有這欄（顯示「—」）。
+寫入失敗（Token 過期、網路問題）不影響 Worker 其他功能，安靜略過、
+下次執行再試。
 
 ### 🤖 自動下單（Demo 模擬交易，選用，預設關閉）
 

@@ -19,6 +19,10 @@
 # 選用：Worker 自己即時掃描（需要 Workers Paid，細節見 index.js 開頭的說明）
 #   Variable      WORKER_SCAN_ENABLED / WORKER_SCAN_TOP / WORKER_SCAN_BATCH_SIZE /
 #                 WORKER_SCAN_BATCH_INTERVAL_MIN / WORKER_SCAN_INTERVAL / WORKER_SCAN_PROVIDERS
+#
+# 選用：把 Worker 自己的掃描結果寫回 data/market.json（細節見 index.js 開頭的說明）
+#   Secret        GITHUB_API_TOKEN（fine-grained PAT，只給這個倉庫的 Contents 讀寫權限）
+#   Variable      GITHUB_REPO / GITHUB_MARKET_PATH（不設就用預設值，通常不用改）
 
 name = "smc-signals"
 main = "index.js"

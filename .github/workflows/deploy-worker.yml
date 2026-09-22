@@ -388,7 +388,7 @@ jobs:
             printf '%s' "$RESP" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{for(const e of (JSON.parse(s).errors||[]))console.log("   ["+e.code+"] "+e.message)}catch{}})'
           fi
 
-      - name: 同步自動下單金鑰到 Worker（選用，沒設定就略過——自動下單本來就預設關閉）
+      - name: 同步選用金鑰到 Worker（沒設定就略過，不影響其他功能）
         if: ${{ steps.check.outputs.ready == 'true' }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ env.CF_TOKEN }}
@@ -398,6 +398,7 @@ jobs:
           BYBIT_DEMO_API_KEY: ${{ secrets.BYBIT_DEMO_API_KEY }}
           BYBIT_DEMO_API_SECRET: ${{ secrets.BYBIT_DEMO_API_SECRET }}
           AUTO_TRADE_TOKEN: ${{ secrets.AUTO_TRADE_TOKEN }}
+          GITHUB_API_TOKEN: ${{ secrets.GITHUB_API_TOKEN }}
         run: |
           if [ -n "$CF_EMAIL" ] && [ -n "$CF_GLOBAL_KEY" ]; then
             AUTH_HEADERS=(-H "X-Auth-Email: $CF_EMAIL" -H "X-Auth-Key: $CF_GLOBAL_KEY")
@@ -425,6 +426,7 @@ jobs:
           sync_secret BYBIT_DEMO_API_KEY "$BYBIT_DEMO_API_KEY"
           sync_secret BYBIT_DEMO_API_SECRET "$BYBIT_DEMO_API_SECRET"
           sync_secret AUTO_TRADE_TOKEN "$AUTO_TRADE_TOKEN"
+          sync_secret GITHUB_API_TOKEN "$GITHUB_API_TOKEN"
 
       - name: 部署完直接打 /status 確認現在的狀態（不需要另外開瀏覽器查）
         if: ${{ steps.check.outputs.ready == 'true' }}

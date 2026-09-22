@@ -296,7 +296,10 @@ test('還沒輪到下一批時，直接沿用累積結果，不會真的重新�
 
 test('輪到下一批時，真的重新掃描那一批，並把結果累積進去、游標往前推', async () => {
   const discord = [];
-  const env = makeEnv({ WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_PROVIDERS: 'demo', WORKER_SCAN_TOP: '12', WORKER_SCAN_BATCH_SIZE: '5', WORKER_SCAN_BATCH_INTERVAL_MIN: '15' });
+  // MIN_SCORE 故意設超高：demo 資料是依「現在時間」產生的合成 K 棒，分數會隨執行
+  // 當下的時間浮動，設高門檻確保不會有計畫進入監看名單，才不用連帶 mock 現價 API
+  // （這個測試只關心「有沒有真的重新掃描、游標有沒有往前推」）
+  const env = makeEnv({ WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_PROVIDERS: 'demo', WORKER_SCAN_TOP: '12', WORKER_SCAN_BATCH_SIZE: '5', WORKER_SCAN_BATCH_INTERVAL_MIN: '15', MIN_SCORE: '999' });
   const staleMeta = {
     provider: 'STALE-FAKE-MARKER', interval: '1h', htfInterval: '1d', poolTotal: 12,
     lastBatchAt: new Date(Date.now() - 100 * 60000).toISOString(), // 100 分鐘前，遠超過 15 分鐘
@@ -354,6 +357,103 @@ test('游標繞完候選池一圈會回到開頭（round-robin）', async () => 
   };
   await runWorker(env);
   assert.equal(await env.SMC_KV.get('worker-scan:cursor'), '3');
+});
+
+/* -------------------------------------------------- 把掃描結果寫回 data/market.json */
+
+test('沒設定 GITHUB_API_TOKEN 時，完全不會呼叫 GitHub API', async () => {
+  const discord = [];
+  const env = makeEnv({ WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_PROVIDERS: 'demo', WORKER_SCAN_TOP: '12', WORKER_SCAN_BATCH_SIZE: '5', WORKER_SCAN_BATCH_INTERVAL_MIN: '15', MIN_SCORE: '999' });
+  const staleMeta = { provider: 'demo', interval: '1h', htfInterval: '1d', poolTotal: 12, lastBatchAt: new Date(Date.now() - 100 * 60000).toISOString() };
+  await env.SMC_KV.put('worker-scan:meta', JSON.stringify(staleMeta));
+  await env.SMC_KV.put('worker-scan:rows', JSON.stringify({}));
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    if (u.includes('discord')) { discord.push(JSON.parse(init.body)); return new Response(null, { status: 204 }); }
+    if (u.includes('api.github.com')) throw new Error('沒設定 GITHUB_API_TOKEN 就不該打 GitHub API：' + u);
+    throw new Error('未預期的請求：' + u);
+  };
+  await runWorker(env);
+});
+
+test('設定了 GITHUB_API_TOKEN：輪到下一批時把結果寫回 data/market.json，並保留舊檔的資金費率', async () => {
+  const discord = [];
+  const env = makeEnv({
+    WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_PROVIDERS: 'demo', WORKER_SCAN_TOP: '12', WORKER_SCAN_BATCH_SIZE: '5',
+    WORKER_SCAN_BATCH_INTERVAL_MIN: '15', MIN_SCORE: '0', GITHUB_API_TOKEN: 'ghp_fake', GITHUB_REPO: 'me/repo',
+  });
+  const staleMeta = { provider: 'demo', interval: '1h', htfInterval: '1d', poolTotal: 12, lastBatchAt: new Date(Date.now() - 100 * 60000).toISOString() };
+  await env.SMC_KV.put('worker-scan:meta', JSON.stringify(staleMeta));
+  await env.SMC_KV.put('worker-scan:rows', JSON.stringify({}));
+
+  const oldFile = {
+    generatedAt: '2020-01-01T00:00:00.000Z', provider: 'binance', interval: '1h', htfInterval: '4h',
+    universe: 1, rows: [{ symbol: 'BTCUSDT', deriv: { fundingRate: 0.0001, fundingLevel: 'neutral', regimeZh: '中性', fundingAnnualPct: 3.65, oiChangePct: 1.2 } }],
+  };
+  let putBody = null;
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    if (u.includes('discord')) { discord.push(JSON.parse(init.body)); return new Response(null, { status: 204 }); }
+    // MIN_SCORE=0 這批多半會有計畫進入監看名單，run() 接著會去查現價——
+    // 這個測試只關心「有沒有正確寫回 GitHub」，現價 API 給空清單即可。
+    if (u.includes('api.bybit.com/v5/market/tickers')) return new Response(JSON.stringify({ retCode: 0, retMsg: 'OK', result: { list: [] } }), { status: 200 });
+    if (u.includes('binance.com')) return new Response(JSON.stringify([]), { status: 200 });
+    if (u.includes('api.github.com/repos/me/repo/contents/data/market.json') && (!init || init.method === undefined || init.method === 'GET')) {
+      return new Response(JSON.stringify({ sha: 'old-sha-123', content: Buffer.from(JSON.stringify(oldFile), 'utf8').toString('base64') }), { status: 200 });
+    }
+    if (u.includes('api.github.com/repos/me/repo/contents/data/market.json') && init.method === 'PUT') {
+      putBody = JSON.parse(init.body);
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }
+    throw new Error('未預期的請求：' + u);
+  };
+  await runWorker(env);
+
+  assert.ok(putBody, '應該呼叫 PUT 寫回 data/market.json');
+  assert.equal(putBody.sha, 'old-sha-123', '要帶舊檔的 sha，不然 GitHub 會拒絕更新');
+  const written = JSON.parse(Buffer.from(putBody.content, 'base64').toString('utf8'));
+  assert.ok(Array.isArray(written.rows) && written.rows.length > 0, 'minScore=0 應該至少有幾檔通過門檻');
+  // 不管這批實際掃到哪些幣種：有對到舊檔symbol 的要原封不動接上 deriv，
+  // 沒對到的（舊檔沒有的新標的）不該生出一個假的 deriv 欄位
+  for (const r of written.rows) {
+    const oldRow = oldFile.rows.find((o) => o.symbol === r.symbol);
+    if (oldRow) assert.deepEqual(r.deriv, oldRow.deriv, `${r.symbol} 應該保留舊檔的 deriv`);
+    else assert.ok(!('deriv' in r), `${r.symbol} 是舊檔沒有的標的，不該生出假的 deriv`);
+  }
+  assert.ok(written.rows.some((r) => r.symbol === 'BTCUSDT'), '候選池第一個（成交量最高）應該在這批裡');
+});
+
+test('GitHub 寫入失敗不影響主流程，Discord 通知照常運作', async () => {
+  const discord = [];
+  const env = makeEnv({
+    WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_PROVIDERS: 'demo', WORKER_SCAN_TOP: '12', WORKER_SCAN_BATCH_SIZE: '5',
+    WORKER_SCAN_BATCH_INTERVAL_MIN: '15', MIN_SCORE: '999', GITHUB_API_TOKEN: 'ghp_fake',
+  });
+  const staleMeta = { provider: 'demo', interval: '1h', htfInterval: '1d', poolTotal: 12, lastBatchAt: new Date(Date.now() - 100 * 60000).toISOString() };
+  await env.SMC_KV.put('worker-scan:meta', JSON.stringify(staleMeta));
+  await env.SMC_KV.put('worker-scan:rows', JSON.stringify({}));
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    if (u.includes('discord')) { discord.push(JSON.parse(init.body)); return new Response(null, { status: 204 }); }
+    if (u.includes('api.github.com')) return new Response('boom', { status: 500 });
+    throw new Error('未預期的請求：' + u);
+  };
+  const out = await runWorker(env);
+  assert.equal(typeof out.checked, 'number', 'GitHub 寫入失敗不該讓整次執行掛掉');
+});
+
+test('還沒輪到下一批的 tick，不會嘗試寫回 GitHub', async () => {
+  const discord = [];
+  const env = makeEnv({ WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_BATCH_INTERVAL_MIN: '15', GITHUB_API_TOKEN: 'ghp_fake' });
+  const fakeMeta = { provider: 'CACHED', interval: '1h', htfInterval: '1d', poolTotal: 12, lastBatchAt: new Date().toISOString() };
+  await env.SMC_KV.put('worker-scan:meta', JSON.stringify(fakeMeta));
+  await env.SMC_KV.put('worker-scan:rows', JSON.stringify({}));
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    if (u.includes('discord')) { discord.push(JSON.parse(init.body)); return new Response(null, { status: 204 }); }
+    throw new Error('還沒輪到下一批，不該打任何外部 API（含 GitHub）：' + u);
+  };
+  await runWorker(env);
 });
 
 test('dry 模式只回報不推播、也不寫入 KV', async () => {
