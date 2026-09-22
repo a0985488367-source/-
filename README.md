@@ -314,6 +314,7 @@ WORKER_SCAN_ENABLED = "true"
 WORKER_SCAN_TOP = "25"        # 掃描範圍：愈大愈接近 Paid 方案的額度上限
 WORKER_SCAN_INTERVAL = "1h"
 WORKER_SCAN_STALE_MIN = "15"  # 掃描結果快取幾分鐘內算新鮮，不用真的重新掃
+WORKER_SCAN_PROVIDERS = "bybit,binance,okx"  # 資料源順序，預設優先用 Bybit
 ```
 
 Worker 每 2 分鐘還是會照排程執行一次，但那是「比對現價、判斷有沒有進場」
@@ -381,6 +382,8 @@ Worker）」卡片，填一次 Worker 網址跟 token（只存這台裝置，不
 
 - 只在 Worker 判定「等待回測的計畫，價格剛回到進場區」那一刻觸發，
   跟 Discord 通知共用同一個去重機制：同一個進場區只會下單一次
+- 判斷「價格回到進場區了沒」用的現價，優先抓 **Bybit** 的報價（跟實際下單
+  的合約類別一致），打不到才退到 Binance，兩者都失敗最後退到 OKX
 - 數量 = Demo 帳戶目前可用餘額 × `AUTO_TRADE_RISK_PCT`（預設 1%，**固定值，
   不分評分高低**）÷ 停損距離，一律帶停損，有目標價的話一併帶第一個停利
   （跟 App 手動下單同一套「不存在只送進場單」的規則）
