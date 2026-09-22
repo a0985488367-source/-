@@ -31,6 +31,10 @@ function makeKv() {
     store: m,
     async get(k) { return m.get(k) ?? null; },
     async put(k, v) { m.set(k, v); },
+    async delete(k) { m.delete(k); },
+    async list({ prefix = '' } = {}) {
+      return { keys: [...m.keys()].filter((k) => k.startsWith(prefix)).map((name) => ({ name })) };
+    },
   };
 }
 
@@ -52,6 +56,7 @@ function stubFetch({ market, prices, discord, bybit }) {
       const bybitJson = (retCode, retMsg, result) => new Response(JSON.stringify({ retCode, retMsg, result }), { status: 200 });
       if (u.includes('/v5/account/wallet-balance')) return bybitJson(0, 'OK', bybit.wallet);
       if (u.includes('/v5/market/instruments-info')) return bybitJson(0, 'OK', bybit.instrument);
+      if (u.includes('/v5/position/list')) return bybitJson(0, 'OK', { list: bybit.positions ?? [] });
       if (u.includes('/v5/position/set-leverage')) {
         return bybit.leverageError ? bybitJson(bybit.leverageError.code, bybit.leverageError.msg, {}) : bybitJson(0, 'OK', {});
       }
@@ -285,6 +290,75 @@ test('槓桿不會超過該合約本身的上限', async () => {
   await runWorker(env);
   const leverageCall = bybit.calls.find((c) => c.url.includes('/v5/position/set-leverage'));
   assert.equal(leverageCall.body.buyLeverage, '4', '算出來是 10 倍，但合約上限只有 4 倍');
+});
+
+/* -------------------------------------------------- 自動下單：部位關閉偵測 */
+
+test('下單成功會把部位記進 KV，供之後偵測是否平倉', async () => {
+  const discord = [];
+  const bybit = { calls: [], wallet: demoWallet, instrument: demoInstrument };
+  const env = makeEnv({ BYBIT_DEMO_API_KEY: 'k', BYBIT_DEMO_API_SECRET: 's' });
+  await env.SMC_KV.put('auto-trade:enabled', 'true');
+  stubFetch({ market: makeMarket([row()]), prices: { ABCUSDT: 99.9 }, discord, bybit });
+  await runWorker(env);
+  const raw = await env.SMC_KV.get('open-pos:ABCUSDT:long');
+  assert.ok(raw, '應該記錄追蹤中的部位');
+  const pos = JSON.parse(raw);
+  assert.equal(pos.entry, 100);
+  assert.equal(pos.stop, 95);
+});
+
+test('Bybit 那邊部位還在時，不會誤判成平倉', async () => {
+  const discord = [];
+  const env = makeEnv({ BYBIT_DEMO_API_KEY: 'k', BYBIT_DEMO_API_SECRET: 's' });
+  await env.SMC_KV.put('open-pos:ABCUSDT:long', JSON.stringify({
+    symbol: 'ABCUSDT', dir: 'long', entry: 100, stop: 95, qty: 2, riskAmount: 10, leverage: 5, grade: 'A', score: 75,
+  }));
+  const bybit = { calls: [], positions: [{ symbol: 'ABCUSDT', side: 'Buy', size: '2' }] };
+  stubFetch({ market: makeMarket([]), prices: {}, discord, bybit });
+  await runWorker(env);
+  assert.ok(await env.SMC_KV.get('open-pos:ABCUSDT:long'), '部位還在，追蹤紀錄不該被刪掉');
+  assert.equal(discord.length, 0, '部位還在，不該推播平倉通知');
+});
+
+test('Bybit 那邊部位消失了 → 推一則平倉通知（獲利），並清掉追蹤紀錄', async () => {
+  const discord = [];
+  const env = makeEnv({ BYBIT_DEMO_API_KEY: 'k', BYBIT_DEMO_API_SECRET: 's' });
+  await env.SMC_KV.put('open-pos:ABCUSDT:long', JSON.stringify({
+    symbol: 'ABCUSDT', dir: 'long', entry: 100, stop: 95, qty: 2, riskAmount: 10, leverage: 5, grade: 'A', score: 75,
+  }));
+  const bybit = { calls: [], positions: [] }; // 這個幣種已經不在持倉清單裡了 = 平倉
+  stubFetch({ market: makeMarket([]), prices: { ABCUSDT: 110 }, discord, bybit });
+  await runWorker(env);
+  assert.equal(await env.SMC_KV.get('open-pos:ABCUSDT:long'), null, '通知完應該清掉追蹤紀錄');
+  assert.equal(discord.length, 1);
+  assert.match(discord[0].embeds[0].title, /✅.*已平倉.*\+2\.00R/);
+});
+
+test('平倉時價格低於進場價 → 判定為虧損', async () => {
+  const discord = [];
+  const env = makeEnv({ BYBIT_DEMO_API_KEY: 'k', BYBIT_DEMO_API_SECRET: 's' });
+  await env.SMC_KV.put('open-pos:ABCUSDT:long', JSON.stringify({
+    symbol: 'ABCUSDT', dir: 'long', entry: 100, stop: 95, qty: 2, riskAmount: 10, leverage: 5, grade: 'A', score: 75,
+  }));
+  const bybit = { calls: [], positions: [] };
+  stubFetch({ market: makeMarket([]), prices: { ABCUSDT: 90 }, discord, bybit });
+  await runWorker(env);
+  assert.match(discord[0].embeds[0].title, /❌.*已平倉.*-2\.00R/);
+});
+
+test('dry 模式不會去查有沒有平倉，也不會動到追蹤紀錄', async () => {
+  const discord = [];
+  const env = makeEnv({ BYBIT_DEMO_API_KEY: 'k', BYBIT_DEMO_API_SECRET: 's' });
+  await env.SMC_KV.put('open-pos:ABCUSDT:long', JSON.stringify({
+    symbol: 'ABCUSDT', dir: 'long', entry: 100, stop: 95, qty: 2, riskAmount: 10, leverage: 5, grade: 'A', score: 75,
+  }));
+  // 故意不設定 bybit stub：如果 dry 模式還是去打了 Bybit API，stubFetch 會直接丟例外讓測試失敗
+  stubFetch({ market: makeMarket([]), prices: {}, discord });
+  const res = await worker.fetch(new Request('https://w.test/run?dry=1'), env);
+  const out = await res.json();
+  assert.equal(out.closedPositions.checked, 0);
+  assert.ok(await env.SMC_KV.get('open-pos:ABCUSDT:long'), 'dry 模式不該清掉追蹤紀錄');
 });
 
 test('沒設定 Demo 金鑰時開啟自動下單：標記略過，完全不打 Bybit API', async () => {
