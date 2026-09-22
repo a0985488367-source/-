@@ -196,11 +196,12 @@ export default {
       // 不用另外查 Cloudflare 後台。
       let workerScanCache = null;
       if (workerScanEnabled && env.SMC_KV) {
+        const configuredIntervals = cfg(env, 'WORKER_SCAN_INTERVAL').split(',').map((s) => s.trim()).filter(Boolean);
         const metaRaw = await env.SMC_KV.get(WORKER_SCAN_META_KEY).catch(() => null);
-        const metaByInterval = parseScanMeta(metaRaw);
+        const metaByInterval = parseScanMeta(metaRaw, configuredIntervals);
         if (Object.keys(metaByInterval).length) {
           const rowsRaw = await env.SMC_KV.get(WORKER_SCAN_ROWS_KEY).catch(() => null);
-          const rows = parseScanRows(rowsRaw);
+          const rows = parseScanRows(rowsRaw, configuredIntervals);
           const entries = Object.entries(metaByInterval);
           // 有多個週期（WORKER_SCAN_INTERVAL 逗號分隔）時，每個週期是各自
           // 分開輪流掃描的，所以每個週期都有自己的 lastBatchAt／診斷欄位——
@@ -411,14 +412,20 @@ const WORKER_SCAN_CURSOR_KEY = 'worker-scan:cursor';
  * request——實測部署後 /status、/run 全部回 500 就是這個問題。
  * 偵測格式不符就當成沒掃過（回傳空物件），讓系統用新格式從頭累積，
  * 比硬解析猜測舊資料該對應到哪個新設定的週期安全。
+ * 另外，如果 WORKER_SCAN_INTERVAL 後來把某個週期拿掉了（例如原本開了
+ * 3m/15m，後來覺得雜訊太多改回只留 30m/1h/4h），KV 裡屬於那個週期的舊
+ * meta 不會自動消失——不主動濾掉的話，/status 的 perInterval 會一直
+ * 顯示一個已經不會再更新、早就過期的週期，容易誤導。傳入目前設定的
+ * intervals 清單，濾掉不在清單裡的週期。
  */
-function parseScanMeta(metaRaw) {
+function parseScanMeta(metaRaw, intervals) {
   if (!metaRaw) return {};
   let meta;
   try { meta = JSON.parse(metaRaw); } catch { return {}; }
   const looksValid = meta && typeof meta === 'object'
     && Object.values(meta).every((m) => m && typeof m === 'object' && typeof m.lastBatchAt === 'string');
-  return looksValid ? meta : {};
+  if (!looksValid) return {};
+  return intervals ? Object.fromEntries(Object.entries(meta).filter(([iv]) => intervals.includes(iv))) : meta;
 }
 
 /**
@@ -428,13 +435,24 @@ function parseScanMeta(metaRaw) {
  * ——不然這些資料格式對不上，卻會被 Object.values() 當成正常的計畫，
  * 混進 run() 的監看名單，用不知道是哪個週期、可能早就過期的進場價／
  * 停損價去比對現價，非常危險。
+ *
+ * 同樣，WORKER_SCAN_INTERVAL 拿掉某個週期之後，屬於那個週期的舊
+ * `${interval}::${symbol}` 資料也要濾掉——不然已經不想再看的短週期
+ * 計畫（例如刻意拿掉的 3m/15m）會一直卡在累積結果裡，永遠不會被下一批
+ * 掃描更新或清掉，卻仍然混進 run() 的監看名單，可能觸發推播或下單。
+ * 傳入目前設定的 intervals 清單才會做這層過濾；不傳就只做格式檢查
+ * （呼叫端還沒讀到 intervals 設定的極少數情況）。
  */
-function parseScanRows(rowsRaw) {
+function parseScanRows(rowsRaw, intervals) {
   if (!rowsRaw) return {};
   let rows;
   try { rows = JSON.parse(rowsRaw); } catch { return {}; }
   if (!rows || typeof rows !== 'object') return {};
-  return Object.fromEntries(Object.entries(rows).filter(([k]) => k.includes('::')));
+  return Object.fromEntries(Object.entries(rows).filter(([k]) => {
+    const sep = k.indexOf('::');
+    if (sep < 0) return false;
+    return !intervals || intervals.includes(k.slice(0, sep));
+  }));
 }
 
 /**
@@ -612,7 +630,7 @@ async function getFreshMarket(env) {
 
   const intervalMin = Number(cfg(env, 'WORKER_SCAN_BATCH_INTERVAL_MIN'));
   const metaRaw = await env.SMC_KV.get(WORKER_SCAN_META_KEY);
-  const metaByInterval = parseScanMeta(metaRaw);
+  const metaByInterval = parseScanMeta(metaRaw, intervals);
 
   // 找出「到期該重新掃描」的週期，優先處理最久沒更新的那個（沒 meta 的
   // 當成最久沒更新，第一次一定會被排到）——同一個 tick 只真的重新掃描
@@ -629,7 +647,7 @@ async function getFreshMarket(env) {
 
   if (!due.length) {
     const rowsRaw = await env.SMC_KV.get(WORKER_SCAN_ROWS_KEY);
-    return assembleMarket(metaByInterval, parseScanRows(rowsRaw));
+    return assembleMarket(metaByInterval, parseScanRows(rowsRaw, intervals));
   }
 
   const interval = due[0];
@@ -639,7 +657,7 @@ async function getFreshMarket(env) {
   const batch = await scanMarket({ providerIds, top, offset: cursor, batchSize, interval, minScore: scanMinScore, detailTop: batchSize, concurrency });
 
   const rowsRaw = await env.SMC_KV.get(WORKER_SCAN_ROWS_KEY);
-  const rows = parseScanRows(rowsRaw);
+  const rows = parseScanRows(rowsRaw, intervals);
   const qualified = new Map(batch.rows.map((r) => [r.symbol, r]));
   // 這一批考慮過但沒通過門檻的，要從累積結果裡刪掉——不然分數掉下去的
   // 標的會卡在舊資料裡，一直到下一輪才被清掉都不夠即時
