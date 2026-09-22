@@ -41,7 +41,7 @@ MAX_MARKET_AGE_MIN = "240"
 ALERT_TTL_SEC = "21600"
 NEAR_PCT = "0.08"
 # 自動下單（選用，預設關閉，開關另外看 KV 的 auto-trade:enabled）
-AUTO_TRADE_RISK_PCT = "1"
+AUTO_TRADE_RISK_PCT = "5"
 # 槓桿照評分線性插值：評分等於 MIN_SCORE 給 MIN 倍，100 分給 MAX 倍
 AUTO_TRADE_LEVERAGE_MIN = "3"
 AUTO_TRADE_LEVERAGE_MAX = "10"
@@ -61,7 +61,7 @@ WORKER_SCAN_BATCH_INTERVAL_MIN = "10"
 # 只是把原本大部分 tick 都空著的時間拿來輪流服務其他週期；每個週期各自
 # 涵蓋一輪候選池的時間跟只開一個週期時一樣（≈ TOP/BATCH_SIZE ×
 # BATCH_INTERVAL_MIN ≈ 1 小時），不會變慢
-WORKER_SCAN_INTERVAL = "3m,15m,30m,1h"
+WORKER_SCAN_INTERVAL = "4h,1h,30m"
 # 掃描累積門檻，故意設很低（幾乎不濾）：跟上面的 MIN_SCORE（推播/下單
 # 門檻）是兩件事，掃描這一步只要是有效計畫就先存起來，要不要因此推播、
 # 下單留到比對現價那一步才照 MIN_SCORE 篩——這樣累積結果才不會被鎖死在
