@@ -16,8 +16,8 @@
 # 選用：自動下單（Demo 模擬交易，預設關閉，細節見 index.js 開頭的說明）
 #   Secret        BYBIT_DEMO_API_KEY / BYBIT_DEMO_API_SECRET / AUTO_TRADE_TOKEN
 #
-# 選用：Worker 自己即時掃描（預設關閉，需要 Workers Paid，細節見 index.js 開頭的說明）
-#   Variable      WORKER_SCAN_ENABLED / WORKER_SCAN_TOP / WORKER_SCAN_INTERVAL
+# 選用：Worker 自己即時掃描（需要 Workers Paid，細節見 index.js 開頭的說明）
+#   Variable      WORKER_SCAN_ENABLED / WORKER_SCAN_TOP / WORKER_SCAN_INTERVAL / WORKER_SCAN_STALE_MIN
 
 name = "smc-signals"
 main = "index.js"
@@ -38,11 +38,14 @@ AUTO_TRADE_RISK_PCT = "1"
 # 槓桿照評分線性插值：評分等於 MIN_SCORE 給 MIN 倍，100 分給 MAX 倍
 AUTO_TRADE_LEVERAGE_MIN = "3"
 AUTO_TRADE_LEVERAGE_MAX = "10"
-# Worker 自己即時掃描（選用，預設關閉，需要 Workers Paid；開啟前留意對外部
-# 交易所 API 的請求量會大幅增加，見 index.js 開頭的說明）
-WORKER_SCAN_ENABLED = "false"
+# Worker 自己即時掃描（需要 Workers Paid；開啟前留意對外部交易所 API 的
+# 請求量會增加，見 index.js 開頭的說明）。掃描結果會存進 KV 快取，
+# WORKER_SCAN_STALE_MIN 分鐘內重複觸發都直接沿用快取，不會真的重新掃描，
+# 等於「每 2 分鐘反應一次價格，但大約每 15 分鐘才重新掃一次市場」
+WORKER_SCAN_ENABLED = "true"
 WORKER_SCAN_TOP = "25"
 WORKER_SCAN_INTERVAL = "1h"
+WORKER_SCAN_STALE_MIN = "15"
 
 # KV 命名空間：部署前請先建立，並把 id 填在這裡
 # （wrangler kv namespace create SMC_KV，或在主控台 Storage → KV 建立）

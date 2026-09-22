@@ -306,14 +306,21 @@ https://smc-signals.<你的子網域>.workers.dev/run?dry=1 立刻試跑一次�
 
 升級到 **Workers Paid**（$5/月，CPU 時間上限從 10ms 拉到 30 秒）之後，
 可以讓 Worker 自己做一份縮小範圍的即時分析，把「新機會多久出現一次」
-從 2～4 小時拉到真正的 2 分鐘：
+從 2～4 小時拉到大約 15 分鐘一次：
 
 ```toml
 # worker/wrangler.toml 的 [vars]
 WORKER_SCAN_ENABLED = "true"
 WORKER_SCAN_TOP = "25"        # 掃描範圍：愈大愈接近 Paid 方案的額度上限
 WORKER_SCAN_INTERVAL = "1h"
+WORKER_SCAN_STALE_MIN = "15"  # 掃描結果快取幾分鐘內算新鮮，不用真的重新掃
 ```
+
+Worker 每 2 分鐘還是會照排程執行一次，但那是「比對現價、判斷有沒有進場」
+的輕量工作；真正重新掃描全市場（呼叫交易所 API、算分數）則是把結果存進
+KV 快取，`WORKER_SCAN_STALE_MIN` 分鐘內重複觸發都直接沿用快取，超過才會
+真的重新掃描一次並更新快取。等於「每 2 分鐘反應一次價格，但大約每 15
+分鐘才重新掃一次市場」，兩個頻率分開設定、互不影響。
 
 改完推到 `main`，GitHub Actions 會用 esbuild 把 Worker 跟它需要的 SMC
 引擎打包成一個檔案再部署（部署流程已經處理好，不用自己動手）。
@@ -324,7 +331,7 @@ GitHub Actions 算的那份（120 檔、含資金費率），兩邊互不取代�
 
 ⚠️ **開啟前要知道的取捨**：
 - 掃描範圍縮小到前 `WORKER_SCAN_TOP` 檔（預設 25），不是 GitHub 那份的 120 檔
-- 對外部交易所 API 的請求量會大幅增加（一天下來是原本 GitHub 排程的數十倍），
+- 對外部交易所 API 的請求量會增加（大約每 15 分鐘一次完整掃描），
   請留意交易所本身的速率限制
 - 沒有資金費率／未平倉量資料（GitHub 那份才有）
 

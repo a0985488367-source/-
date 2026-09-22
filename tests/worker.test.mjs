@@ -225,6 +225,47 @@ test('WORKER_SCAN_ENABLED 關閉（預設）時，還是照舊讀 data/market.js
   assert.equal(out.alerts, 1, '預設行為不該被這次改動影響');
 });
 
+test('掃描結果快取還新鮮時，直接沿用，不會真的重新掃描', async () => {
+  const discord = [];
+  const env = makeEnv({ WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_PROVIDERS: 'demo', WORKER_SCAN_STALE_MIN: '15' });
+  const fakeCached = {
+    generatedAt: new Date().toISOString(), // 剛剛，遠比 15 分鐘新鮮
+    provider: 'CACHED-FAKE-MARKER',
+    interval: '1h', htfInterval: '1d', universe: 1, scanned: 1, skippedLowVolatility: 0, minScore: 0,
+    counts: { ready: 0, waiting: 0, total: 0 }, rows: [],
+  };
+  await env.SMC_KV.put('worker-scan:cache', JSON.stringify(fakeCached));
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    if (u.includes('discord')) { discord.push(JSON.parse(init.body)); return new Response(null, { status: 204 }); }
+    throw new Error('快取還新鮮，不該打任何外部 API：' + u);
+  };
+  await runWorker(env);
+  const after = JSON.parse(await env.SMC_KV.get('worker-scan:cache'));
+  assert.equal(after.provider, 'CACHED-FAKE-MARKER', '快取沒過期就不該被覆寫');
+});
+
+test('掃描結果快取過期後，真的重新掃描，並把新結果寫回快取', async () => {
+  const discord = [];
+  const env = makeEnv({ WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_PROVIDERS: 'demo', WORKER_SCAN_STALE_MIN: '15' });
+  const staleCached = {
+    generatedAt: new Date(Date.now() - 100 * 60000).toISOString(), // 100 分鐘前，遠超過 15 分鐘
+    provider: 'STALE-FAKE-MARKER',
+    interval: '1h', htfInterval: '1d', universe: 1, scanned: 1, skippedLowVolatility: 0, minScore: 0,
+    counts: { ready: 0, waiting: 0, total: 0 }, rows: [],
+  };
+  await env.SMC_KV.put('worker-scan:cache', JSON.stringify(staleCached));
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    if (u.includes('binance.com')) return new Response(JSON.stringify([]), { status: 200 });
+    if (u.includes('discord')) { discord.push(JSON.parse(init.body)); return new Response(null, { status: 204 }); }
+    throw new Error('未預期的請求：' + u);
+  };
+  await runWorker(env);
+  const after = JSON.parse(await env.SMC_KV.get('worker-scan:cache'));
+  assert.equal(after.provider, 'demo', '過期的快取應該被真的重新掃描的結果取代');
+});
+
 test('dry 模式只回報不推播、也不寫入 KV', async () => {
   const discord = [];
   const env = makeEnv();
