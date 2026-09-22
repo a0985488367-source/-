@@ -445,3 +445,9 @@ jobs:
           sleep 5
           curl -sS "https://smc-signals.$HOST.workers.dev/status" \
             | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.stringify(JSON.parse(s),null,2))}catch{console.log("回應不是 JSON：",s)}})'
+          echo "--- /auto-trade/status ---"
+          curl -sS "https://smc-signals.$HOST.workers.dev/auto-trade/status" \
+            | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.stringify(JSON.parse(s),null,2))}catch{console.log("回應不是 JSON：",s)}})'
+          echo "--- /run?dry=1（不會推播、不會下單，只看這次執行會不會出錯、抓到幾個訊號） ---"
+          curl -sS "https://smc-signals.$HOST.workers.dev/run?dry=1" \
+            | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.stringify(JSON.parse(s),null,2))}catch{console.log("回應不是 JSON：",s)}})'
