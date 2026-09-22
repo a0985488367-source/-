@@ -795,6 +795,75 @@ test('保本鏢與目標價會一次掛成真的 reduce-only 限價單', async (
   assert.equal(pos.trailing, false);
 });
 
+test('開倉後會再明確設定一次停損（防止進場單帶的 stopLoss 沒生效）', async () => {
+  // 實測踩過的坑：曾經出現過部位開出來卻完全沒有停損的情況，不確定
+  // 進場單本身的 stopLoss 參數為什麼沒生效（Demo 環境其他端點也有被
+  // 回報過不穩定）；與其瞎猜，不如開倉後再用確定冪等的 trading-stop
+  // 端點明確設定一次同樣的停損，當一層保險。
+  const discord = [];
+  const bybit = { calls: [], wallet: demoWallet, instrument: demoInstrument };
+  const env = makeEnv({ BYBIT_DEMO_API_KEY: 'k', BYBIT_DEMO_API_SECRET: 's' });
+  await env.SMC_KV.put('auto-trade:enabled', 'true');
+  stubFetch({ market: makeMarket([row()]), prices: { ABCUSDT: 99.9 }, discord, bybit });
+  await runWorker(env);
+
+  const stopCall = bybit.calls.find((c) => c.url.includes('/v5/position/trading-stop'));
+  assert.ok(stopCall, '開倉後應該再打一次 trading-stop 明確設定停損');
+  assert.equal(stopCall.body.stopLoss, '95', '應該跟進場單帶的停損（entry 100 - stop 95）一致');
+});
+
+test('明確設定停損失敗不影響主流程（進場單本身已經帶了停損，這只是多一層保險）', async () => {
+  const discord = [];
+  const bybit = { calls: [], wallet: demoWallet, instrument: demoInstrument, tradingStopError: { code: 10001, msg: 'boom' } };
+  const env = makeEnv({ BYBIT_DEMO_API_KEY: 'k', BYBIT_DEMO_API_SECRET: 's' });
+  await env.SMC_KV.put('auto-trade:enabled', 'true');
+  stubFetch({ market: makeMarket([row()]), prices: { ABCUSDT: 99.9 }, discord, bybit });
+  const out = await runWorker(env);
+  assert.equal(out.alerts, 1, 'trading-stop 保險失敗不該擋住下單流程本身');
+  const pos = JSON.parse(await env.SMC_KV.get('open-pos:ABCUSDT:long'));
+  assert.ok(pos, '部位還是應該正常記錄下來');
+});
+
+test('分批出場限價單第一次失敗會重試一次，重試後成功就正常掛上', async () => {
+  const discord = [];
+  const bybit = { calls: [], wallet: demoWallet, instrument: demoInstrument };
+  let legAttempts = 0;
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    if (u.startsWith(MARKET_URL)) return new Response(JSON.stringify(makeMarket([row()])), { status: 200 });
+    if (u.includes('api.bybit.com/v5/market/tickers')) {
+      return new Response(JSON.stringify({ retCode: 0, retMsg: 'OK', result: { list: [{ symbol: 'ABCUSDT', lastPrice: '99.9' }] } }), { status: 200 });
+    }
+    if (u.includes('discord')) { discord.push(JSON.parse(init.body)); return new Response(null, { status: 204 }); }
+    if (u.includes('api-demo.bybit.com')) {
+      bybit.calls.push({ url: u, method: init.method, body: init.body ? JSON.parse(init.body) : null });
+      const bybitJson = (retCode, retMsg, result) => new Response(JSON.stringify({ retCode, retMsg, result }), { status: 200 });
+      if (u.includes('/v5/account/wallet-balance')) return bybitJson(0, 'OK', bybit.wallet);
+      if (u.includes('/v5/market/instruments-info')) return bybitJson(0, 'OK', bybit.instrument);
+      if (u.includes('/v5/position/set-leverage')) return bybitJson(0, 'OK', {});
+      if (u.includes('/v5/position/trading-stop')) return bybitJson(0, 'OK', {});
+      if (u.includes('/v5/order/create')) {
+        const body = JSON.parse(init.body);
+        if (body.orderType === 'Limit') {
+          legAttempts++;
+          if (legAttempts === 1) return bybitJson(10006, 'rate limited', {}); // 第一次先假裝被限流
+          return bybitJson(0, 'OK', { orderId: 'leg-retry-ok' });
+        }
+        return bybitJson(0, 'OK', { orderId: 'entry-order' });
+      }
+      throw new Error('未預期的 Bybit 端點：' + u);
+    }
+    throw new Error('未預期的請求：' + u);
+  };
+  const env = makeEnv({ BYBIT_DEMO_API_KEY: 'k', BYBIT_DEMO_API_SECRET: 's' });
+  await env.SMC_KV.put('auto-trade:enabled', 'true');
+  await runWorker(env);
+
+  const pos = JSON.parse(await env.SMC_KV.get('open-pos:ABCUSDT:long'));
+  assert.ok(pos.ladder.some((leg) => leg.orderId === 'leg-retry-ok'), '第一次被限流重試後應該成功掛上限價單，不該直接放棄');
+  assert.ok(!pos.ladder.some((leg) => leg.error), '重試成功後不該還留著錯誤紀錄');
+});
+
 test('槓桿照評分線性插值：高分給接近上限的槓桿，低分給接近下限的槓桿', async () => {
   const discord = [];
   const bybit = { calls: [], wallet: demoWallet, instrument: demoInstrument };

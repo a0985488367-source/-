@@ -272,7 +272,7 @@ export default {
       // 不用再另外查 Bybit 後台。只讀，不會因為查狀態就多下單。
       let wallet = null;
       if (hasKeys) {
-        wallet = await bybitCall(env, 'GET', '/v5/account/wallet-balance', { accountType: 'UNIFIED' })
+        wallet = await bybitCall(env, 'GET', '/v5/account/wallet-balance', { accountType: 'UNIFIED' }, { retries: 1 })
           .then((w) => ({ totalAvailableBalance: Number(w?.list?.[0]?.totalAvailableBalance ?? 0), totalWalletBalance: Number(w?.list?.[0]?.totalWalletBalance ?? 0) }))
           .catch((e) => ({ error: e.message }));
       }
@@ -811,41 +811,67 @@ async function bybitHmac(secret, message) {
   return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-async function bybitCall(env, method, path, params = {}) {
+/**
+ * retries 預設 0（不重試）：跟交易所下單這種非冪等操作有關的呼叫，重試
+ * 有把同一張單重複送出兩次的風險（例如網路逾時，但 Bybit 其實已經收到
+ * 並處理掉第一次的請求，只是回應沒送到）。只有明確知道這次呼叫是冪等
+ * 的（查餘額、查合約資訊、查持倉、設槓桿、設停損——同一個值設兩次沒有
+ * 副作用）才在呼叫端傳 retries: 1。
+ *
+ * 可重試的失敗只挑「明確知道請求根本沒被處理」的情況：網路層失敗（fetch
+ * 丟例外／HTTP 5xx，這代表根本沒進到 Bybit 的撮合邏輯）跟 Bybit 自己的
+ * 限流回應（retCode 10006／HTTP 429）——其他錯誤（餘額不足、參數不合法
+ * 等）重試也不會變好，直接丟出去。
+ */
+async function bybitCall(env, method, path, params = {}, { retries = 0 } = {}) {
   const apiKey = env.BYBIT_DEMO_API_KEY;
   const apiSecret = env.BYBIT_DEMO_API_SECRET;
-  const ts = String(Date.now());
-  const recvWindow = '10000';
-  let url = BYBIT_DEMO_HOST + path;
-  let body;
-  let payload;
-  if (method === 'GET') {
-    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')).toString();
-    payload = qs;
-    if (qs) url += `?${qs}`;
-  } else {
-    body = JSON.stringify(params);
-    payload = body;
+  for (let attempt = 0; ; attempt++) {
+    const ts = String(Date.now());
+    const recvWindow = '10000';
+    let url = BYBIT_DEMO_HOST + path;
+    let body;
+    let payload;
+    if (method === 'GET') {
+      const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')).toString();
+      payload = qs;
+      if (qs) url += `?${qs}`;
+    } else {
+      body = JSON.stringify(params);
+      payload = body;
+    }
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          'X-BAPI-API-KEY': apiKey,
+          'X-BAPI-TIMESTAMP': ts,
+          'X-BAPI-RECV-WINDOW': recvWindow,
+          'X-BAPI-SIGN': await bybitHmac(apiSecret, ts + apiKey + recvWindow + payload),
+        },
+        body,
+      });
+      if (!res.ok) {
+        if (res.status === 429 || res.status >= 500) {
+          if (attempt < retries) { await new Promise((r) => setTimeout(r, 300 * (attempt + 1))); continue; }
+        }
+        throw new Error(`Bybit HTTP ${res.status}`);
+      }
+      const j = await res.json();
+      if (j.retCode !== 0) {
+        if (j.retCode === 10006 && attempt < retries) { await new Promise((r) => setTimeout(r, 300 * (attempt + 1))); continue; }
+        const err = new Error(`Bybit [${j.retCode}] ${j.retMsg || '請求失敗'}`);
+        err.code = j.retCode;
+        throw err;
+      }
+      return j.result;
+    } catch (e) {
+      if (e instanceof Error && /^Bybit \[/.test(e.message)) throw e; // 明確的業務錯誤，不算網路層失敗
+      if (attempt < retries) { await new Promise((r) => setTimeout(r, 300 * (attempt + 1))); continue; }
+      throw e;
+    }
   }
-  const res = await fetch(url, {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-      'X-BAPI-API-KEY': apiKey,
-      'X-BAPI-TIMESTAMP': ts,
-      'X-BAPI-RECV-WINDOW': recvWindow,
-      'X-BAPI-SIGN': await bybitHmac(apiSecret, ts + apiKey + recvWindow + payload),
-    },
-    body,
-  });
-  if (!res.ok) throw new Error(`Bybit HTTP ${res.status}`);
-  const j = await res.json();
-  if (j.retCode !== 0) {
-    const err = new Error(`Bybit [${j.retCode}] ${j.retMsg || '請求失敗'}`);
-    err.code = j.retCode;
-    throw err;
-  }
-  return j.result;
 }
 
 function decimalsOf(step) {
@@ -895,8 +921,8 @@ async function autoTradeOrder(env, hit) {
   const r = hit.row;
   try {
     const [wallet, instrument] = await Promise.all([
-      bybitCall(env, 'GET', '/v5/account/wallet-balance', { accountType: 'UNIFIED' }),
-      bybitCall(env, 'GET', '/v5/market/instruments-info', { category: 'linear', symbol: r.symbol }),
+      bybitCall(env, 'GET', '/v5/account/wallet-balance', { accountType: 'UNIFIED' }, { retries: 1 }),
+      bybitCall(env, 'GET', '/v5/market/instruments-info', { category: 'linear', symbol: r.symbol }, { retries: 1 }),
     ]);
     const accountSize = Number(wallet?.list?.[0]?.totalAvailableBalance ?? 0);
     const it = instrument?.list?.[0];
@@ -918,8 +944,11 @@ async function autoTradeOrder(env, hit) {
     const leverage = Math.min(leverageForScore(env, r.score), maxLeverage);
     await bybitCall(env, 'POST', '/v5/position/set-leverage', {
       category: 'linear', symbol: r.symbol, buyLeverage: String(leverage), sellLeverage: String(leverage),
-    }).catch((e) => { if (e.code !== 110043) throw e; }); // 已經是這個倍數，不算錯誤
+    }, { retries: 1 }).catch((e) => { if (e.code !== 110043) throw e; }); // 已經是這個倍數，不算錯誤
 
+    // 市價進場單刻意不重試：重試有把同一張單重複送出兩次的風險（網路逾時
+    // 不代表 Bybit 沒收到，可能只是回應沒送達），寧可這次失敗、下一次價格
+    // 再到進場區時才重新嘗試，也不要冒重複進場的風險。
     const order = await bybitCall(env, 'POST', '/v5/order/create', {
       category: 'linear',
       symbol: r.symbol,
@@ -933,8 +962,21 @@ async function autoTradeOrder(env, hit) {
       // 交易所原生的單一 takeProfit 欄位放不下「保本鏢 + 好幾段目標」。
     });
 
+    // 保險：進場單本身雖然帶了 stopLoss，但實測發生過部位開出來卻完全沒
+    // 停損的情況——不確定確切原因（Demo 環境本來就有其他端點被回報過不
+    // 穩定），與其猜測，不如直接用已經在用、確定冪等的 trading-stop 端點
+    // 再明確設定一次同樣的停損，多這一次呼叫不會有副作用，失敗也不影響
+    // 主流程（updateTrailingStops 下次執行還會再檢查）。
+    await bybitCall(env, 'POST', '/v5/position/trading-stop', {
+      category: 'linear', symbol: r.symbol, positionIdx: 0,
+      stopLoss: String(roundTick(r.stop, tickSize)), slTriggerBy: 'LastPrice',
+    }, { retries: 1 }).catch(() => {});
+
     // 保本鏢 + 原本目標，一次全部掛成真的 reduce-only 限價單——價格到了
-    // 交易所自己成交，不用等 Worker 下次輪詢才發現、才補下單。
+    // 交易所自己成交，不用等 Worker 下次輪詢才發現、才補下單。這裡允許
+    // 重試一次：跟進場單不同，reduce-only 限價單就算意外重複送出，最多
+    // 也只是同一個價位多一張限價單，Bybit 會依實際持倉量限制成交，不會
+    // 讓倉位不小心反向或超賣，風險遠比重試進場單低。
     const ladder = ladderWithAbsoluteFractions(buildLadder(r.entry, r.stop, r.targets, DEFAULT_MANAGEMENT));
     const legOrders = [];
     for (const leg of ladder) {
@@ -950,7 +992,7 @@ async function autoTradeOrder(env, hit) {
           price: String(roundTick(leg.price, tickSize)),
           reduceOnly: true,
           timeInForce: 'GTC',
-        });
+        }, { retries: 1 });
         legOrders.push({ name: leg.name, price: leg.price, fraction: leg.fraction, qty: legQty, orderId: legOrder?.orderId });
       } catch (e) {
         legOrders.push({ name: leg.name, price: leg.price, fraction: leg.fraction, qty: legQty, error: e.message });
@@ -990,7 +1032,7 @@ async function checkClosedPositions(env) {
   const tracked = await env.SMC_KV.list({ prefix: 'open-pos:' });
   if (!tracked.keys.length) return { checked: 0, closed: 0 };
 
-  const real = await bybitCall(env, 'GET', '/v5/position/list', { category: 'linear', settleCoin: 'USDT' });
+  const real = await bybitCall(env, 'GET', '/v5/position/list', { category: 'linear', settleCoin: 'USDT' }, { retries: 1 });
   const stillOpen = new Set(
     (real?.list ?? [])
       .filter((p) => Number(p.size) > 0)
@@ -1011,7 +1053,7 @@ async function checkClosedPositions(env) {
       // 部位平倉了（不管是停損還是分批出場單打到），開倉時掛的那批分批
       // 出場限價單如果還有沒成交的殘單，取消掉——reduce-only 單獨留著不會
       // 加碼部位，但留著容易讓人誤會這幣種還在追蹤中。
-      await bybitCall(env, 'POST', '/v5/order/cancel-all', { category: 'linear', symbol: pos.symbol }).catch(() => {});
+      await bybitCall(env, 'POST', '/v5/order/cancel-all', { category: 'linear', symbol: pos.symbol }, { retries: 1 }).catch(() => {});
     }
     await env.SMC_KV.delete(key);
     closed++;
@@ -1074,7 +1116,7 @@ async function updateTrailingStops(env) {
           positionIdx: 0,
           stopLoss: String(roundTick(nextStop, pos.tickSize || 0.01)),
           slTriggerBy: 'LastPrice',
-        });
+        }, { retries: 1 });
         pos.stop = nextStop;
         moved++;
       } catch { /* 這次搬不動就算了，下次執行再試，不影響其他部位 */ }
