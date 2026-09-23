@@ -419,18 +419,36 @@ Bybit **模擬交易（Demo）** 帳戶自動送出一張市價單。刻意只�
 > 適合真錢自動化，接 Demo 只是為了讓你在不動用真錢的情況下，看到
 > 「自動下單這件事本身」運作起來會是什麼樣子。
 
+#### 為什麼需要 Executor
+
+Bybit 對美國地區的 IP 有整體封鎖（CloudFront 直接回「configured to block
+access from your country」），Cloudflare Worker 對外用的是共用、會變動的
+出口 IP，偶爾會被分配到判定成美國的節點，一旦分配到，查餘額、下單這些
+Bybit 私有 API 呼叫就會全部失敗。所以 Worker 本身**不直接呼叫 Bybit**，
+改成把已經算好的交易指令（數量、槓桿、停損、分批出場階梯）送給一個獨立
+部署的服務——**Bybit Executor**（`executor/` 資料夾），由它跑在固定 IP、
+非美國地區的 VPS 上，直接跟 Bybit 對話。Worker 那邊的策略邏輯完全沒變。
+
+詳細架構、API 規格、安全機制、部署步驟見 [`executor/README.md`](executor/README.md)。
+
 #### 設定
 
-1. 到 [bybit.com](https://www.bybit.com) 主站（不是 testnet.bybit.com）→
+1. **部署 Executor**：照 [`executor/README.md`](executor/README.md) 的步驟，
+   在一台非美國地區的 VPS 上把它架起來（`deploy/setup-vps.sh` 一鍵完成大部分
+   設定），並在前面加一層 HTTPS（例如 [Caddy](https://caddyserver.com/)）
+2. 到 [bybit.com](https://www.bybit.com) 主站（不是 testnet.bybit.com）→
    右上角帳號選單切換到 **模擬交易 / Demo Trading** → API 管理 → 建立 API Key
    - **只勾 Trade，絕對不要勾 Withdraw**
-2. 到 GitHub Repo → Settings → Secrets and variables → Actions → Secrets 分頁，新增：
-   - `BYBIT_DEMO_API_KEY`
-   - `BYBIT_DEMO_API_SECRET`
-   - `AUTO_TRADE_TOKEN`：自己隨便取一長串亂碼（不是 Bybit 的東西），
-     用來保護下面的開關網址，不要用容易猜到的字
-3. 到 **Actions → 部署 Cloudflare Worker → Run workflow** 重新部署一次，
-   讓這三個 secret 同步到 Worker
+   - 這組金鑰填進 Executor 的 `.env`（`BYBIT_API_KEY` / `BYBIT_API_SECRET`），
+     **不會**出現在 Cloudflare Worker 這邊
+3. 到 GitHub Repo → Settings → Secrets and variables → Actions → Secrets 分頁，新增：
+   - `EXECUTOR_URL`：Executor 的 HTTPS 網址（例如 `https://executor.你的網域.com`）
+   - `EXECUTOR_HMAC_SECRET`：跟 Executor `.env` 裡的 `EXECUTOR_HMAC_SECRET`
+     完全一樣的隨機字串（`openssl rand -hex 32` 產生）
+   - `AUTO_TRADE_TOKEN`：自己隨便取一長串亂碼，用來保護下面的開關網址，
+     不要用容易猜到的字
+4. 到 **Actions → 部署 Cloudflare Worker → Run workflow** 重新部署一次，
+   讓這幾個 secret 同步到 Worker
 
 #### 開關 —— 這是預設關閉的，設定完金鑰也不會自動開始下單
 

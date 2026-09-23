@@ -216,7 +216,7 @@ export function createTradePanel(deps) {
     el.innerHTML = `
       <div class="rows">
         <div class="row"><span>${isZh() ? '狀態' : 'Status'}</span><b class="${on ? 'down' : 'up'}">${on ? (isZh() ? '已開啟' : 'ON') : (isZh() ? '已關閉' : 'OFF')}</b></div>
-        <div class="row"><span>${isZh() ? 'Bybit Demo 金鑰' : 'Bybit Demo keys'}</span><b>${atStatus.hasKeys ? (isZh() ? '已設定' : 'set') : (isZh() ? '未設定' : 'missing')}</b></div>
+        <div class="row"><span>${isZh() ? 'Executor 連線' : 'Executor connection'}</span><b>${atStatus.hasKeys ? (isZh() ? '已設定' : 'set') : (isZh() ? '未設定' : 'missing')}</b></div>
         <div class="row"><span>${isZh() ? '每筆風險' : 'Risk per trade'}</span><b>${atStatus.riskPct}%</b></div>
         <div class="row"><span>${isZh() ? '槓桿（照評分）' : 'Leverage (by score)'}</span><b>${atStatus.leverageMin}x ~ ${atStatus.leverageMax}x</b></div>
       </div>
