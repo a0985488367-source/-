@@ -861,8 +861,10 @@ async function bybitHmac(secret, message) {
  *
  * 可重試的失敗只挑「明確知道請求根本沒被處理」的情況：網路層失敗（fetch
  * 丟例外／HTTP 5xx，這代表根本沒進到 Bybit 的撮合邏輯）跟 Bybit 自己的
- * 限流回應（retCode 10006／HTTP 429）——其他錯誤（餘額不足、參數不合法
- * 等）重試也不會變好，直接丟出去。
+ * 限流回應（retCode 10006／HTTP 429／HTTP 403——實測這個共用 IP 被限流時
+ * Bybit 不是每次都回 429，觀察到連續好幾小時幾乎每次都回 403，當作跟
+ * 429 一樣看待，不然重試邏輯在這種時候完全派不上用場）——其他錯誤（餘額
+ * 不足、參數不合法等）重試也不會變好，直接丟出去。
  */
 async function bybitCall(env, method, path, params = {}, { retries = 0 } = {}) {
   const apiKey = env.BYBIT_DEMO_API_KEY;
@@ -894,7 +896,12 @@ async function bybitCall(env, method, path, params = {}, { retries = 0 } = {}) {
         body,
       });
       if (!res.ok) {
-        if (res.status === 429 || res.status >= 500) {
+        // 403 也當作可重試：實測發現 Bybit 對這個共用 IP 觸發限流時，不是
+        // 每次都乖乖回 429——有時候回的是 403（很像 WAF／IP 信譽判斷擋下來
+        // 的，不是「這支 API Key 沒有權限」那種真的該直接放棄的 403）。
+        // 一段時間內（觀察到連續好幾小時）幾乎每一次呼叫都中，光靠原本
+        // 只認 429 的重試邏輯完全沒用，等於每一次呼叫都直接放棄。
+        if (res.status === 429 || res.status === 403 || res.status >= 500) {
           if (attempt < retries) { await new Promise((r) => setTimeout(r, 300 * (attempt + 1))); continue; }
         }
         throw new Error(`Bybit HTTP ${res.status}`);
