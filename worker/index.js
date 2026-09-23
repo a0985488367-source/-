@@ -82,6 +82,12 @@
  *             槓桿只影響「用多少保證金」，不影響「這筆最多虧多少錢」（停損永遠先決定風險
  *             金額），所以照評分調槓桿不會有「分數愈高賭愈大」的問題——這跟照評分調
  *             倉位大小是兩回事，倉位大小目前刻意維持固定 %，不分評分。
+ *   Variable  AUTO_TRADE_MAX_MARGIN_PCT  單筆最多佔用帳戶可用餘額的 %（預設 25）。
+ *             停損距離很近時，光靠 AUTO_TRADE_RISK_PCT 算出來的數量可能需要用掉
+ *             幾乎全部的保證金，變成一張單就把其他訊號的下單空間吃光；超過這個
+ *             上限會先試著拉高槓桿省保證金，還是不夠才縮小數量（縮小數量代表
+ *             這筆萬一真的停損出場，實際虧損會比 AUTO_TRADE_RISK_PCT 設定的更小，
+ *             方向保守，不會讓風險變大）。
  *   KV        SMC_KV 的 auto-trade:enabled 這個 key，預設不存在＝關閉
  *
  * 下單成功後會把這筆部位記進 SMC_KV（key 開頭 open-pos:），之後每次執行都
@@ -147,6 +153,7 @@ const DEFAULTS = {
   AUTO_TRADE_RISK_PCT: '1',
   AUTO_TRADE_LEVERAGE_MIN: '3',
   AUTO_TRADE_LEVERAGE_MAX: '10',
+  AUTO_TRADE_MAX_MARGIN_PCT: '25',
   WORKER_SCAN_ENABLED: 'false',
   WORKER_SCAN_TOP: '120',              // 候選池總大小：想涵蓋幾檔（循環一輪會全部算過）
   WORKER_SCAN_BATCH_SIZE: '20',        // 每次真的重新掃描只算這麼多檔，請求量才不會一次太密集
@@ -290,6 +297,18 @@ async function handleFetch(request, env) {
           .catch((e) => ({ error: e.message }));
       }
       const openPositions = env.SMC_KV ? await env.SMC_KV.list({ prefix: 'open-pos:' }).then((r) => r.keys.map((k) => k.name)) : [];
+      // ?detail=1 才會多花 KV 讀取把每筆追蹤中部位的完整內容（含分批出場
+      // 階梯 ladder、裡面每一段有沒有掛失敗的 error）印出來，排查「有停損
+      // 沒止盈」這種問題時不用再靠螢幕截圖用猜的，直接看得到是哪一段、
+      // 為什麼失敗。預設不帶，維持原本輕量、唯讀的行為。
+      const detail = url.searchParams.get('detail') === '1';
+      let positions;
+      if (detail && env.SMC_KV) {
+        positions = await Promise.all(openPositions.map(async (key) => {
+          const raw = await env.SMC_KV.get(key);
+          return raw ? JSON.parse(raw) : null;
+        }));
+      }
       return json({
         enabled: await isAutoTradeEnabled(env),
         hasKeys,
@@ -297,9 +316,11 @@ async function handleFetch(request, env) {
         riskPct: Number(cfg(env, 'AUTO_TRADE_RISK_PCT')),
         leverageMin: Number(cfg(env, 'AUTO_TRADE_LEVERAGE_MIN')),
         leverageMax: Number(cfg(env, 'AUTO_TRADE_LEVERAGE_MAX')),
+        maxMarginPct: Number(cfg(env, 'AUTO_TRADE_MAX_MARGIN_PCT')),
         wallet,
         trackedOpenPositions: openPositions.length,
         openPositions,
+        ...(detail ? { positions } : {}),
       });
     }
     if (url.pathname === '/auto-trade/on' || url.pathname === '/auto-trade/off') {
@@ -958,8 +979,30 @@ async function autoTradeOrder(env, hit) {
 
     const riskPct = Number(cfg(env, 'AUTO_TRADE_RISK_PCT'));
     const riskAmount = (accountSize * riskPct) / 100;
-    const qty = roundStep(riskAmount / perUnit, qtyStep);
+    let qty = roundStep(riskAmount / perUnit, qtyStep);
     if (qty < minQty) return { error: `算出數量 ${qty} 小於最小下單量 ${minQty}，可調高 AUTO_TRADE_RISK_PCT` };
+
+    // 風險金額（riskAmount）只保證「停損打到時最多虧多少」，沒限制「這一筆
+    // 要佔用多少保證金」——停損距離抓得很近時（例如 30m 週期常見的緊停損），
+    // 同樣的風險金額會除出很大的數量，算出來的保證金可能佔掉帳戶可用餘額
+    // 的絕大部分甚至全部，變成一張單就把其他訊號的下單空間吃光（實測出現
+    // 過 Discord 跳「[110007] ab not enough for new order」）。這裡限制
+    // 單筆最多佔用帳戶可用餘額的 AUTO_TRADE_MAX_MARGIN_PCT：先試著拉高槓桿
+    // （不超過合約本身上限）省保證金，還是不夠才縮小數量——縮小數量代表
+    // 這筆萬一真的停損出場，實際虧損會比 riskPct 設定的更小，方向保守，
+    // 不會讓風險變大，只是換成用更少的資金去換一樣的停損距離。
+    let leverage = Math.min(leverageForScore(env, r.score), maxLeverage);
+    const maxMarginPct = Number(cfg(env, 'AUTO_TRADE_MAX_MARGIN_PCT'));
+    const maxMargin = accountSize * (maxMarginPct / 100);
+    if (maxMargin > 0) {
+      let margin = (qty * r.entry) / leverage;
+      if (margin > maxMargin) {
+        leverage = Math.min(maxLeverage, Math.max(leverage, Math.ceil((qty * r.entry) / maxMargin)));
+        margin = (qty * r.entry) / leverage;
+        if (margin > maxMargin) qty = roundStep((maxMargin * leverage) / r.entry, qtyStep);
+      }
+    }
+    if (qty < minQty) return { error: `算出數量 ${qty} 小於最小下單量 ${minQty}（保證金上限 ${maxMarginPct}% 限制），可調高 AUTO_TRADE_MAX_MARGIN_PCT` };
 
     // 倉位大小要先確認「分批出場的階梯每一段都掛得了單」才進場——先算好
     // 這筆會用到的階梯，任何一段的數量四捨五入後低於最小下單量，就整筆
@@ -975,7 +1018,6 @@ async function autoTradeOrder(env, hit) {
       };
     }
 
-    const leverage = Math.min(leverageForScore(env, r.score), maxLeverage);
     await bybitCall(env, 'POST', '/v5/position/set-leverage', {
       category: 'linear', symbol: r.symbol, buyLeverage: String(leverage), sellLeverage: String(leverage),
     }, { retries: 1 }).catch((e) => { if (e.code !== 110043) throw e; }); // 已經是這個倍數，不算錯誤

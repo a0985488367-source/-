@@ -45,6 +45,10 @@ AUTO_TRADE_RISK_PCT = "5"
 # 槓桿照評分線性插值：評分等於 MIN_SCORE 給 MIN 倍，100 分給 MAX 倍
 AUTO_TRADE_LEVERAGE_MIN = "3"
 AUTO_TRADE_LEVERAGE_MAX = "10"
+# 停損距離很近時，光靠 AUTO_TRADE_RISK_PCT 算出來的數量可能需要用掉幾乎
+# 全部的保證金，變成一張單就把其他訊號的下單空間吃光；這裡限制單筆最多
+# 佔用可用餘額的這個 %，超過會先試著拉高槓桿省保證金，還是不夠才縮小數量
+AUTO_TRADE_MAX_MARGIN_PCT = "25"
 # Worker 自己即時掃描（需要 Workers Paid；開啟前留意對外部交易所 API 的
 # 請求量會增加，見 index.js 開頭的說明）。採分批架構：候選池 120 檔，
 # 每 10 分鐘只真的重新掃描其中 20 檔，結果累積進 KV，繞完一輪（120/20=6
