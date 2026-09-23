@@ -14,10 +14,11 @@ import { mulberry32 } from '../core/utils.js';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * 逾時／連線被中斷／429（限流）／5xx 都常常只是暫時性的（尤其從
- * Cloudflare Worker 的共用邊緣 IP 打出去，特別容易被交易所偶爾擋一下），
- * 失敗先重試一次、間隔 300ms 再打，能救回不少這類暫時性失敗；4xx（除了
- * 429，通常是網址或參數本身有問題）重試也沒用，直接丟出去。
+ * 逾時／連線被中斷／429（限流）／403／5xx 都常常只是暫時性的（尤其從
+ * Cloudflare Worker 的共用邊緣 IP 打出去，特別容易被交易所偶爾擋一下——
+ * 實測過某些交易所限流時回的不是 429 而是 403，當作一樣看待），失敗先
+ * 重試一次、間隔 300ms 再打，能救回不少這類暫時性失敗；4xx（除了 429／
+ * 403，通常是網址或參數本身有問題）重試也沒用，直接丟出去。
  */
 const J = async (url, { timeout = 12000, retries = 1 } = {}) => {
   for (let attempt = 0; ; attempt++) {
@@ -27,7 +28,7 @@ const J = async (url, { timeout = 12000, retries = 1 } = {}) => {
       const res = await fetch(url, { signal: ctl.signal, headers: { accept: 'application/json' } });
       if (res.ok) return await res.json();
       const err = new Error(`HTTP ${res.status}`);
-      err.retryable = res.status === 429 || res.status >= 500;
+      err.retryable = res.status === 429 || res.status === 403 || res.status >= 500;
       throw err;
     } catch (e) {
       if (attempt >= retries || e.retryable === false) throw e;

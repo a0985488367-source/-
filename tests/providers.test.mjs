@@ -21,6 +21,18 @@ test('遇到 5xx 會重試一次，重試後成功就正常回傳', async () => 
   assert.equal(out.symbol, 'BTCUSDT');
 });
 
+test('遇到 403 也一樣會重試（實測某些交易所限流時回的不是 429 而是 403）', async () => {
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    if (calls === 1) return { ok: false, status: 403 };
+    return { ok: true, json: async () => ({ retCode: 0, result: { list: [{ symbol: 'BTCUSDT', lastPrice: '1', price24hPcnt: '0', highPrice24h: '1', lowPrice24h: '1', turnover24h: '1' }] } }) };
+  };
+  const out = await PROVIDERS.bybit.fetchTicker('BTCUSDT');
+  assert.equal(calls, 2, '第一次 403 應該要重試一次');
+  assert.equal(out.symbol, 'BTCUSDT');
+});
+
 test('遇到 429（限流）一樣會重試', async () => {
   let calls = 0;
   globalThis.fetch = async () => {

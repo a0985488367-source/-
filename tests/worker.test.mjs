@@ -907,6 +907,46 @@ test('分批出場限價單第一次失敗會重試一次，重試後成功就�
   assert.ok(!pos.ladder.some((leg) => leg.error), '重試成功後不該還留著錯誤紀錄');
 });
 
+test('Bybit 用 HTTP 403 回應限流（不是每次都乖乖回 429）也一樣會重試，不會直接放棄', async () => {
+  // 實測踩過的坑：這個共用 IP 被 Bybit 限流時，觀察到連續好幾小時幾乎
+  // 每次呼叫都回 403，不是原本假設的 429——如果重試邏輯只認 429，遇到
+  // 這種情況就等於完全沒有重試機制在保護。這裡故意讓查餘額那一步先回
+  // 403，驗證重試一次後成功一樣能正常往下走、完成下單。
+  const discord = [];
+  const bybit = { calls: [], wallet: demoWallet, instrument: demoInstrument };
+  let walletAttempts = 0;
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    if (u.startsWith(MARKET_URL)) return new Response(JSON.stringify(makeMarket([row()])), { status: 200 });
+    if (u.includes('api.bybit.com/v5/market/tickers')) {
+      return new Response(JSON.stringify({ retCode: 0, retMsg: 'OK', result: { list: [{ symbol: 'ABCUSDT', lastPrice: '99.9' }] } }), { status: 200 });
+    }
+    if (u.includes('discord')) { discord.push(JSON.parse(init.body)); return new Response(null, { status: 204 }); }
+    if (u.includes('api-demo.bybit.com')) {
+      bybit.calls.push({ url: u, method: init.method, body: init.body ? JSON.parse(init.body) : null });
+      const bybitJson = (retCode, retMsg, result) => new Response(JSON.stringify({ retCode, retMsg, result }), { status: 200 });
+      if (u.includes('/v5/account/wallet-balance')) {
+        walletAttempts++;
+        if (walletAttempts === 1) return new Response('blocked', { status: 403 }); // 第一次先假裝被 403 擋掉
+        return bybitJson(0, 'OK', bybit.wallet);
+      }
+      if (u.includes('/v5/market/instruments-info')) return bybitJson(0, 'OK', bybit.instrument);
+      if (u.includes('/v5/position/set-leverage')) return bybitJson(0, 'OK', {});
+      if (u.includes('/v5/position/trading-stop')) return bybitJson(0, 'OK', {});
+      if (u.includes('/v5/order/create')) return bybitJson(0, 'OK', { orderId: 'order-123' });
+      throw new Error('未預期的 Bybit 端點：' + u);
+    }
+    throw new Error('未預期的請求：' + u);
+  };
+  const env = makeEnv({ BYBIT_DEMO_API_KEY: 'k', BYBIT_DEMO_API_SECRET: 's' });
+  await env.SMC_KV.put('auto-trade:enabled', 'true');
+  const out = await runWorker(env);
+  assert.equal(walletAttempts, 2, '第一次 403 應該要重試一次');
+  assert.equal(out.alerts, 1);
+  const field = discord[0].embeds[0].fields.find((f) => f.name.includes('自動下單'));
+  assert.match(field.value, /✅/, '重試成功後應該正常下單，不該被第一次的 403 擋住');
+});
+
 test('分批出場限價單重試後還是失敗：Discord 通知會示警，不會默默看起來像正常下單成功', async () => {
   const discord = [];
   const bybit = { calls: [], wallet: demoWallet, instrument: demoInstrument, orderError: null };
