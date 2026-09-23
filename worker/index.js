@@ -904,7 +904,13 @@ async function bybitCall(env, method, path, params = {}, { retries = 0 } = {}) {
         if (res.status === 429 || res.status === 403 || res.status >= 500) {
           if (attempt < retries) { await new Promise((r) => setTimeout(r, 300 * (attempt + 1))); continue; }
         }
-        throw new Error(`Bybit HTTP ${res.status}`);
+        // 重試還是失敗才值得花這個成本去讀 body——403 之前只丟 HTTP 狀態碼，
+        // 完全看不出來是「這個 IP 被擋」「這把 Key 沒權限」還是別的原因，
+        // 排查只能用猜的。夾帶一小段回應內容（截斷避免錯誤訊息爆炸）進
+        // 錯誤訊息，之後從 /auto-trade/status 的 wallet.error 就能直接看到
+        // Bybit（或擋在前面的 WAF）實際說了什麼。
+        const bodyText = await res.text().catch(() => '');
+        throw new Error(`Bybit HTTP ${res.status}${bodyText ? `：${bodyText.slice(0, 300)}` : ''}`);
       }
       const j = await res.json();
       if (j.retCode !== 0) {
