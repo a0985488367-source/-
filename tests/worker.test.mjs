@@ -1090,6 +1090,24 @@ test('算出的數量小於最小下單量：回報錯誤，但 Discord 照常�
   assert.equal(bybit.calls.find((c) => c.url.includes('order/create')), undefined, '數量不足就不該送出訂單');
 });
 
+test('分批出場階梯任何一段掛不了單（低於最小下單量）就整筆跳過，不會開出沒有止盈的裸部位', async () => {
+  // 實測踩過的坑：以前是「先開倉，掛腿單時哪一段太小就默默跳過那一段」，
+  // 極端情況下全部段都太小，整筆變成完全沒有止盈的裸部位。這裡故意讓
+  // 總量（qty=2）通過最小下單量檢查，但保本鏢那一段（34% ≈ 0.68 → 捨去
+  // 成 0.6）低於最小下單量（1），驗證整筆會直接跳過，連進場單都不會送。
+  const discord = [];
+  const bybit = { calls: [], wallet: demoWallet, instrument: { list: [{ ...demoInstrument.list[0], lotSizeFilter: { qtyStep: '0.1', minOrderQty: '1' } }] } };
+  const env = makeEnv({ BYBIT_DEMO_API_KEY: 'k', BYBIT_DEMO_API_SECRET: 's' });
+  await env.SMC_KV.put('auto-trade:enabled', 'true');
+  stubFetch({ market: makeMarket([row()]), prices: { ABCUSDT: 99.9 }, discord, bybit });
+  const out = await runWorker(env);
+  assert.equal(out.alerts, 1, '下單失敗不該擋住 Discord 通知');
+  const field = discord[0].embeds[0].fields.find((f) => f.name.includes('自動下單'));
+  assert.match(field.value, /❌/);
+  assert.equal(bybit.calls.find((c) => c.url.includes('order/create')), undefined, '任何一段掛不了單就整筆不該送出任何訂單，含進場單本身');
+  assert.equal(await env.SMC_KV.get('open-pos:ABCUSDT:long'), null, '沒有實際進場，就不該留下部位追蹤紀錄');
+});
+
 test('同一個進場區重複執行只會下單一次（跟 Discord 通知共用去重）', async () => {
   const discord = [];
   const bybit = { calls: [], wallet: demoWallet, instrument: demoInstrument };
