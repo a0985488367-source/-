@@ -180,6 +180,19 @@ export default {
   },
 
   async fetch(request, env) {
+    try {
+      return await handleFetch(request, env);
+    } catch (e) {
+      // 沒有這層以前，任何一個 route 裡沒接住的例外都會變成 Cloudflare
+      // 自己的「error code: 1101」錯誤頁——完全看不出是哪一行炸的，之前
+      // 至少踩過兩次這個坑，每次都要先用假資料在本機重現才找得到原因。
+      // 接住之後至少能直接看到真正的錯誤訊息跟 stack，不用再瞎猜。
+      return json({ error: e.message, stack: e.stack }, { status: 500 });
+    }
+  },
+};
+
+async function handleFetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === '/run') {
       const result = await run(env, { dry: url.searchParams.get('dry') === '1' });
@@ -310,14 +323,13 @@ export default {
         '  GET /auto-trade/off?token=xxx 關閉自動下單\n',
       { headers: { 'content-type': 'text/plain; charset=utf-8' } },
     );
-  },
-};
+}
 
 // App（跟這支 Worker不同網域）要能直接用 fetch() 打 /auto-trade/* 這幾個端點，
 // 才能在 App 裡放開關按鈕，不用手動貼網址；這裡的資訊本來就設計成公開唯讀
 // 或需要 token 才能寫，加開 CORS 不會多暴露什麼。
 const CORS_HEADERS = { 'access-control-allow-origin': '*' };
-const json = (o) => new Response(JSON.stringify(o, null, 2), { headers: { 'content-type': 'application/json; charset=utf-8', ...CORS_HEADERS } });
+const json = (o, init = {}) => new Response(JSON.stringify(o, null, 2), { ...init, headers: { 'content-type': 'application/json; charset=utf-8', ...CORS_HEADERS, ...init.headers } });
 
 /* ------------------------------------------------------------------ 主流程 */
 
