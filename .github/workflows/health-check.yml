@@ -1,0 +1,97 @@
+# 定期自我檢查 Worker 是否健康（唯讀，不會重新部署、不會動到任何設定）
+#
+# 跟 deploy-worker.yml 不一樣：這支只是定期打 /status 跟 /auto-trade/status
+# 兩個公開的唯讀端點，檢查有沒有出問題（Cloudflare 例外、市場資料太舊、
+# Bybit 呼叫持續失敗等），有問題就推播到 Discord（沿用既有的
+# DISCORD_WEBHOOK_URL／SMC secret，跟訊號通知同一個 webhook），不用等
+# 使用者自己發現「怎麼好像沒在跳通知」才知道要來查。
+#
+# 沿用跟 deploy-worker.yml 一樣的 Cloudflare 金鑰讀法（CF_API_TOKEN／
+# CLOUDFLARE_API_TOKEN 都接受），這裡只用來查 workers.dev 子網域組出
+# Worker 網址，不會拿去做任何寫入操作。
+name: 定期自我檢查 Worker
+
+on:
+  schedule:
+    - cron: '13 */2 * * *' # 每 2 小時檢查一次，故意避開整點分散負載
+  workflow_dispatch:
+
+concurrency:
+  group: worker-health-check
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 打 /status 跟 /auto-trade/status，檢查有沒有異常
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL || secrets.SMC }}
+        run: |
+          set -e
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::warning::讀不到 Cloudflare 金鑰，略過這次自我檢查"
+            exit 0
+          fi
+
+          SUB="$(curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain")"
+          HOST="$(printf '%s' "$SUB" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s||"{}").result?.subdomain||""))')"
+          if [ -z "$HOST" ]; then
+            echo "::warning::讀不到 workers.dev 子網域，略過這次自我檢查"
+            exit 0
+          fi
+          BASE="https://smc-signals.$HOST.workers.dev"
+
+          STATUS="$(curl -sS --max-time 20 "$BASE/status" || echo '')"
+          AUTOTRADE="$(curl -sS --max-time 20 "$BASE/auto-trade/status" || echo '')"
+
+          echo "--- /status ---"
+          echo "$STATUS"
+          echo "--- /auto-trade/status ---"
+          echo "$AUTOTRADE"
+
+          PROBLEMS_JSON="$(node -e '
+            const [statusRaw, autoRaw] = process.argv.slice(1);
+            const problems = [];
+            let status = null, auto = null;
+            if (!statusRaw) { problems.push("/status 完全連不上（逾時或網路失敗）"); }
+            else { try { status = JSON.parse(statusRaw); } catch { problems.push("/status 回應不是 JSON（可能是 Cloudflare 例外頁面）"); } }
+            if (!autoRaw) { problems.push("/auto-trade/status 完全連不上（逾時或網路失敗）"); }
+            else { try { auto = JSON.parse(autoRaw); } catch { problems.push("/auto-trade/status 回應不是 JSON（可能是 Cloudflare 例外頁面）"); } }
+            if (status?.error) problems.push("/status 本身回報例外：" + status.error);
+            if (status?.market?.error) problems.push("讀取市場資料失敗：" + status.market.error);
+            if (typeof status?.market?.ageMinutes === "number" && status.market.ageMinutes > 240) {
+              problems.push("市場資料已經 " + status.market.ageMinutes + " 分鐘沒更新");
+            }
+            if (auto?.error) problems.push("/auto-trade/status 本身回報例外：" + auto.error);
+            if (auto?.wallet?.error) problems.push("查 Bybit 帳戶餘額失敗：" + auto.wallet.error);
+            console.log(JSON.stringify(problems));
+          ' "$STATUS" "$AUTOTRADE")"
+
+          echo "--- 檢查結果 ---"
+          echo "$PROBLEMS_JSON"
+
+          COUNT="$(printf '%s' "$PROBLEMS_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(String(JSON.parse(s).length))}catch{process.stdout.write("0")}})')"
+          if [ "$COUNT" = "0" ]; then
+            echo "✅ 自我檢查正常，沒有發現異常"
+            exit 0
+          fi
+
+          echo "::warning::自我檢查發現 $COUNT 個異常"
+          if [ -n "$WEBHOOK" ]; then
+            BODY="$(node -e '
+              const problems = JSON.parse(process.argv[1]);
+              const text = "⚠️ **系統自我檢查發現異常**\n" + problems.map((p) => "- " + p).join("\n");
+              console.log(JSON.stringify({ username: "SMC 系統自檢", content: text.slice(0, 1900) }));
+            ' "$PROBLEMS_JSON")"
+            curl -sS -X POST -H "Content-Type: application/json" -d "$BODY" "$WEBHOOK" >/dev/null || true
+          fi
+          exit 1
