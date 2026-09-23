@@ -338,6 +338,20 @@ test('WORKER_SCAN_ENABLED 關閉（預設）時，還是照舊讀 data/market.js
   assert.equal(out.alerts, 1, '預設行為不該被這次改動影響');
 });
 
+test('任何 route 裡沒接住的例外都會變成看得懂的 JSON 錯誤，不是 Cloudflare 自己的 error code 1101', async () => {
+  // 實測踩過兩次：某個 route 裡有一行沒被接住的例外，會直接變成
+  // Cloudflare 自己的「error code: 1101」錯誤頁，完全看不出是哪裡炸的。
+  // 這裡故意讓 data/market.json 的請求丟一個跟「HTTP 狀態碼」無關的
+  // 例外（模擬網路層真的斷線，不是 4xx/5xx），驗證頂層有接住、回傳的是
+  // 看得懂 JSON（帶 error 訊息），不是一片空白的錯誤頁。
+  const env = makeEnv();
+  globalThis.fetch = async () => { throw new Error('模擬網路層炸裂'); };
+  const res = await worker.fetch(new Request('https://w.test/run'), env);
+  assert.equal(res.status, 500);
+  const out = await res.json();
+  assert.match(out.error, /模擬網路層炸裂/);
+});
+
 test('還沒輪到下一批時，直接沿用累積結果，不會真的重新掃描', async () => {
   const discord = [];
   const env = makeEnv({ WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_PROVIDERS: 'demo', WORKER_SCAN_BATCH_INTERVAL_MIN: '15' });
