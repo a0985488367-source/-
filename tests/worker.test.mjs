@@ -878,6 +878,42 @@ test('分批出場限價單第一次失敗會重試一次，重試後成功就�
   assert.ok(!pos.ladder.some((leg) => leg.error), '重試成功後不該還留著錯誤紀錄');
 });
 
+test('分批出場限價單重試後還是失敗：Discord 通知會示警，不會默默看起來像正常下單成功', async () => {
+  const discord = [];
+  const bybit = { calls: [], wallet: demoWallet, instrument: demoInstrument, orderError: null };
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    if (u.startsWith(MARKET_URL)) return new Response(JSON.stringify(makeMarket([row()])), { status: 200 });
+    if (u.includes('api.bybit.com/v5/market/tickers')) {
+      return new Response(JSON.stringify({ retCode: 0, retMsg: 'OK', result: { list: [{ symbol: 'ABCUSDT', lastPrice: '99.9' }] } }), { status: 200 });
+    }
+    if (u.includes('discord')) { discord.push(JSON.parse(init.body)); return new Response(null, { status: 204 }); }
+    if (u.includes('api-demo.bybit.com')) {
+      bybit.calls.push({ url: u, method: init.method, body: init.body ? JSON.parse(init.body) : null });
+      const bybitJson = (retCode, retMsg, result) => new Response(JSON.stringify({ retCode, retMsg, result }), { status: 200 });
+      if (u.includes('/v5/account/wallet-balance')) return bybitJson(0, 'OK', bybit.wallet);
+      if (u.includes('/v5/market/instruments-info')) return bybitJson(0, 'OK', bybit.instrument);
+      if (u.includes('/v5/position/set-leverage')) return bybitJson(0, 'OK', {});
+      if (u.includes('/v5/position/trading-stop')) return bybitJson(0, 'OK', {});
+      if (u.includes('/v5/order/create')) {
+        const body = JSON.parse(init.body);
+        if (body.orderType === 'Limit') return bybitJson(10006, 'still limited', {}); // 一直被限流，重試也救不回來
+        return bybitJson(0, 'OK', { orderId: 'entry-order' });
+      }
+      throw new Error('未預期的 Bybit 端點：' + u);
+    }
+    throw new Error('未預期的請求：' + u);
+  };
+  const env = makeEnv({ BYBIT_DEMO_API_KEY: 'k', BYBIT_DEMO_API_SECRET: 's' });
+  await env.SMC_KV.put('auto-trade:enabled', 'true');
+  await runWorker(env);
+
+  const field = discord[0].embeds[0].fields.find((f) => f.name.includes('自動下單'));
+  assert.match(field.value, /⚠️.*掛不上/, '出場單掛不上應該在通知裡示警，不能只顯示「已送出市價單」看起來一切正常');
+  const pos = JSON.parse(await env.SMC_KV.get('open-pos:ABCUSDT:long'));
+  assert.ok(pos.ladder.some((leg) => leg.error), '掛失敗的那一段應該留著錯誤紀錄，之後才能被自動補掛邏輯撿到');
+});
+
 test('槓桿照評分線性插值：高分給接近上限的槓桿，低分給接近下限的槓桿', async () => {
   const discord = [];
   const bybit = { calls: [], wallet: demoWallet, instrument: demoInstrument };
@@ -1064,6 +1100,47 @@ test('空單方向：獲利到 0.5R 停損往下移到成本價', async () => {
   assert.ok(stopCall);
   // 成本價 - risk*0.05 = 100 - 0.25 = 99.75
   assert.equal(stopCall.body.stopLoss, '99.75');
+});
+
+test('追蹤中的部位如果有分批出場單當初掛失敗，之後每次執行都會自動重試補掛', async () => {
+  // 實測踩過的坑：開倉當下驗證過數量沒問題，但實際掛單時還是可能因為
+  // 限流／網路暫時失敗，失敗就記在 ladder 那一段的 error 欄位、以前沒人
+  // 再處理——變成部位有停損卻缺了出場計畫。這裡驗證 updateTrailingStops()
+  // 會把這種留著 error 的段重新掛一次。
+  const discord = [];
+  const env = makeEnv({ BYBIT_DEMO_API_KEY: 'k', BYBIT_DEMO_API_SECRET: 's' });
+  await env.SMC_KV.put('open-pos:ABCUSDT:long', JSON.stringify({
+    symbol: 'ABCUSDT', dir: 'long', entry: 100, stop: 95, initialStop: 95, tickSize: 0.01,
+    maxFavorableR: 0, beMoved: false, trailing: false, qty: 2, riskAmount: 10, leverage: 5, grade: 'A', score: 75,
+    ladder: [{ name: 'TP1', price: 110, fraction: 1, qty: 2, error: 'Bybit [10006] rate limited' }],
+  }));
+  const bybit = { calls: [], positions: [{ symbol: 'ABCUSDT', side: 'Buy', size: '2' }] };
+  stubFetch({ market: makeMarket([]), prices: { ABCUSDT: 101 }, discord, bybit });
+  const out = await runWorker(env);
+  const legCall = bybit.calls.find((c) => c.url.includes('/v5/order/create') && c.body.orderType === 'Limit');
+  assert.ok(legCall, '應該重新嘗試掛出當初失敗的那一段');
+  assert.equal(legCall.body.reduceOnly, true);
+  assert.equal(legCall.body.price, '110');
+  const pos = JSON.parse(await env.SMC_KV.get('open-pos:ABCUSDT:long'));
+  assert.equal(pos.ladder[0].error, undefined, '補掛成功後不該還留著錯誤紀錄');
+  assert.equal(pos.ladder[0].orderId, 'order-123');
+  assert.equal(out.trailingStops.legsRepaired, 1);
+});
+
+test('補掛還是失敗：留著錯誤紀錄等下次執行再試，不影響其他部位邏輯', async () => {
+  const discord = [];
+  const env = makeEnv({ BYBIT_DEMO_API_KEY: 'k', BYBIT_DEMO_API_SECRET: 's' });
+  await env.SMC_KV.put('open-pos:ABCUSDT:long', JSON.stringify({
+    symbol: 'ABCUSDT', dir: 'long', entry: 100, stop: 95, initialStop: 95, tickSize: 0.01,
+    maxFavorableR: 0, beMoved: false, trailing: false, qty: 2, riskAmount: 10, leverage: 5, grade: 'A', score: 75,
+    ladder: [{ name: 'TP1', price: 110, fraction: 1, qty: 2, error: 'Bybit [10006] rate limited' }],
+  }));
+  const bybit = { calls: [], positions: [{ symbol: 'ABCUSDT', side: 'Buy', size: '2' }], orderError: { code: 10006, msg: 'still limited' } };
+  stubFetch({ market: makeMarket([]), prices: { ABCUSDT: 101 }, discord, bybit });
+  const out = await runWorker(env);
+  const pos = JSON.parse(await env.SMC_KV.get('open-pos:ABCUSDT:long'));
+  assert.ok(pos.ladder[0].error, '再次失敗應該還是留著錯誤，等下次執行再試');
+  assert.equal(out.trailingStops.legsRepaired, 0);
 });
 
 test('dry 模式不會去查有沒有平倉，也不會動到追蹤紀錄', async () => {
