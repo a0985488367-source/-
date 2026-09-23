@@ -1,0 +1,24 @@
+# 暫時性診斷工具，用完就會刪掉：測試 GitHub Actions runner（跟 Cloudflare
+# Worker 不同網路路徑）能不能連到 api-demo.bybit.com，藉此判斷 CloudFront
+# 地理封鎖是只針對 Cloudflare Worker 的共用 IP，還是更廣泛地擋掉一般雲端
+# 機房的 IP。
+name: 暫時診斷 - Bybit 網路測試
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: 測試 api-demo.bybit.com 跟 api.bybit.com
+        run: |
+          echo "=== api-demo.bybit.com/v5/market/time（Demo 交易用的 host）==="
+          curl -sS -m 10 -w "\nHTTP_STATUS:%{http_code}\n" "https://api-demo.bybit.com/v5/market/time" || echo "curl 失敗：$?"
+          echo ""
+          echo "=== api.bybit.com/v5/market/time（一般公開 host，跟市場掃描共用）==="
+          curl -sS -m 10 -w "\nHTTP_STATUS:%{http_code}\n" "https://api.bybit.com/v5/market/time" || echo "curl 失敗：$?"
+          echo ""
+          echo "=== GitHub Actions runner 對外看起來是哪個地區/IP ==="
+          curl -sS -m 10 "https://ipinfo.io/json" || echo "curl 失敗：$?"
