@@ -151,6 +151,19 @@ jobs:
               [ -n "$PROBE_ID" ] && curl -sS -X DELETE -H "Authorization: Bearer $GOOD" \
                 "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/storage/kv/namespaces/$PROBE_ID" >/dev/null
               echo "✅ 也確認建得起 KV 命名空間（測試用的已經刪除）"
+            elif printf '%s' "$CREATE" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.exit((JSON.parse(s).errors||[]).some(e=>e.code===10014)?0:1)}catch{process.exit(1)}})'; then
+              # 錯誤代碼 10014＝「同名命名空間已存在」，代表上一次執行中途
+              # 被中斷、建立成功但沒跑到刪除那一步，殘留到這次——這件事本身
+              # 已經證明 Edit 權限沒問題（沒有 Edit 權限根本建不出這個殘留），
+              # 不該被誤判成「權限只有讀取」而擋住整次部署。把殘留的清掉、
+              # 當作驗證通過繼續往下跑，下次也不會再被同一個殘留卡住。
+              echo "ℹ️ 上次測試用的命名空間沒清乾淨、還留著——這本身就證明 Edit 權限沒問題，先清掉再繼續"
+              STALE_ID="$(curl -sS -H "Authorization: Bearer $GOOD" \
+                "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/storage/kv/namespaces?per_page=100" \
+                | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const hit=(JSON.parse(s).result||[]).find(n=>n.title==="smc-signals-permission-probe");process.stdout.write(hit?hit.id:"")}catch{process.stdout.write("")}})')"
+              [ -n "$STALE_ID" ] && curl -sS -X DELETE -H "Authorization: Bearer $GOOD" \
+                "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/storage/kv/namespaces/$STALE_ID" >/dev/null
+              echo "✅ 也確認建得起 KV 命名空間（先前殘留的測試命名空間已清掉）"
             else
               printf '%s' "$CREATE" | why
               echo "::error::Token 讀得到 KV 清單，但建不了新的命名空間。這代表 Workers KV Storage 這條權限的等級被設成了「讀取」，需要改成「編輯」。請到 https://dash.cloudflare.com/profile/api-tokens 打開這把 Token 的 Edit，把 Workers KV Storage 那一列右邊的等級從 Read 改成 Edit，然後往下按 Save（不用重新複製貼上，等級本身改變不會產生新的 Token 字串）。"
