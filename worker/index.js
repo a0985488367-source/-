@@ -941,6 +941,20 @@ async function autoTradeOrder(env, hit) {
     const qty = roundStep(riskAmount / perUnit, qtyStep);
     if (qty < minQty) return { error: `算出數量 ${qty} 小於最小下單量 ${minQty}，可調高 AUTO_TRADE_RISK_PCT` };
 
+    // 倉位大小要先確認「分批出場的階梯每一段都掛得了單」才進場——先算好
+    // 這筆會用到的階梯，任何一段的數量四捨五入後低於最小下單量，就整筆
+    // 跳過，不要開倉。以前的行為是先開倉，掛腿單時個別跳過太小的那一段
+    // （甚至可能全部段都太小、整筆變成完全沒有止盈的裸部位），跟「進場了
+    // 就該有完整的出場計畫」的預期不符，乾脆一開始就不要進這種倉位大小。
+    const ladder = ladderWithAbsoluteFractions(buildLadder(r.entry, r.stop, r.targets, DEFAULT_MANAGEMENT));
+    const legQtys = ladder.map((leg) => roundStep(qty * (leg.fraction || 0), qtyStep));
+    const tooSmallLeg = legQtys.findIndex((legQty) => !(legQty >= minQty));
+    if (tooSmallLeg >= 0) {
+      return {
+        error: `倉位太小（數量 ${qty}），分批出場階梯的「${ladder[tooSmallLeg].name}」那一段只有 ${legQtys[tooSmallLeg]}，低於最小下單量 ${minQty}，跳過這筆進場`,
+      };
+    }
+
     const leverage = Math.min(leverageForScore(env, r.score), maxLeverage);
     await bybitCall(env, 'POST', '/v5/position/set-leverage', {
       category: 'linear', symbol: r.symbol, buyLeverage: String(leverage), sellLeverage: String(leverage),
@@ -976,12 +990,12 @@ async function autoTradeOrder(env, hit) {
     // 交易所自己成交，不用等 Worker 下次輪詢才發現、才補下單。這裡允許
     // 重試一次：跟進場單不同，reduce-only 限價單就算意外重複送出，最多
     // 也只是同一個價位多一張限價單，Bybit 會依實際持倉量限制成交，不會
-    // 讓倉位不小心反向或超賣，風險遠比重試進場單低。
-    const ladder = ladderWithAbsoluteFractions(buildLadder(r.entry, r.stop, r.targets, DEFAULT_MANAGEMENT));
+    // 讓倉位不小心反向或超賣，風險遠比重試進場單低。ladder/legQtys 用
+    // 進場前就驗證過的那一份，這裡不用再重算、也不用再擔心量不夠。
     const legOrders = [];
-    for (const leg of ladder) {
-      const legQty = roundStep(qty * (leg.fraction || 0), qtyStep);
-      if (!(legQty >= minQty)) continue; // 比例太小、算出來的量掛不了單就跳過這一段
+    for (let i = 0; i < ladder.length; i++) {
+      const leg = ladder[i];
+      const legQty = legQtys[i];
       try {
         const legOrder = await bybitCall(env, 'POST', '/v5/order/create', {
           category: 'linear',
