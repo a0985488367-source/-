@@ -721,6 +721,23 @@ test('/auto-trade/status 補上帳戶餘額跟追蹤中的部位數，方便排�
   assert.deepEqual(out.openPositions.sort(), ['open-pos:BTCUSDT:long', 'open-pos:ETHUSDT:short']);
 });
 
+test('查餘額重試後還是 403：錯誤訊息會夾帶一小段回應內容，不會只顯示看不出原因的狀態碼', async () => {
+  // 實測踩過的坑：403 持續好幾個小時、重試也救不回來，但原本的錯誤訊息
+  // 只有「Bybit HTTP 403」，完全看不出來是被 Bybit 擋、還是被擋在它前面
+  // 的 WAF 擋、或者其他原因，排查只能用猜的。這裡驗證夾帶的回應內容會
+  // 出現在最後回傳的錯誤訊息裡。
+  const env = makeEnv({ BYBIT_DEMO_API_KEY: 'k', BYBIT_DEMO_API_SECRET: 's' });
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes('/v5/account/wallet-balance')) return new Response('IP address is not in whitelist', { status: 403 });
+    throw new Error('未預期的請求：' + u);
+  };
+  const res = await worker.fetch(new Request('https://w.test/auto-trade/status'), env);
+  const out = await res.json();
+  assert.match(out.wallet.error, /Bybit HTTP 403/);
+  assert.match(out.wallet.error, /IP address is not in whitelist/, '要能看到 Bybit 實際回了什麼內容，不是只有狀態碼');
+});
+
 test('/auto-trade/status?detail=1 會多列出每筆追蹤中部位的完整內容，方便排查「有停損沒止盈」', async () => {
   const env = makeEnv({ BYBIT_DEMO_API_KEY: 'k', BYBIT_DEMO_API_SECRET: 's' });
   stubFetch({
