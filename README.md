@@ -436,6 +436,7 @@ Bybit **模擬交易（Demo）** 帳戶自動送出一張市價單。刻意只�
 
 ```
 https://smc-signals.<你的子網域>.workers.dev/auto-trade/status         查看目前開/關（唯讀，不用 token）
+https://smc-signals.<你的子網域>.workers.dev/auto-trade/status?detail=1 同上，再列出每筆追蹤中部位的完整內容（含分批出場階梯每一段有沒有掛失敗）
 https://smc-signals.<你的子網域>.workers.dev/auto-trade/on?token=xxx   開啟
 https://smc-signals.<你的子網域>.workers.dev/auto-trade/off?token=xxx  關閉
 ```
@@ -456,6 +457,12 @@ Worker）」卡片，填一次 Worker 網址跟 token（只存這台裝置，不
   的合約類別一致），打不到才退到 Binance，兩者都失敗最後退到 OKX
 - 數量 = Demo 帳戶目前可用餘額 × `AUTO_TRADE_RISK_PCT`（**固定值，
   不分評分高低**）÷ 停損距離，市價進場單一律帶停損
+- **單筆保證金上限**：停損距離很近時，光靠上面那個公式算出來的數量可能
+  需要用掉幾乎全部的可用保證金，變成一張單就把其他訊號的下單空間吃光。
+  `AUTO_TRADE_MAX_MARGIN_PCT` 限制單筆最多佔用可用餘額的這個 %——超過會
+  先試著拉高槓桿（不超過合約上限）省保證金，還是不夠才縮小數量；縮小
+  數量代表這筆萬一真的停損出場，實際虧損會比 `AUTO_TRADE_RISK_PCT` 設定
+  的更小，方向保守，不會讓風險變大
 - **出場套用本文開頭「部位管理」那段 A/B 實測驗證過的同一組規則**
   （`src/smc/manage.js`，跟回測、模擬盤追蹤共用同一份常數，不是另外憑感覺
   調的）：開倉當下就把「保本鏢（+0.5R 出場 34%）＋ 原本的目標價」一次掛成
@@ -487,6 +494,7 @@ Worker）」卡片，填一次 Worker 網址跟 token（只存這台裝置，不
 | `AUTO_TRADE_RISK_PCT` | 5 | 每筆風險占 Demo 帳戶可用餘額的 %（調高會讓單筆賺賠都放大，同時能同時撐住的倉位數會變少） |
 | `AUTO_TRADE_LEVERAGE_MIN` | 3 | 評分等於 `MIN_SCORE` 時用的槓桿倍數 |
 | `AUTO_TRADE_LEVERAGE_MAX` | 10 | 評分 100 分時用的槓桿倍數 |
+| `AUTO_TRADE_MAX_MARGIN_PCT` | 25 | 單筆最多佔用可用餘額的 %，避免停損很近時一張單吃光整個帳戶的保證金 |
 
 ### 每日晨報
 
