@@ -445,6 +445,12 @@ https://smc-signals.<你的子網域>.workers.dev/auto-trade/off?token=xxx  關�
 主畫面，當作隨時可以按的緊急煞車——不用改任何程式碼或金鑰，開一個網頁
 就能整個關掉。
 
+**定期自我檢查**：`.github/workflows/health-check.yml` 每 2 小時會自動打一次
+`/status` 跟 `/auto-trade/status`，檢查有沒有 Cloudflare 例外、市場資料太舊、
+Bybit 呼叫持續失敗等異常，有問題會直接推播到 Discord（沿用同一個
+webhook），不用等到自己發現「怎麼好像沒在跳通知」才想到要來查。這支
+工作流程只讀不寫，不會動到任何設定，也可以在 Actions 分頁手動執行一次。
+
 **或者直接在 App 裡開關**：「下單」分頁最下面有一張「自動下單（Cloudflare
 Worker）」卡片，填一次 Worker 網址跟 token（只存這台裝置，不會上傳），
 之後就能直接在 App 裡看狀態、按按鈕開關，不用記網址。
