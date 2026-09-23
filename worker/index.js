@@ -788,7 +788,15 @@ function buildEmbed({ row: r, price }, market, autoTrade) {
 function autoTradeText(t) {
   if (t.skipped === 'no-keys') return '⏭️ 尚未設定 BYBIT_DEMO_API_KEY／SECRET，已略過';
   if (t.error) return `❌ ${t.error}`;
-  return `✅ 已送出市價單 · 數量 ${t.qty} · ${t.leverage}x 槓桿 · 這筆最多虧 ${fmt(t.riskAmount)} USDT`;
+  // 進場前雖然已經驗證過每一段出場單的數量都掛得上，但實際掛單當下還是
+  // 可能因為限流／網路暫時失敗（跟數量大小無關）。這種情況停損已經生效，
+  // 缺的只是出場計畫，updateTrailingStops() 之後每次執行都會自動重試補掛
+  // ——這裡先在通知裡示警，讓人不用等下一次才發現這筆還沒補齊。
+  const failedLegs = (t.ladder || []).filter((l) => l.error);
+  const warn = failedLegs.length
+    ? `\n⚠️ ${failedLegs.length} 段出場單掛不上（${failedLegs.map((l) => l.name).join('、')}），停損已生效，之後每次執行會自動重試補掛`
+    : '';
+  return `✅ 已送出市價單 · 數量 ${t.qty} · ${t.leverage}x 槓桿 · 這筆最多虧 ${fmt(t.riskAmount)} USDT${warn}`;
 }
 
 async function postDiscord(env, payload) {
@@ -1093,20 +1101,53 @@ async function checkClosedPositions(env) {
  * DEFAULT_MANAGEMENT）：
  *   maxFavorableR ≥ breakevenAtR（0.5）→ 停損搬到成本價 + 0.05R（多單）
  *   maxFavorableR ≥ trailFromR（1.5）  → 停損跟著最高獲利走，距離 0.8R
- * 停損只會愈移愈緊，不會反向鬆開；分批出場的限價單開倉當下就掛好了，
- * 不需要在這裡處理。
+ * 停損只會愈移愈緊，不會反向鬆開。
+ *
+ * 分批出場的限價單開倉當下就掛好了，但實測發生過掛單當下失敗（限流／
+ * 網路），失敗就記在 ladder 那一段的 error 欄位、之後沒人再管——變成
+ * 部位有停損卻缺了某幾段（甚至全部）出場計畫，直到人工發現。這裡每次
+ * 執行都會檢查 ladder 裡還留著 error 的那幾段，重新掛一次：當初失敗
+ * 通常只是暫時性的，這個呼叫本身也是冪等的 reduce-only 限價單，重掛
+ * 不會有副作用，掛成功就把 error 欄位清掉、失敗就留著等下一次執行再試。
  */
 async function updateTrailingStops(env) {
-  if (!env.SMC_KV || !env.BYBIT_DEMO_API_KEY || !env.BYBIT_DEMO_API_SECRET) return { checked: 0, moved: 0 };
+  if (!env.SMC_KV || !env.BYBIT_DEMO_API_KEY || !env.BYBIT_DEMO_API_SECRET) return { checked: 0, moved: 0, legsRepaired: 0 };
   const tracked = await env.SMC_KV.list({ prefix: 'open-pos:' });
-  if (!tracked.keys.length) return { checked: 0, moved: 0 };
+  if (!tracked.keys.length) return { checked: 0, moved: 0, legsRepaired: 0 };
 
   const positions = [];
   for (const { name: key } of tracked.keys) {
     const raw = await env.SMC_KV.get(key);
     if (raw) positions.push({ key, pos: JSON.parse(raw) });
   }
-  if (!positions.length) return { checked: 0, moved: 0 };
+  if (!positions.length) return { checked: 0, moved: 0, legsRepaired: 0 };
+
+  let legsRepaired = 0;
+  for (const { key, pos } of positions) {
+    const failedLegs = (pos.ladder || []).map((leg, i) => ({ leg, i })).filter(({ leg }) => leg.error);
+    if (!failedLegs.length) continue;
+    let changed = false;
+    for (const { leg, i } of failedLegs) {
+      try {
+        const legOrder = await bybitCall(env, 'POST', '/v5/order/create', {
+          category: 'linear',
+          symbol: pos.symbol,
+          side: pos.dir === 'long' ? 'Sell' : 'Buy',
+          orderType: 'Limit',
+          qty: String(leg.qty),
+          price: String(roundTick(leg.price, pos.tickSize || 0.01)),
+          reduceOnly: true,
+          timeInForce: 'GTC',
+        }, { retries: 1 });
+        pos.ladder[i] = { name: leg.name, price: leg.price, fraction: leg.fraction, qty: leg.qty, orderId: legOrder?.orderId };
+        changed = true;
+        legsRepaired++;
+      } catch (e) {
+        pos.ladder[i] = { name: leg.name, price: leg.price, fraction: leg.fraction, qty: leg.qty, error: e.message };
+      }
+    }
+    if (changed) await env.SMC_KV.put(key, JSON.stringify(pos));
+  }
 
   const prices = await getPrices(positions.map(({ pos }) => pos.symbol));
   let moved = 0;
@@ -1149,7 +1190,7 @@ async function updateTrailingStops(env) {
     }
     await env.SMC_KV.put(key, JSON.stringify(pos));
   }
-  return { checked: positions.length, moved };
+  return { checked: positions.length, moved, legsRepaired };
 }
 
 function buildCloseEmbed(pos, exitPrice) {
