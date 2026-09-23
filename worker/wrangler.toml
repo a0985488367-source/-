@@ -13,8 +13,10 @@
 #   Secret        DISCORD_WEBHOOK_URL
 #   KV binding    SMC_KV（用來記住已通知過的標的）
 #
-# 選用：自動下單（Demo 模擬交易，預設關閉，細節見 index.js 開頭的說明）
-#   Secret        BYBIT_DEMO_API_KEY / BYBIT_DEMO_API_SECRET / AUTO_TRADE_TOKEN
+# 選用：自動下單（Demo 模擬交易，預設關閉，細節見 index.js 開頭的說明）。
+# Worker 自己不直接呼叫 Bybit（美國地區的 IP 會被 Bybit 整個擋掉），改打
+# 獨立部署的 Bybit Executor 服務（見 executor/ 資料夾跟它自己的 README）
+#   Secret        EXECUTOR_URL / EXECUTOR_HMAC_SECRET / AUTO_TRADE_TOKEN
 #
 # 選用：Worker 自己即時掃描（需要 Workers Paid，細節見 index.js 開頭的說明）
 #   Variable      WORKER_SCAN_ENABLED / WORKER_SCAN_TOP / WORKER_SCAN_BATCH_SIZE /

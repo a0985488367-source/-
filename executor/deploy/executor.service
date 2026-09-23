@@ -1,0 +1,28 @@
+[Unit]
+Description=SMC Bybit Executor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 依實際部署路徑調整；setup-vps.sh 預設會部署到這個路徑
+WorkingDirectory=/opt/smc-executor/executor
+EnvironmentFile=/opt/smc-executor/executor/.env
+ExecStart=/usr/bin/node src/server.js
+Restart=on-failure
+RestartSec=5
+# 崩潰重啟不該無限迴圈刷 log；10 次都失敗代表環境本身有問題，
+# 需要人工介入，不是重啟能解決的
+StartLimitIntervalSec=600
+StartLimitBurst=10
+
+# 基本的權限收斂：不需要 root、不需要寫入除了自己資料夾以外的地方
+User=smc-executor
+Group=smc-executor
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/smc-executor/executor/data
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,13 @@
+{
+  "name": "smc-bybit-executor",
+  "version": "1.0.0",
+  "description": "獨立的 Bybit 下單執行服務——部署在固定 IP、非受限制地區的 VPS，接收 Cloudflare Worker 送來的交易指令，直接呼叫 Bybit API（Cloudflare Worker 自己打 Bybit 會被地理封鎖，見專案根目錄 README「為什麼需要 Executor」）",
+  "type": "module",
+  "private": true,
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": { "node": ">=20" }
+}

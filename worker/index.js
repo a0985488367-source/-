@@ -73,9 +73,29 @@
  * 刻意只接 Demo（假錢）：這是為了先驗證整條自動下單的管線本身有沒有問題，
  * 不是為了真的用真錢自動交易 —— 之後真的要接真錢，需要另外、更謹慎地評估。
  *
- *   Secret    BYBIT_DEMO_API_KEY     Bybit 主站「模擬交易」的 API Key
- *   Secret    BYBIT_DEMO_API_SECRET  對應的 API Secret（只勾 Trade，絕對不要勾 Withdraw）
- *   Secret    AUTO_TRADE_TOKEN       自己取一串亂碼，用來保護下面的開關網址
+ * ⚠️ Worker 自己不會直接呼叫 Bybit 私有 API：Bybit 對美國地區的 IP 有整體
+ * 封鎖（CloudFront 回「configured to block access from your country」），
+ * Cloudflare Worker 的共用出口 IP 偶爾會被分配到判定成美國的節點，一旦
+ * 分配到，查餘額／下單這些私有 API 呼叫就會全部失敗。改成透過一個獨立
+ * 部署的服務（見 executor/ 資料夾、它自己的 README）：
+ *
+ *   Worker（掃描訊號、判斷策略、算好倉位大小跟出場階梯、Discord 通知）
+ *     │  HTTPS + HMAC-SHA256 簽章
+ *     ▼
+ *   Bybit Executor（部署在固定 IP、非美國地區的 VPS，Bybit API Key 只放
+ *   這裡）── Worker 完全拿不到、也不需要 Bybit 的金鑰
+ *     │
+ *     ▼
+ *   Bybit Demo Trading API
+ *
+ * 策略判斷（進場時機、風險計算、槓桿、分批出場階梯怎麼分）全部留在
+ * Worker，沿用 src/smc/manage.js 那套規則，這部分完全沒變；Executor
+ * 只負責「照著執行」，不做任何策略判斷。
+ *
+ *   Secret    EXECUTOR_URL            Executor 服務的網址（例如
+ *             https://executor.你的網域.com，前面要有 HTTPS，見 executor/README.md）
+ *   Secret    EXECUTOR_HMAC_SECRET    跟 Executor 的 .env 要完全一樣的隨機字串
+ *   Secret    AUTO_TRADE_TOKEN        自己取一串亂碼，用來保護下面的開關網址
  *   Variable  AUTO_TRADE_RISK_PCT    每筆風險占帳戶餘額的 %（預設 1，固定值，不分評分高低）
  *   Variable  AUTO_TRADE_LEVERAGE_MIN/MAX  槓桿倍數的範圍（預設 3～10），照訊號評分線性插值，
  *             評分等於 MIN_SCORE 給 MIN 倍、100 分給 MAX 倍，會自動不超過該合約上限。
@@ -91,8 +111,9 @@
  *   KV        SMC_KV 的 auto-trade:enabled 這個 key，預設不存在＝關閉
  *
  * 下單成功後會把這筆部位記進 SMC_KV（key 開頭 open-pos:），之後每次執行都
- * 會比對「追蹤中的部位」跟 Bybit 現在實際的持倉，少了的就代表平倉了，
- * 推一則結算通知（用偵測到平倉當下的市價估算 R，不是交易所的精確成交價）。
+ * 會比對「追蹤中的部位」跟 Bybit（透過 Executor）現在實際的持倉，少了的
+ * 就代表平倉了，推一則結算通知（用偵測到平倉當下的市價估算 R，不是交易所
+ * 的精確成交價）。
  *
  * ── 部位管理（保本鏢／移到成本價／追蹤停損）─────────────────────────────
  * 下單套用的是 README「部位管理」那段 A/B 實測驗證過的同一組規則
@@ -105,20 +126,20 @@
  *   3. 追蹤停損：獲利超過 +1.5R 之後，停損改成跟著最高獲利走，距離 0.8R，
  *      只會愈移愈緊，不會反向鬆開。
  * 這兩條停損規則靠 Worker 每 2 分鐘輪詢現價、算目前的 maxFavorableR 有沒有
- * 過門檻，過了就呼叫 Bybit 的 /v5/position/trading-stop 把停損單搬過去
- * （分批出場單是開倉當下就掛好的真實限價單，不需要輪詢）。
+ * 過門檻，過了就透過 Executor 把停損單搬過去（分批出場單是開倉當下就掛好
+ * 的真實限價單，不需要輪詢）。
  *
- * 開關（開啟後才會真的下單，就算金鑰都設定好了）：
+ * 開關（開啟後才會真的下單，就算 Executor 設定好了）：
  *   GET /auto-trade/status         查看目前開/關（不需要 token，唯讀）
  *   GET /auto-trade/on?token=xxx   開啟
  *   GET /auto-trade/off?token=xxx  關閉 —— 這個網址建議加到手機主畫面當緊急煞車
+ * 這是 Worker 這邊的開關（KV 裡的旗標，控制「要不要送單過去」）；Executor
+ * 自己也有一層獨立的緊急停止（見 executor/README.md），兩層互相獨立，
+ * 任何一層擋下來都不會下單。
  *
  * 部署走的是 esbuild 打包（見 deploy-worker.yml），把這個檔案跟它 import
  * 的 SMC 引擎（src/market/scan.js 及其依賴）打包成一個檔案再上傳，所以這裡
- * 可以正常 import。但 Bybit 的簽章／下單邏輯是例外：那段刻意獨立複製、
- * 沒有 import ../src/exchange/bybit.js——純粹是因為那份程式碼很小、改動
- * 頻率低，獨立一份比較不會被市場掃描那邊的改動意外牽動；行為刻意對齊
- * src/exchange/bybit.js，改動風控或簽章邏輯時兩邊都要看。
+ * 可以正常 import。
  *
  * ── 把 Worker 自己的掃描結果寫回 data/market.json（選用，預設關閉）────────
  * 開了 WORKER_SCAN_ENABLED 之後，Worker 自己算的那份預設只給自己用，
@@ -285,16 +306,14 @@ async function handleFetch(request, env) {
       });
     }
     if (url.pathname === '/auto-trade/status') {
-      const hasKeys = !!(env.BYBIT_DEMO_API_KEY && env.BYBIT_DEMO_API_SECRET);
+      const hasExecutor = !!(env.EXECUTOR_URL && env.EXECUTOR_HMAC_SECRET);
       // 多週期上線後訊號變多，同時間可能有更多部位在開——加上帳戶餘額跟
       // 追蹤中的部位數，排查「[110007] ab not enough for new order」這種
       // 下單失敗時，才能直接看出是保證金真的被既有部位佔滿，還是別的問題，
       // 不用再另外查 Bybit 後台。只讀，不會因為查狀態就多下單。
       let wallet = null;
-      if (hasKeys) {
-        wallet = await bybitCall(env, 'GET', '/v5/account/wallet-balance', { accountType: 'UNIFIED' }, { retries: 1 })
-          .then((w) => ({ totalAvailableBalance: Number(w?.list?.[0]?.totalAvailableBalance ?? 0), totalWalletBalance: Number(w?.list?.[0]?.totalWalletBalance ?? 0) }))
-          .catch((e) => ({ error: e.message }));
+      if (hasExecutor) {
+        wallet = await executorCall(env, 'GET', '/balance').catch((e) => ({ error: e.message }));
       }
       const openPositions = env.SMC_KV ? await env.SMC_KV.list({ prefix: 'open-pos:' }).then((r) => r.keys.map((k) => k.name)) : [];
       // ?detail=1 才會多花 KV 讀取把每筆追蹤中部位的完整內容（含分批出場
@@ -311,7 +330,7 @@ async function handleFetch(request, env) {
       }
       return json({
         enabled: await isAutoTradeEnabled(env),
-        hasKeys,
+        hasKeys: hasExecutor,
         mode: 'demo',
         riskPct: Number(cfg(env, 'AUTO_TRADE_RISK_PCT')),
         leverageMin: Number(cfg(env, 'AUTO_TRADE_LEVERAGE_MIN')),
@@ -807,7 +826,7 @@ function buildEmbed({ row: r, price }, market, autoTrade) {
 }
 
 function autoTradeText(t) {
-  if (t.skipped === 'no-keys') return '⏭️ 尚未設定 BYBIT_DEMO_API_KEY／SECRET，已略過';
+  if (t.skipped === 'no-keys') return '⏭️ 尚未設定 EXECUTOR_URL／EXECUTOR_HMAC_SECRET，已略過';
   if (t.error) return `❌ ${t.error}`;
   // 進場前雖然已經驗證過每一段出場單的數量都掛得上，但實際掛單當下還是
   // 可能因為限流／網路暫時失敗（跟數量大小無關）。這種情況停損已經生效，
@@ -842,10 +861,8 @@ async function isAutoTradeEnabled(env) {
   return (await env.SMC_KV.get('auto-trade:enabled')) === 'true';
 }
 
-const BYBIT_DEMO_HOST = 'https://api-demo.bybit.com';
-
-/** 跟 src/exchange/bybit.js 同一套簽章規則：HMAC_SHA256(ts + apiKey + recvWindow + payload) */
-async function bybitHmac(secret, message) {
+/** HMAC-SHA256，跟 executor/src/hmac.js 用同一套規則：HMAC(secret, timestamp字串 + rawBody字串) */
+async function executorHmac(secret, message) {
   const enc = new TextEncoder();
   const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   const sig = await crypto.subtle.sign('HMAC', key, enc.encode(message));
@@ -853,79 +870,37 @@ async function bybitHmac(secret, message) {
 }
 
 /**
- * retries 預設 0（不重試）：跟交易所下單這種非冪等操作有關的呼叫，重試
- * 有把同一張單重複送出兩次的風險（例如網路逾時，但 Bybit 其實已經收到
- * 並處理掉第一次的請求，只是回應沒送到）。只有明確知道這次呼叫是冪等
- * 的（查餘額、查合約資訊、查持倉、設槓桿、設停損——同一個值設兩次沒有
- * 副作用）才在呼叫端傳 retries: 1。
- *
- * 可重試的失敗只挑「明確知道請求根本沒被處理」的情況：網路層失敗（fetch
- * 丟例外／HTTP 5xx，這代表根本沒進到 Bybit 的撮合邏輯）跟 Bybit 自己的
- * 限流回應（retCode 10006／HTTP 429／HTTP 403——實測這個共用 IP 被限流時
- * Bybit 不是每次都回 429，觀察到連續好幾小時幾乎每次都回 403，當作跟
- * 429 一樣看待，不然重試邏輯在這種時候完全派不上用場）——其他錯誤（餘額
- * 不足、參數不合法等）重試也不會變好，直接丟出去。
+ * 呼叫獨立部署的 Bybit Executor（executor/ 資料夾）——Worker 自己已經不
+ * 能直接打 Bybit（美國 IP 地理封鎖，見檔案開頭說明），所有需要 Bybit
+ * API 的操作都改成呼叫這個服務。每個請求都用 EXECUTOR_HMAC_SECRET 簽章
+ * （timestamp + body），Executor 那邊會驗證簽章跟 timestamp 新鮮度（防
+ * 重放）。沒設定 EXECUTOR_URL／EXECUTOR_HMAC_SECRET 就直接丟例外，呼叫
+ * 端跟原本 bybitCall 沒有金鑰時一樣，自己決定要不要接住。
  */
-async function bybitCall(env, method, path, params = {}, { retries = 0 } = {}) {
-  const apiKey = env.BYBIT_DEMO_API_KEY;
-  const apiSecret = env.BYBIT_DEMO_API_SECRET;
-  for (let attempt = 0; ; attempt++) {
-    const ts = String(Date.now());
-    const recvWindow = '10000';
-    let url = BYBIT_DEMO_HOST + path;
-    let body;
-    let payload;
-    if (method === 'GET') {
-      const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')).toString();
-      payload = qs;
-      if (qs) url += `?${qs}`;
-    } else {
-      body = JSON.stringify(params);
-      payload = body;
-    }
-    try {
-      const res = await fetch(url, {
-        method,
-        headers: {
-          'Content-Type': 'application/json',
-          'X-BAPI-API-KEY': apiKey,
-          'X-BAPI-TIMESTAMP': ts,
-          'X-BAPI-RECV-WINDOW': recvWindow,
-          'X-BAPI-SIGN': await bybitHmac(apiSecret, ts + apiKey + recvWindow + payload),
-        },
-        body,
-      });
-      if (!res.ok) {
-        // 403 也當作可重試：實測發現 Bybit 對這個共用 IP 觸發限流時，不是
-        // 每次都乖乖回 429——有時候回的是 403（很像 WAF／IP 信譽判斷擋下來
-        // 的，不是「這支 API Key 沒有權限」那種真的該直接放棄的 403）。
-        // 一段時間內（觀察到連續好幾小時）幾乎每一次呼叫都中，光靠原本
-        // 只認 429 的重試邏輯完全沒用，等於每一次呼叫都直接放棄。
-        if (res.status === 429 || res.status === 403 || res.status >= 500) {
-          if (attempt < retries) { await new Promise((r) => setTimeout(r, 300 * (attempt + 1))); continue; }
-        }
-        // 重試還是失敗才值得花這個成本去讀 body——403 之前只丟 HTTP 狀態碼，
-        // 完全看不出來是「這個 IP 被擋」「這把 Key 沒權限」還是別的原因，
-        // 排查只能用猜的。夾帶一小段回應內容（截斷避免錯誤訊息爆炸）進
-        // 錯誤訊息，之後從 /auto-trade/status 的 wallet.error 就能直接看到
-        // Bybit（或擋在前面的 WAF）實際說了什麼。
-        const bodyText = await res.text().catch(() => '');
-        throw new Error(`Bybit HTTP ${res.status}${bodyText ? `：${bodyText.slice(0, 300)}` : ''}`);
-      }
-      const j = await res.json();
-      if (j.retCode !== 0) {
-        if (j.retCode === 10006 && attempt < retries) { await new Promise((r) => setTimeout(r, 300 * (attempt + 1))); continue; }
-        const err = new Error(`Bybit [${j.retCode}] ${j.retMsg || '請求失敗'}`);
-        err.code = j.retCode;
-        throw err;
-      }
-      return j.result;
-    } catch (e) {
-      if (e instanceof Error && /^Bybit \[/.test(e.message)) throw e; // 明確的業務錯誤，不算網路層失敗
-      if (attempt < retries) { await new Promise((r) => setTimeout(r, 300 * (attempt + 1))); continue; }
-      throw e;
-    }
+async function executorCall(env, method, path, { query, body } = {}) {
+  if (!env.EXECUTOR_URL || !env.EXECUTOR_HMAC_SECRET) throw new Error('尚未設定 EXECUTOR_URL／EXECUTOR_HMAC_SECRET');
+  let url = env.EXECUTOR_URL.replace(/\/$/, '') + path;
+  if (query) {
+    const qs = new URLSearchParams(Object.entries(query).filter(([, v]) => v !== undefined && v !== null && v !== '')).toString();
+    if (qs) url += `?${qs}`;
   }
+  const raw = body !== undefined ? JSON.stringify(body) : '';
+  const ts = String(Date.now());
+  const sig = await executorHmac(env.EXECUTOR_HMAC_SECRET, ts + raw);
+  const res = await fetch(url, {
+    method,
+    headers: {
+      'content-type': 'application/json',
+      'x-executor-timestamp': ts,
+      'x-executor-signature': sig,
+    },
+    body: method === 'GET' ? undefined : raw,
+  });
+  if (!res.ok) {
+    const bodyText = await res.text().catch(() => '');
+    throw new Error(`Executor HTTP ${res.status}${bodyText ? `：${bodyText.slice(0, 300)}` : ''}`);
+  }
+  return res.json();
 }
 
 function decimalsOf(step) {
@@ -969,23 +944,23 @@ function ladderWithAbsoluteFractions(ladder) {
  * 移動（成本價／追蹤）交給 updateTrailingStops() 每次執行時輪詢處理。
  * 任何一步失敗都回傳 { error }——「有訊號要通知」永遠比「這筆有沒有下成」
  * 重要，所以呼叫端不會因為這裡失敗就不推播 Discord。
+ *
+ * 風險計算／槓桿／保證金上限／分批出場階梯全部還是在這裡算（完全沒變，
+ * 沿用 src/smc/manage.js 的規則）——只有「實際呼叫 Bybit」的部分改成
+ * 透過 Executor（executorCall），因為 Worker 自己已經不能直接打 Bybit。
  */
 async function autoTradeOrder(env, hit) {
-  if (!env.BYBIT_DEMO_API_KEY || !env.BYBIT_DEMO_API_SECRET) return { skipped: 'no-keys' };
+  if (!env.EXECUTOR_URL || !env.EXECUTOR_HMAC_SECRET) return { skipped: 'no-keys' };
   const r = hit.row;
   try {
     const [wallet, instrument] = await Promise.all([
-      bybitCall(env, 'GET', '/v5/account/wallet-balance', { accountType: 'UNIFIED' }, { retries: 1 }),
-      bybitCall(env, 'GET', '/v5/market/instruments-info', { category: 'linear', symbol: r.symbol }, { retries: 1 }),
+      executorCall(env, 'GET', '/balance'),
+      executorCall(env, 'GET', '/instrument', { query: { symbol: r.symbol } }),
     ]);
-    const accountSize = Number(wallet?.list?.[0]?.totalAvailableBalance ?? 0);
-    const it = instrument?.list?.[0];
-    if (!it) return { error: `找不到合約 ${r.symbol}` };
-
-    const qtyStep = Number(it.lotSizeFilter?.qtyStep ?? 0.001);
-    const minQty = Number(it.lotSizeFilter?.minOrderQty ?? 0);
-    const tickSize = Number(it.priceFilter?.tickSize ?? 0.01);
-    const maxLeverage = Number(it.leverageFilter?.maxLeverage ?? 10);
+    if (wallet.error) return { error: `查餘額失敗：${wallet.error}` };
+    if (instrument.error) return { error: `查合約資訊失敗：${instrument.error}` };
+    const accountSize = Number(wallet.totalAvailableBalance ?? 0);
+    const { qtyStep, minQty, tickSize, maxLeverage } = instrument;
 
     const perUnit = Math.abs(r.entry - r.stop);
     if (!(perUnit > 0) || !(accountSize > 0)) return { error: '風險參數不完整（帳戶餘額或停損距離為 0）' };
@@ -1031,62 +1006,30 @@ async function autoTradeOrder(env, hit) {
       };
     }
 
-    await bybitCall(env, 'POST', '/v5/position/set-leverage', {
-      category: 'linear', symbol: r.symbol, buyLeverage: String(leverage), sellLeverage: String(leverage),
-    }, { retries: 1 }).catch((e) => { if (e.code !== 110043) throw e; }); // 已經是這個倍數，不算錯誤
+    // signal_id 刻意用「幣種＋方向＋週期＋進場價」組成、不帶時間戳，確保
+    // 同一個進場區永遠對應同一個 signal_id——如果這次呼叫 Executor 的
+    // 請求逾時、Worker 這邊沒能寫進 KV 去重紀錄，下一次 tick 重新觸發
+    // 同一個進場區時會算出一模一樣的 signal_id，Executor 的冪等機制會
+    // 直接擋下重複下單，不會因為 Worker 這邊短暫失憶就真的開兩筆倉位。
+    const signalId = `${r.symbol}:${r.dir}:${r.interval}:${r.entry}`;
 
-    // 市價進場單刻意不重試：重試有把同一張單重複送出兩次的風險（網路逾時
-    // 不代表 Bybit 沒收到，可能只是回應沒送達），寧可這次失敗、下一次價格
-    // 再到進場區時才重新嘗試，也不要冒重複進場的風險。
-    const order = await bybitCall(env, 'POST', '/v5/order/create', {
-      category: 'linear',
-      symbol: r.symbol,
-      side: r.dir === 'long' ? 'Buy' : 'Sell',
-      orderType: 'Market',
-      qty: String(qty),
-      timeInForce: 'IOC',
-      stopLoss: String(roundTick(r.stop, tickSize)),
-      slTriggerBy: 'LastPrice',
-      // 不在這裡設 takeProfit：分批出場單另外用下面的限價單掛，
-      // 交易所原生的單一 takeProfit 欄位放不下「保本鏢 + 好幾段目標」。
+    // 進場單、停損、分批出場階梯一次送給 Executor 執行——策略判斷（要不要
+    // 進場、數量多少、階梯怎麼分）已經在上面算完了，這裡只是把結果送過去
+    // 執行，Executor 不會重新計算風控。
+    const trade = await executorCall(env, 'POST', '/trade', {
+      body: {
+        signal_id: signalId,
+        symbol: r.symbol,
+        side: r.dir === 'long' ? 'Buy' : 'Sell',
+        qty: String(qty),
+        leverage: String(leverage),
+        stop_loss: String(roundTick(r.stop, tickSize)),
+        ladder: ladder.map((leg, i) => ({ name: leg.name, price: String(roundTick(leg.price, tickSize)), qty: String(legQtys[i]) })),
+      },
     });
+    if (trade.error) return { error: trade.error };
 
-    // 保險：進場單本身雖然帶了 stopLoss，但實測發生過部位開出來卻完全沒
-    // 停損的情況——不確定確切原因（Demo 環境本來就有其他端點被回報過不
-    // 穩定），與其猜測，不如直接用已經在用、確定冪等的 trading-stop 端點
-    // 再明確設定一次同樣的停損，多這一次呼叫不會有副作用，失敗也不影響
-    // 主流程（updateTrailingStops 下次執行還會再檢查）。
-    await bybitCall(env, 'POST', '/v5/position/trading-stop', {
-      category: 'linear', symbol: r.symbol, positionIdx: 0,
-      stopLoss: String(roundTick(r.stop, tickSize)), slTriggerBy: 'LastPrice',
-    }, { retries: 1 }).catch(() => {});
-
-    // 保本鏢 + 原本目標，一次全部掛成真的 reduce-only 限價單——價格到了
-    // 交易所自己成交，不用等 Worker 下次輪詢才發現、才補下單。這裡允許
-    // 重試一次：跟進場單不同，reduce-only 限價單就算意外重複送出，最多
-    // 也只是同一個價位多一張限價單，Bybit 會依實際持倉量限制成交，不會
-    // 讓倉位不小心反向或超賣，風險遠比重試進場單低。ladder/legQtys 用
-    // 進場前就驗證過的那一份，這裡不用再重算、也不用再擔心量不夠。
-    const legOrders = [];
-    for (let i = 0; i < ladder.length; i++) {
-      const leg = ladder[i];
-      const legQty = legQtys[i];
-      try {
-        const legOrder = await bybitCall(env, 'POST', '/v5/order/create', {
-          category: 'linear',
-          symbol: r.symbol,
-          side: r.dir === 'long' ? 'Sell' : 'Buy', // 出場方向跟進場相反
-          orderType: 'Limit',
-          qty: String(legQty),
-          price: String(roundTick(leg.price, tickSize)),
-          reduceOnly: true,
-          timeInForce: 'GTC',
-        }, { retries: 1 });
-        legOrders.push({ name: leg.name, price: leg.price, fraction: leg.fraction, qty: legQty, orderId: legOrder?.orderId });
-      } catch (e) {
-        legOrders.push({ name: leg.name, price: leg.price, fraction: leg.fraction, qty: legQty, error: e.message });
-      }
-    }
+    const legOrders = trade.ladder.map((leg, i) => ({ name: leg.name, price: leg.price, fraction: ladder[i]?.fraction, qty: leg.qty, ...(leg.orderId ? { orderId: leg.orderId } : { error: leg.error }) }));
 
     // 記住這筆倉位，之後每次執行才知道要去比對它是不是已經平倉了、
     // 獲利有沒有過門檻要搬停損。同一個「幣種＋方向」如果本來就有追蹤中的
@@ -1102,7 +1045,7 @@ async function autoTradeOrder(env, hit) {
       }));
     }
 
-    return { orderId: order?.orderId, qty, riskAmount, leverage, ladder: legOrders };
+    return { orderId: trade.orderId, qty, riskAmount, leverage, ladder: legOrders };
   } catch (e) {
     return { error: e.message };
   }
@@ -1117,13 +1060,14 @@ async function autoTradeOrder(env, hit) {
  * 不是交易所回報的精確成交價，這點會清楚寫在推播裡，不假裝比實際準確。
  */
 async function checkClosedPositions(env) {
-  if (!env.SMC_KV || !env.BYBIT_DEMO_API_KEY || !env.BYBIT_DEMO_API_SECRET) return { checked: 0, closed: 0 };
+  if (!env.SMC_KV || !env.EXECUTOR_URL || !env.EXECUTOR_HMAC_SECRET) return { checked: 0, closed: 0 };
   const tracked = await env.SMC_KV.list({ prefix: 'open-pos:' });
   if (!tracked.keys.length) return { checked: 0, closed: 0 };
 
-  const real = await bybitCall(env, 'GET', '/v5/position/list', { category: 'linear', settleCoin: 'USDT' }, { retries: 1 });
+  const real = await executorCall(env, 'GET', '/position');
+  if (real.error) throw new Error(real.error);
   const stillOpen = new Set(
-    (real?.list ?? [])
+    (real?.positions ?? [])
       .filter((p) => Number(p.size) > 0)
       .map((p) => `open-pos:${p.symbol}:${p.side === 'Buy' ? 'long' : 'short'}`),
   );
@@ -1142,7 +1086,7 @@ async function checkClosedPositions(env) {
       // 部位平倉了（不管是停損還是分批出場單打到），開倉時掛的那批分批
       // 出場限價單如果還有沒成交的殘單，取消掉——reduce-only 單獨留著不會
       // 加碼部位，但留著容易讓人誤會這幣種還在追蹤中。
-      await bybitCall(env, 'POST', '/v5/order/cancel-all', { category: 'linear', symbol: pos.symbol }, { retries: 1 }).catch(() => {});
+      await executorCall(env, 'POST', '/cancel-all', { body: { symbol: pos.symbol } }).catch(() => {});
     }
     await env.SMC_KV.delete(key);
     closed++;
@@ -1166,7 +1110,7 @@ async function checkClosedPositions(env) {
  * 不會有副作用，掛成功就把 error 欄位清掉、失敗就留著等下一次執行再試。
  */
 async function updateTrailingStops(env) {
-  if (!env.SMC_KV || !env.BYBIT_DEMO_API_KEY || !env.BYBIT_DEMO_API_SECRET) return { checked: 0, moved: 0, legsRepaired: 0 };
+  if (!env.SMC_KV || !env.EXECUTOR_URL || !env.EXECUTOR_HMAC_SECRET) return { checked: 0, moved: 0, legsRepaired: 0 };
   const tracked = await env.SMC_KV.list({ prefix: 'open-pos:' });
   if (!tracked.keys.length) return { checked: 0, moved: 0, legsRepaired: 0 };
 
@@ -1183,22 +1127,20 @@ async function updateTrailingStops(env) {
     if (!failedLegs.length) continue;
     let changed = false;
     for (const { leg, i } of failedLegs) {
-      try {
-        const legOrder = await bybitCall(env, 'POST', '/v5/order/create', {
-          category: 'linear',
+      const legOrder = await executorCall(env, 'POST', '/add-exit-leg', {
+        body: {
           symbol: pos.symbol,
           side: pos.dir === 'long' ? 'Sell' : 'Buy',
-          orderType: 'Limit',
           qty: String(leg.qty),
           price: String(roundTick(leg.price, pos.tickSize || 0.01)),
-          reduceOnly: true,
-          timeInForce: 'GTC',
-        }, { retries: 1 });
-        pos.ladder[i] = { name: leg.name, price: leg.price, fraction: leg.fraction, qty: leg.qty, orderId: legOrder?.orderId };
+        },
+      }).catch((e) => ({ error: e.message }));
+      if (legOrder.orderId) {
+        pos.ladder[i] = { name: leg.name, price: leg.price, fraction: leg.fraction, qty: leg.qty, orderId: legOrder.orderId };
         changed = true;
         legsRepaired++;
-      } catch (e) {
-        pos.ladder[i] = { name: leg.name, price: leg.price, fraction: leg.fraction, qty: leg.qty, error: e.message };
+      } else {
+        pos.ladder[i] = { name: leg.name, price: leg.price, fraction: leg.fraction, qty: leg.qty, error: legOrder.error };
       }
     }
     if (changed) await env.SMC_KV.put(key, JSON.stringify(pos));
@@ -1231,17 +1173,11 @@ async function updateTrailingStops(env) {
     }
 
     if (nextStop !== pos.stop) {
-      try {
-        await bybitCall(env, 'POST', '/v5/position/trading-stop', {
-          category: 'linear',
-          symbol: pos.symbol,
-          positionIdx: 0,
-          stopLoss: String(roundTick(nextStop, pos.tickSize || 0.01)),
-          slTriggerBy: 'LastPrice',
-        }, { retries: 1 });
-        pos.stop = nextStop;
-        moved++;
-      } catch { /* 這次搬不動就算了，下次執行再試，不影響其他部位 */ }
+      const result = await executorCall(env, 'POST', '/set-stop', {
+        body: { symbol: pos.symbol, stop_loss: String(roundTick(nextStop, pos.tickSize || 0.01)) },
+      }).catch((e) => ({ error: e.message }));
+      if (!result.error) { pos.stop = nextStop; moved++; }
+      // 搬不動就算了，下次執行再試，不影響其他部位
     }
     await env.SMC_KV.put(key, JSON.stringify(pos));
   }

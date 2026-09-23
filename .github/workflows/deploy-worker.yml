@@ -408,8 +408,8 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ env.CF_ACCOUNT }}
           CF_EMAIL: ${{ secrets.CF_EMAIL }}
           CF_GLOBAL_KEY: ${{ secrets.CF_GLOBAL_API_KEY }}
-          BYBIT_DEMO_API_KEY: ${{ secrets.BYBIT_DEMO_API_KEY }}
-          BYBIT_DEMO_API_SECRET: ${{ secrets.BYBIT_DEMO_API_SECRET }}
+          EXECUTOR_URL: ${{ secrets.EXECUTOR_URL }}
+          EXECUTOR_HMAC_SECRET: ${{ secrets.EXECUTOR_HMAC_SECRET }}
           AUTO_TRADE_TOKEN: ${{ secrets.AUTO_TRADE_TOKEN }}
           GITHUB_API_TOKEN: ${{ secrets.GITHUB_API_TOKEN }}
         run: |
@@ -436,8 +436,8 @@ jobs:
               printf '%s' "$RESP" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{for(const e of (JSON.parse(s).errors||[]))console.log("   ["+e.code+"] "+e.message)}catch{}})'
             fi
           }
-          sync_secret BYBIT_DEMO_API_KEY "$BYBIT_DEMO_API_KEY"
-          sync_secret BYBIT_DEMO_API_SECRET "$BYBIT_DEMO_API_SECRET"
+          sync_secret EXECUTOR_URL "$EXECUTOR_URL"
+          sync_secret EXECUTOR_HMAC_SECRET "$EXECUTOR_HMAC_SECRET"
           sync_secret AUTO_TRADE_TOKEN "$AUTO_TRADE_TOKEN"
           sync_secret GITHUB_API_TOKEN "$GITHUB_API_TOKEN"
 
