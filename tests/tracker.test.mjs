@@ -180,6 +180,33 @@ test('認賠出場：已經分批獲利過就不再觸發（避免把賺錢單�
   assert.notEqual(t.exitReason, 'scratch');
 });
 
+test('時間停損：成交後 stallBars 根都沒碰到 stallMinR，就用收盤價出場', () => {
+  const cfg = { ...OFF, stallBars: 3, stallMinR: 0.3 };
+  const t = advanceTrade(longTrade({ status: 'active', filledTime: T0 }), bars([[101, 99], [101, 99], [101, 99]]), cfg);
+  assert.equal(t.exitReason, 'stall');
+  assert.equal(t.exitPrice, 100);
+  assert.equal(t.r, 0);
+});
+
+test('時間停損：曾經走到 stallMinR 就不算停滯', () => {
+  const cfg = { ...OFF, stallBars: 3, stallMinR: 0.3 };
+  const t = advanceTrade(longTrade({ status: 'active', filledTime: T0 }), bars([[101.6, 99], [101, 99], [101, 99]]), cfg);
+  assert.equal(t.status, 'active');
+});
+
+test('進場區失守：收盤跌破進場區下緣就收盤出場，不等停損', () => {
+  const cfg = { ...OFF, zoneCloseExit: true };
+  const t = advanceTrade(longTrade({ status: 'active', filledTime: T0, zone: { top: 101, bottom: 99.5 } }), bars([[100, 98]]), cfg);
+  assert.equal(t.exitReason, 'zoneBreak');
+  assert.ok(Math.abs(t.r + 0.2) < 1e-9, `收在 99 → -0.2R，實得 ${t.r}`);
+});
+
+test('進場區失守：只是影線刺穿、收盤還在區內就不出場', () => {
+  const cfg = { ...OFF, zoneCloseExit: true };
+  const t = advanceTrade(longTrade({ status: 'active', filledTime: T0, zone: { top: 101, bottom: 99.5 } }), bars([[100.5, 98.6]]), cfg);
+  assert.equal(t.status, 'active');
+});
+
 test('追蹤停損：獲利回吐超過 trailGapR 就出場，且鎖住利潤', () => {
   const cfg = { ...OFF, trailFromR: 1, trailGapR: 0.5 };
   const t = advanceTrade(

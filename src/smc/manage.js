@@ -10,6 +10,8 @@
  *   2. 移動到成本價（BE）   達到指定 R 之後把停損拉到進場價
  *   3. 認賠出場（scratch）  逆行到指定 R 就主動離場，不等結構停損
  *   4. 追蹤停損（trail）    獲利超過門檻後，停損跟著最高獲利走
+ *   5. 時間停損（stall）    成交後一段時間都沒走出有利幅度，收盤出場
+ *   6. 進場區失守（zone）   收盤價跌破（空單：站上）進場區，收盤出場，不等停損緩衝被打到
  *
  * R 的定義：以「進場價到原始停損」的距離為 1R。
  * 部位以比例計算，t.r 是整筆部位的淨 R（含所有分批），而不是最後一段的 R。
@@ -39,6 +41,9 @@ export const DEFAULT_MANAGEMENT = {
   trailGapR: 0.8,        // 追蹤停損與最高獲利的距離（R）
   entryWindowBars: 24,   // 限價單等待成交的最長根數
   maxHoldBars: 200,      // 成交後最長持有根數
+  stallBars: 0,          // 成交後這麼多根都沒碰到 stallMinR 就收盤出場。0 = 不使用
+  stallMinR: 0.3,
+  zoneCloseExit: false,  // 收盤價穿過進場區另一側就出場（需要 t.zone = { top, bottom }）
 };
 
 /**
@@ -193,7 +198,19 @@ export function stepTrade(t, c, cfg = {}) {
     t.events.push({ type: 'target', name: tp.name, time: c.time, price: tp.price, rr: finite(tp.rr), partial: tp.fraction });
   }
 
-  // 4) 移動停損到成本價
+  // 4) 收盤才判斷的提早出場：這根已經收完，用收盤價出場
+  if (!t.beMoved && !t.hitTargets.length) {
+    const stalled = o.stallBars > 0 && t.barsSinceFill >= o.stallBars && t.maxFavorableR < o.stallMinR;
+    const zoneBroken = o.zoneCloseExit && t.zone && (long ? c.close < t.zone.bottom : c.close > t.zone.top);
+    if (stalled || zoneBroken) {
+      const reason = zoneBroken ? 'zoneBreak' : 'stall';
+      close(t, c.close, risk, 'stop', reason, c.time);
+      t.events.push({ type: 'stop', time: c.time, price: c.close, reason });
+      return true;
+    }
+  }
+
+  // 5) 移動停損到成本價
   if (o.breakevenAtR > 0 && !t.beMoved && t.maxFavorableR >= o.breakevenAtR) {
     const be = long ? t.entry + risk * o.breakevenOffsetR : t.entry - risk * o.breakevenOffsetR;
     if (long ? be > t.stop : be < t.stop) {
@@ -203,7 +220,7 @@ export function stepTrade(t, c, cfg = {}) {
     }
   }
 
-  // 5) 追蹤停損
+  // 6) 追蹤停損
   if (o.trailFromR > 0 && o.trailGapR > 0 && t.maxFavorableR >= o.trailFromR) {
     const lockR = t.maxFavorableR - o.trailGapR;
     const px = long ? t.entry + risk * lockR : t.entry - risk * lockR;
@@ -213,7 +230,7 @@ export function stepTrade(t, c, cfg = {}) {
     }
   }
 
-  // 6) 抱太久
+  // 7) 抱太久
   if (t.barsSinceFill > o.maxHoldBars) {
     close(t, c.close, risk, 'expired', 'maxHold', c.time);
     t.events.push({ type: 'expired', time: c.time, reason: 'maxHold' });
