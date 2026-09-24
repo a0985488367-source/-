@@ -47,6 +47,7 @@ function collectSignals(candles, symbol, interval) {
       fib: s.extras.fib, hvn: s.extras.hvn, valueEdge: s.extras.valueEdge, lvn: s.extras.lvn,
       checks: Object.fromEntries(s.checklist.map((c) => [c.key, c.ok])),
       stopPct: Math.abs(s.entry - s.stop) / s.entry,
+      half: i < (WARMUP + candles.length) / 2 ? 0 : 1,
     });
     cooldownUntil = i + COOLDOWN;
   }
@@ -80,6 +81,18 @@ const SECTIONS = [
   ['評分表逐項（線上過濾後）', CHECK_KEYS.flatMap((k) => [
     [`${k} ✓`, (t) => live(t) && t.checks[k]],
     [`${k} ✗`, (t) => live(t) && !t.checks[k]],
+  ])],
+  // 同一個效果在前半段、後半段資料都成立，才比較不是巧合
+  ['穩定性：前半段 vs 後半段（全部訊號）', ['poiFresh', 'sweep', 'pdSide', 'killzone', 'structure'].flatMap((k) => [
+    [`前 ${k} ✓`, (t) => t.half === 0 && t.checks[k]],
+    [`前 ${k} ✗`, (t) => t.half === 0 && !t.checks[k]],
+    [`後 ${k} ✓`, (t) => t.half === 1 && t.checks[k]],
+    [`後 ${k} ✗`, (t) => t.half === 1 && !t.checks[k]],
+  ]).concat([
+    ['前 停損≥1%', (t) => t.half === 0 && t.stopPct >= 0.01],
+    ['前 停損<1%', (t) => t.half === 0 && t.stopPct < 0.01],
+    ['後 停損≥1%', (t) => t.half === 1 && t.stopPct >= 0.01],
+    ['後 停損<1%', (t) => t.half === 1 && t.stopPct < 0.01],
   ])],
   ['停損距離（線上過濾後；距離愈近，手續費吃掉的 R 愈多）', STOP_BUCKETS.map(([lo, hi]) => [
     `${(lo * 100).toFixed(1)}%–${(hi * 100).toFixed(1)}%`, (t) => live(t) && t.stopPct >= lo && t.stopPct < hi,
