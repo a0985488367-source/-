@@ -7,12 +7,17 @@ name: 策略研究（A/B 實測）
 on:
   workflow_dispatch:
     inputs:
+      study:
+        description: '要跑哪個研究：ab-test（部位管理規則）或 confluence（斐波那契／成交量分布匯流）'
+        type: choice
+        options: [ab-test, confluence]
+        default: ab-test
       symbols:
         description: '要測的幣種（逗號分隔）'
         default: 'BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT,ADAUSDT,AVAXUSDT,LINKUSDT,LTCUSDT,DOTUSDT,NEARUSDT,APTUSDT,ARBUSDT,OPUSDT'
       intervals:
-        description: '週期（逗號分隔）'
-        default: '15m,1h'
+        description: '週期（逗號分隔）；留空＝該研究的預設值'
+        default: ''
       min_score:
         description: '最低分數'
         default: '55'
@@ -33,19 +38,26 @@ jobs:
         with:
           node-version: '22'
 
-      - name: 跑 A/B 實測
+      - name: 跑研究
+        env:
+          STUDY: ${{ inputs.study }}
+          SYMBOLS: ${{ inputs.symbols }}
+          INTERVALS: ${{ inputs.intervals }}
+          MIN_SCORE: ${{ inputs.min_score }}
         run: |
-          node scripts/research/ab-test.mjs \
-            --symbols='${{ inputs.symbols }}' \
-            --intervals='${{ inputs.intervals }}' \
-            --min-score='${{ inputs.min_score }}' \
+          set -o pipefail
+          if [ "$STUDY" = confluence ]; then SCRIPT=confluence-study; DEF_INT=30m,1h,4h; else SCRIPT=ab-test; DEF_INT=15m,1h; fi
+          node "scripts/research/$SCRIPT.mjs" \
+            --symbols="$SYMBOLS" \
+            --intervals="${INTERVALS:-$DEF_INT}" \
+            --min-score="$MIN_SCORE" \
             | tee ab-output.txt
 
       - name: 寫進步驟摘要
         if: always()
         run: |
           {
-            echo '## 部位管理規則 A/B 實測'
+            echo "## 策略研究：${{ inputs.study }}"
             echo '```'
             cat ab-output.txt || echo '(沒有輸出)'
             echo '```'
@@ -57,5 +69,5 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
           git add data/research/ || true
-          git diff --cached --quiet || git commit -m 'chore(research): 更新 A/B 實測結果 [skip ci]'
+          git diff --cached --quiet || git commit -m "chore(research): 更新 ${{ inputs.study }} 研究結果 [skip ci]"
           git push

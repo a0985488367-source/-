@@ -9,12 +9,11 @@
  */
 
 import { writeFile, mkdir } from 'node:fs/promises';
-import { PROVIDERS } from '../../src/data/providers.js';
 import { analyze } from '../../src/smc/engine.js';
-import { buildLadder, stepTrade } from '../../src/smc/manage.js';
+import { opt as optFrom, klines as fetchKlines, runSignals, summarize, pct, r2, printTable } from './lib.mjs';
 
 const ARGS = process.argv.slice(2);
-const opt = (n, d) => (ARGS.find((a) => a.startsWith(`--${n}=`)) || `--${n}=${d}`).slice(n.length + 3);
+const opt = (n, d) => optFrom(ARGS, n, d);
 
 const SYMBOLS = opt('symbols', 'BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT,ADAUSDT,AVAXUSDT,LINKUSDT,LTCUSDT').split(',');
 const INTERVALS = opt('intervals', '15m,1h').split(',');
@@ -53,15 +52,6 @@ const VARIANTS = {
 
 const log = (...a) => console.log(...a);
 
-async function klines(symbol, interval) {
-  let err;
-  for (const id of ['binance', 'okx', 'bybit']) {
-    try { return await PROVIDERS[id].fetchKlines(symbol, interval, { limit: LIMIT }); }
-    catch (e) { err = e; }
-  }
-  throw err;
-}
-
 /** 產生訊號清單：與管理規則無關，所有變體共用 */
 function collectSignals(candles, symbol, interval) {
   const out = [];
@@ -84,57 +74,13 @@ function collectSignals(candles, symbol, interval) {
   return out;
 }
 
-function runVariant(signals, candlesBy, cfg) {
-  const closed = [];
-  for (const sig of signals) {
-    const candles = candlesBy.get(`${sig.symbol}|${sig.interval}`);
-    const t = {
-      ...sig,
-      targets: buildLadder(sig.entry, sig.stop, sig.targets, cfg),
-      status: sig.entryType === 'market' ? 'active' : 'pending',
-      hitTargets: [], events: [], remaining: 1, realizedR: 0,
-      barsSinceOpen: 0, barsSinceFill: 0, maxFavorableR: 0, maxAdverseR: 0,
-    };
-    for (let j = sig.index + 1; j < candles.length; j++) {
-      if (stepTrade(t, candles[j], cfg)) break;
-    }
-    if (t.status === 'pending' || t.status === 'active') continue; // 還沒結束的不計入
-    closed.push(t);
-  }
-  return closed;
-}
-
-function summarize(closed) {
-  const traded = closed.filter((t) => t.status !== 'expired' || t.exitReason === 'maxHold');
-  const unfilled = closed.length - traded.length;
-  if (!traded.length) return { n: 0, unfilled };
-  const wins = traded.filter((t) => t.r > 0);
-  const totalR = traded.reduce((s, t) => s + t.r, 0);
-  const gw = wins.reduce((s, t) => s + t.r, 0);
-  const gl = Math.abs(traded.filter((t) => t.r <= 0).reduce((s, t) => s + t.r, 0));
-  let eq = 0, peak = 0, dd = 0;
-  for (const t of traded) { eq += t.r; peak = Math.max(peak, eq); dd = Math.max(dd, peak - eq); }
-  return {
-    n: traded.length, unfilled,
-    winRate: (wins.length / traded.length) * 100,
-    totalR, expectancy: totalR / traded.length,
-    avgWin: wins.length ? gw / wins.length : 0,
-    avgLoss: traded.length - wins.length ? -gl / (traded.length - wins.length) : 0,
-    profitFactor: gl ? gw / gl : Infinity,
-    maxDdR: dd,
-  };
-}
-
-const pct = (v) => `${v.toFixed(1)}%`;
-const r2 = (v) => (v >= 0 ? '+' : '') + v.toFixed(2);
-
 (async () => {
   const candlesBy = new Map();
   const signals = [];
   for (const symbol of SYMBOLS) {
     for (const interval of INTERVALS) {
       try {
-        const c = await klines(symbol, interval);
+        const c = await fetchKlines(symbol, interval, LIMIT);
         candlesBy.set(`${symbol}|${interval}`, c);
         const s = collectSignals(c, symbol, interval);
         signals.push(...s);
@@ -147,7 +93,7 @@ const r2 = (v) => (v >= 0 ? '+' : '') + v.toFixed(2);
 
   const rows = [];
   for (const [name, cfg] of Object.entries(VARIANTS)) {
-    const s = summarize(runVariant(signals, candlesBy, cfg));
+    const s = summarize(runSignals(signals, candlesBy, cfg));
     rows.push({ name, cfg, ...s });
   }
 
@@ -156,11 +102,7 @@ const r2 = (v) => (v >= 0 ? '+' : '') + v.toFixed(2);
     r.name, String(r.n), pct(r.winRate ?? 0), r2(r.totalR ?? 0), r2(r.expectancy ?? 0),
     r2(r.avgWin ?? 0), r2(r.avgLoss ?? 0), (r.profitFactor ?? 0).toFixed(2), (r.maxDdR ?? 0).toFixed(1),
   ]);
-  const w = head.map((h, i) => Math.max(h.length, ...body.map((b) => b[i].length)));
-  const line = (cols) => cols.map((c, i) => c.padEnd(w[i])).join('  ');
-  log(line(head));
-  log(w.map((n) => '─'.repeat(n)).join('  '));
-  for (const b of body) log(line(b));
+  printTable(log, head, body);
 
   await mkdir(OUT.split('/').slice(0, -1).join('/'), { recursive: true });
   await writeFile(OUT, JSON.stringify({ generatedAt: Date.now(), symbols: SYMBOLS, intervals: INTERVALS, signals: signals.length, rows }, null, 2));
