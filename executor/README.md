@@ -86,6 +86,53 @@ Executor 收到請求會檢查：
 
 ## 部署
 
+兩種方式擇一：
+
+### 方案一：Fly.io（推薦，不用自己管伺服器）
+
+不用學 Linux、不用自己裝軟體、內建 HTTPS（不用另外裝 Caddy）。在**自己的電腦**上（不是 VPS）安裝 `flyctl` 之後：
+
+```bash
+# 1. 安裝 flyctl（Mac/Linux）
+curl -L https://fly.io/install.sh | sh
+
+# 2. 登入（會開瀏覽器，用你剛註冊的帳號登入）
+fly auth login
+
+# 3. 進到 executor 資料夾，啟動精靈——會問你要不要取一個 App 名稱、
+#    選哪個地區（務必選非美國的，例如 Tokyo (nrt)、Singapore (sin)、
+#    Hong Kong (hkg)），其他問題（要不要接資料庫等）都選否／預設值就好
+cd executor
+fly launch --no-deploy
+
+# 4. 建一個小的持久化磁碟（1GB 就綽綽有餘），儲存「已經處理過的訊號」
+#    這份紀錄，region 要跟上一步選的地區一樣
+fly volumes create executor_data --size 1 --region <你選的地區代碼>
+
+# 5. 打開 fly.toml，確認／加上這兩段（fly launch 產生的檔案可能沒有）：
+#      [mounts]
+#        source = "executor_data"
+#        destination = "/app/data"
+#    以及 [http_service] 底下的 internal_port 要是 8787
+
+# 6. 設定金鑰（EXECUTOR_HMAC_SECRET 用 openssl rand -hex 32 產生一組）
+fly secrets set \
+  BYBIT_API_KEY=你的Bybit_Demo_API_Key \
+  BYBIT_API_SECRET=你的Bybit_Demo_API_Secret \
+  EXECUTOR_HMAC_SECRET=你產生的隨機字串 \
+  DISCORD_WEBHOOK_URL=你的Discord_webhook網址
+
+# 7. 部署
+fly deploy
+
+# 8. 查看網址（大概是 https://<你的App名稱>.fly.dev）
+fly status
+```
+
+部署完打開 `https://<你的App名稱>.fly.dev/health` 應該會看到 `{"ok":true,...}`。這個網址就是要填進 Cloudflare Worker 的 `EXECUTOR_URL`。
+
+### 方案二：一般 VPS
+
 見 `deploy/setup-vps.sh`（在 VPS 上跑這支腳本）跟 `deploy/executor.service`（systemd 服務定義）。這支服務本身只有 HTTP，**正式使用前一定要在前面加一層 HTTPS**（例如用 [Caddy](https://caddyserver.com/) 當反向代理，設定幾行就能自動申請憑證）——HMAC 簽章能防止偽造請求，但沒有 TLS 的話，請求跟回應內容（包含帳戶餘額、持倉這些）還是用明文在網路上傳輸，容易被中間人竊聽。
 
 ## 本機測試
