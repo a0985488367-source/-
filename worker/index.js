@@ -114,6 +114,9 @@
  *   Variable  AUTO_TRADE_EXCLUDE_POI  不自動下單的進場區類型，逗號分隔（預設 Order Block，
  *             模擬盤紀錄裡唯一期望值為負的類型）。行為跟上面一樣：照樣推播、只是不下單；
  *             設成空字串就全部類型都下。
+ *   Variable  AUTO_TRADE_MAX_OPEN_RISK_PCT  所有追蹤中部位「停損打到還會虧多少」加總的上限，
+ *             占帳戶餘額的 %（預設 6，0＝不限制）。幣圈同漲同跌，同時開一堆同方向
+ *             的單等於同一個賭注；已經搬到成本價的部位不佔額度。超過一樣只通知不下單。
  *   KV        SMC_KV 的 auto-trade:enabled 這個 key，預設不存在＝關閉
  *
  * 下單成功後會把這筆部位記進 SMC_KV（key 開頭 open-pos:），之後每次執行都
@@ -183,6 +186,7 @@ const DEFAULTS = {
   AUTO_TRADE_MAX_MARGIN_PCT: '25',
   AUTO_TRADE_DIRECTIONS: 'long',
   AUTO_TRADE_EXCLUDE_POI: 'Order Block',
+  AUTO_TRADE_MAX_OPEN_RISK_PCT: '6',
   WORKER_SCAN_ENABLED: 'false',
   WORKER_SCAN_TOP: '120',              // 候選池總大小：想涵蓋幾檔（循環一輪會全部算過）
   WORKER_SCAN_BATCH_SIZE: '20',        // 每次真的重新掃描只算這麼多檔，請求量才不會一次太密集
@@ -212,6 +216,19 @@ function leverageForScore(env, score) {
 
 const csv = (v) => String(v).split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
 const allowedDirections = (env) => csv(cfg(env, 'AUTO_TRADE_DIRECTIONS'));
+
+async function trackedPositions(env) {
+  if (!env.SMC_KV) return [];
+  const { keys } = await env.SMC_KV.list({ prefix: 'open-pos:' });
+  const raws = await Promise.all(keys.map((k) => env.SMC_KV.get(k.name)));
+  return raws.filter(Boolean).map((raw) => JSON.parse(raw));
+}
+
+/** 所有部位停損打到時還會虧的金額加總；停損已經在成本價另一側的算 0 */
+const openRiskAmount = (positions) => positions.reduce((sum, p) => {
+  const perUnit = p.dir === 'long' ? p.entry - p.stop : p.stop - p.entry;
+  return sum + (perUnit > 0 && p.qty > 0 ? perUnit * p.qty : 0);
+}, 0);
 const excludedPoiTypes = (env) => csv(cfg(env, 'AUTO_TRADE_EXCLUDE_POI'));
 
 export default {
@@ -350,6 +367,10 @@ async function handleFetch(request, env) {
         maxMarginPct: Number(cfg(env, 'AUTO_TRADE_MAX_MARGIN_PCT')),
         directions: allowedDirections(env),
         excludePoi: excludedPoiTypes(env),
+        maxOpenRiskPct: Number(cfg(env, 'AUTO_TRADE_MAX_OPEN_RISK_PCT')),
+        openRiskPct: wallet?.totalWalletBalance > 0
+          ? Number(((openRiskAmount(await trackedPositions(env)) / wallet.totalWalletBalance) * 100).toFixed(2))
+          : null,
         wallet,
         trackedOpenPositions: openPositions.length,
         openPositions,
@@ -842,6 +863,7 @@ function buildEmbed({ row: r, price }, market, autoTrade) {
 function autoTradeText(t) {
   if (t.skipped === 'no-keys') return '⏭️ 尚未設定 EXECUTOR_URL／EXECUTOR_HMAC_SECRET，已略過';
   if (t.skipped === 'direction') return '⏭️ 這個方向目前不自動下單（AUTO_TRADE_DIRECTIONS），只通知不下單';
+  if (t.skipped === 'open-risk') return `⏭️ 持倉總風險已達 ${t.openRiskPct.toFixed(1)}%（上限 ${t.maxOpenRiskPct}%，AUTO_TRADE_MAX_OPEN_RISK_PCT），這筆只通知不下單`;
   if (t.skipped === 'poi') return `⏭️ ${t.poiType} 類型的進場區目前不自動下單（AUTO_TRADE_EXCLUDE_POI），只通知不下單`;
   if (t.error) return `❌ ${t.error}`;
   // 進場前雖然已經驗證過每一段出場單的數量都掛得上，但實際掛單當下還是
@@ -1009,6 +1031,18 @@ async function autoTradeOrder(env, hit) {
       }
     }
     if (qty < minQty) return { error: `算出數量 ${qty} 小於最小下單量 ${minQty}（保證金上限 ${maxMarginPct}% 限制），可調高 AUTO_TRADE_MAX_MARGIN_PCT` };
+
+    // 加密貨幣大多同漲同跌，多筆同方向部位等於同一個賭注；所有追蹤中部位
+    // 「停損打到還會虧多少」加上這筆，超過上限就只通知不下單。已經搬到
+    // 成本價以上的部位剩餘風險是 0，不佔額度。
+    const maxOpenRiskPct = Number(cfg(env, 'AUTO_TRADE_MAX_OPEN_RISK_PCT'));
+    if (maxOpenRiskPct > 0) {
+      const equity = Number(wallet.totalWalletBalance ?? accountSize);
+      const openRiskPct = (openRiskAmount(await trackedPositions(env)) / equity) * 100;
+      if (openRiskPct + ((qty * perUnit) / equity) * 100 > maxOpenRiskPct) {
+        return { skipped: 'open-risk', openRiskPct, maxOpenRiskPct };
+      }
+    }
 
     // 倉位大小要先確認「分批出場的階梯每一段都掛得了單」才進場——先算好
     // 這筆會用到的階梯，任何一段的數量四捨五入後低於最小下單量，就整筆
