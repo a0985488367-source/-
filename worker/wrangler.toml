@@ -43,7 +43,7 @@ MAX_MARKET_AGE_MIN = "240"
 ALERT_TTL_SEC = "21600"
 NEAR_PCT = "0.08"
 # 自動下單（選用，預設關閉，開關另外看 KV 的 auto-trade:enabled）
-AUTO_TRADE_RISK_PCT = "5"
+AUTO_TRADE_RISK_PCT = "2"
 # 槓桿照評分線性插值：評分等於 MIN_SCORE 給 MIN 倍，100 分給 MAX 倍
 AUTO_TRADE_LEVERAGE_MIN = "3"
 AUTO_TRADE_LEVERAGE_MAX = "10"
@@ -51,6 +51,14 @@ AUTO_TRADE_LEVERAGE_MAX = "10"
 # 全部的保證金，變成一張單就把其他訊號的下單空間吃光；這裡限制單筆最多
 # 佔用可用餘額的這個 %，超過會先試著拉高槓桿省保證金，還是不夠才縮小數量
 AUTO_TRADE_MAX_MARGIN_PCT = "25"
+# 只自動下這些方向（逗號分隔，例如 "long,short"）；其他方向照樣推播、進模擬盤紀錄
+AUTO_TRADE_DIRECTIONS = "long"
+# 不自動下單的進場區類型（逗號分隔）；一樣照樣推播、進模擬盤紀錄
+AUTO_TRADE_EXCLUDE_POI = "Order Block"
+# 所有持倉停損打到時的虧損加總上限（占帳戶 %）；搬到成本價的部位不算
+AUTO_TRADE_MAX_OPEN_RISK_PCT = "6"
+# 停損距離（占進場價 %）低於這個就不下單：停損愈近，手續費吃掉的 R 愈多
+AUTO_TRADE_MIN_STOP_PCT = "1"
 # Worker 自己即時掃描（需要 Workers Paid；開啟前留意對外部交易所 API 的
 # 請求量會增加，見 index.js 開頭的說明）。採分批架構：候選池 120 檔，
 # 每 10 分鐘只真的重新掃描其中 20 檔，結果累積進 KV，繞完一輪（120/20=6

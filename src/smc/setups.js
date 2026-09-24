@@ -13,8 +13,10 @@ const CHECKS = [
   { key: 'htfAlign', weight: 18, zh: '高週期偏向一致', en: 'HTF bias alignment' },
   { key: 'structure', weight: 15, zh: '進場週期已出現 CHoCH / BOS 確認', en: 'Entry TF structure confirmed' },
   { key: 'pdSide', weight: 12, zh: '價格位於正確的折價／溢價側', en: 'Correct premium/discount side' },
-  { key: 'poiFresh', weight: 12, zh: '進場 POI 未被消耗（新鮮）', en: 'POI is unmitigated' },
-  { key: 'sweep', weight: 12, zh: '進場前已掃除反向流動性', en: 'Liquidity swept before entry' },
+  // poiFresh / sweep 的權重由回測決定（scripts/research/confluence-study.mjs，15 幣 × 30m/1h/4h、
+  // 前後半段資料分開驗證）：新鮮 POI 兩段都明顯較好；有掃除流動性的訊號兩段都反而較差。
+  { key: 'poiFresh', weight: 20, zh: '進場 POI 未被消耗（新鮮）', en: 'POI is unmitigated' },
+  { key: 'sweep', weight: 4, zh: '進場前已掃除反向流動性', en: 'Liquidity swept before entry' },
   { key: 'stacked', weight: 10, zh: 'POI 具多重匯流（OB + FVG / OTE）', en: 'Stacked confluence at POI' },
   { key: 'rr', weight: 10, zh: '風報比達標', en: 'R:R meets minimum' },
   { key: 'target', weight: 10, zh: '目標方向存在未觸及流動性', en: 'Untapped liquidity at target' },
@@ -111,6 +113,13 @@ export function buildSetup(ctx, opts = {}) {
     killzone: !!kz,
   };
 
+  // 觀察用，還沒計入分數：等回測（scripts/research/confluence-study.mjs）證明有用才加權重
+  const tol = (atrValue || price * 0.004) * 0.15;
+  const extras = {
+    fib: fibAtPoi({ dir, poi, range: ctx.range, tol }),
+    ...volumeAtPoi({ dir, poi, entry, profile: indicators.volumeProfile, tol }),
+  };
+
   const checklist = CHECKS.map((c) => ({ ...c, ok: !!results[c.key] }));
   const raw = checklist.reduce((s, c) => s + (c.ok ? c.weight : 0), 0);
   const score = Math.round((raw / TOTAL_WEIGHT) * 100);
@@ -133,6 +142,7 @@ export function buildSetup(ctx, opts = {}) {
     score,
     grade,
     checklist,
+    extras,
     valid: score >= 42 && rrFinal >= Math.min(1.5, minRR),
     trend: structure.swing.trendLabel,
     killzone: kz,
@@ -150,6 +160,36 @@ export function buildSetup(ctx, opts = {}) {
 
 function overlap(a, b) {
   return a.bottom <= b.top && b.bottom <= a.top;
+}
+
+const FIB_CONFLUENCE_LEVELS = [0.5, 0.618, 0.705, 0.786];
+
+/** 進場區裡（含容差）有沒有落在交易區間的回撤位上；多單從高點往下量，空單從低點往上量 */
+function fibAtPoi({ dir, poi, range, tol }) {
+  if (!range || !(range.high > range.low)) return null;
+  const span = range.high - range.low;
+  const hit = FIB_CONFLUENCE_LEVELS.find((l) => {
+    const p = dir === 'long' ? range.high - span * l : range.low + span * l;
+    return p >= poi.bottom - tol && p <= poi.top + tol;
+  });
+  return hit ?? null;
+}
+
+/**
+ * 成交量分布：
+ *  hvn        進場區上有高成交量節點（POC 或量能 ≥ 最大值 70% 的價位）——市場認可的價位，較容易撐住
+ *  valueEdge  多單進場價在價值區下緣（VAL）以下、空單在上緣（VAH）以上——相對「便宜／昂貴」
+ *  lvn        進場區落在低成交量節點——價格通常快速穿越，較難撐住
+ */
+function volumeAtPoi({ dir, poi, entry, profile, tol }) {
+  if (!profile?.bins?.length) return { hvn: null, valueEdge: null, lvn: null };
+  const inZone = (p) => p >= poi.bottom - tol && p <= poi.top + tol;
+  const zoneBins = profile.bins.filter((b) => inZone(b.price));
+  return {
+    hvn: inZone(profile.poc) || zoneBins.some((b) => b.ratio >= 0.7),
+    valueEdge: dir === 'long' ? entry <= profile.val : entry >= profile.vah,
+    lvn: zoneBins.length > 0 && zoneBins.every((b) => b.ratio < 0.18),
+  };
 }
 
 function lastVal(arr) {

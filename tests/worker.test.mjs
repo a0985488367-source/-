@@ -19,7 +19,7 @@ const row = (over = {}) => ({
   symbol: 'ABCUSDT', interval: '1h', dir: 'long', grade: 'A', score: 75,
   entry: 100, stop: 95, rr: 3, riskPct: 5,
   targets: [{ name: 'TP1', price: 115, rr: 3 }],
-  poiType: 'Order Block', status: 'waiting', valid: true,
+  poiType: 'FVG', status: 'waiting', valid: true,
   checksPassed: 8, checksTotal: 10, pd: { zone: 'discount', pct: 30 },
   ...over,
 });
@@ -1153,6 +1153,106 @@ test('沒設定 Executor 時開啟自動下單：標記略過，完全不打任�
   assert.match(field.value, /尚未設定/);
 });
 
+const shortRow = () => row({ dir: 'short', entry: 100, stop: 105, targets: [{ name: 'TP1', price: 85, rr: 3 }] });
+
+test('預設只自動下多單：空單訊號照常推播，但不送單', async () => {
+  const discord = [];
+  const executor = { calls: [], wallet: { totalAvailableBalance: 1000, totalWalletBalance: 1000 }, instrument: demoInstrument };
+  const env = withExecutor();
+  await env.SMC_KV.put('auto-trade:enabled', 'true');
+  stubFetch({ market: makeMarket([shortRow()]), prices: { ABCUSDT: 100.05 }, discord, executor });
+  const out = await runWorker(env);
+  assert.equal(out.alerts, 1, '空單訊號還是要推播');
+  assert.equal(executor.calls.length, 0, '不允許的方向連餘額都不該查');
+  const field = discord[0].embeds[0].fields.find((f) => f.name.includes('自動下單'));
+  assert.match(field.value, /不自動下單/);
+});
+
+test('AUTO_TRADE_DIRECTIONS 加上 short 之後空單會正常下單', async () => {
+  const discord = [];
+  const executor = { calls: [], wallet: { totalAvailableBalance: 1000, totalWalletBalance: 1000 }, instrument: demoInstrument };
+  const env = withExecutor({ AUTO_TRADE_DIRECTIONS: 'long, short' });
+  await env.SMC_KV.put('auto-trade:enabled', 'true');
+  stubFetch({ market: makeMarket([shortRow()]), prices: { ABCUSDT: 100.05 }, discord, executor });
+  await runWorker(env);
+  const tradeCall = executor.calls.find((c) => c.url.endsWith('/trade'));
+  assert.ok(tradeCall, '允許做空時應該送出 /trade');
+  assert.equal(tradeCall.body.side, 'Sell');
+});
+
+const putPosition = (env, p) => env.SMC_KV.put(`open-pos:${p.symbol}:${p.dir}`, JSON.stringify(p));
+
+test('持倉總風險上限：既有部位加上這筆超過 6% 就只通知不下單', async () => {
+  const discord = [];
+  const executor = { calls: [], wallet: { totalAvailableBalance: 1000, totalWalletBalance: 1000 }, instrument: demoInstrument };
+  const env = withExecutor();
+  await env.SMC_KV.put('auto-trade:enabled', 'true');
+  await putPosition(env, { symbol: 'XYZUSDT', dir: 'long', entry: 10, stop: 9, qty: 55 }); // 還會虧 55 = 5.5%
+  executor.positions = [{ symbol: 'XYZUSDT', side: 'Buy', size: '55' }];
+  stubFetch({ market: makeMarket([row()]), prices: { ABCUSDT: 99.9, XYZUSDT: 10 }, discord, executor });
+  const out = await runWorker(env);
+  assert.equal(out.alerts, 1, '超過上限還是要推播');
+  assert.equal(executor.calls.find((c) => c.url.endsWith('/trade')), undefined);
+  const field = discord[0].embeds[0].fields.find((f) => f.name.includes('自動下單'));
+  assert.match(field.value, /持倉總風險已達 5\.5%（上限 6%/);
+});
+
+test('持倉總風險上限：停損已經搬到成本價以上的部位不佔額度', async () => {
+  const executor = { calls: [], wallet: { totalAvailableBalance: 1000, totalWalletBalance: 1000 }, instrument: demoInstrument };
+  const env = withExecutor();
+  await env.SMC_KV.put('auto-trade:enabled', 'true');
+  await putPosition(env, { symbol: 'XYZUSDT', dir: 'long', entry: 10, stop: 10.05, qty: 55, beMoved: true });
+  await putPosition(env, { symbol: 'QQQUSDT', dir: 'short', entry: 10, stop: 9.9, qty: 500, beMoved: true });
+  executor.positions = [{ symbol: 'XYZUSDT', side: 'Buy', size: '55' }, { symbol: 'QQQUSDT', side: 'Sell', size: '500' }];
+  stubFetch({ market: makeMarket([row()]), prices: { ABCUSDT: 99.9, XYZUSDT: 10.1, QQQUSDT: 9.95 }, discord: [], executor });
+  await runWorker(env);
+  assert.ok(executor.calls.find((c) => c.url.endsWith('/trade')), '保本後的部位剩餘風險是 0，應該照常下單');
+});
+
+test('停損距離低於 1% 只通知不下單（手續費會吃掉大半獲利）', async () => {
+  const discord = [];
+  const executor = { calls: [], wallet: { totalAvailableBalance: 1000, totalWalletBalance: 1000 }, instrument: demoInstrument };
+  const env = withExecutor();
+  await env.SMC_KV.put('auto-trade:enabled', 'true');
+  stubFetch({ market: makeMarket([row({ entry: 100, stop: 99.4 })]), prices: { ABCUSDT: 99.95 }, discord, executor });
+  const out = await runWorker(env);
+  assert.equal(out.alerts, 1);
+  assert.equal(executor.calls.length, 0);
+  const field = discord[0].embeds[0].fields.find((f) => f.name.includes('自動下單'));
+  assert.match(field.value, /停損距離只有 0\.60%（下限 1%/);
+});
+
+test('持倉總風險上限設成 0 就不限制', async () => {
+  const executor = { calls: [], wallet: { totalAvailableBalance: 1000, totalWalletBalance: 1000 }, instrument: demoInstrument };
+  const env = withExecutor({ AUTO_TRADE_MAX_OPEN_RISK_PCT: '0' });
+  await env.SMC_KV.put('auto-trade:enabled', 'true');
+  await putPosition(env, { symbol: 'XYZUSDT', dir: 'long', entry: 10, stop: 9, qty: 500 });
+  executor.positions = [{ symbol: 'XYZUSDT', side: 'Buy', size: '500' }];
+  stubFetch({ market: makeMarket([row()]), prices: { ABCUSDT: 99.9, XYZUSDT: 10 }, discord: [], executor });
+  await runWorker(env);
+  assert.ok(executor.calls.find((c) => c.url.endsWith('/trade')));
+});
+
+test('預設排除 Order Block 進場區：照常推播，但不送單；設成空字串就恢復下單', async () => {
+  const discord = [];
+  const executor = { calls: [], wallet: { totalAvailableBalance: 1000, totalWalletBalance: 1000 }, instrument: demoInstrument };
+  const env = withExecutor();
+  await env.SMC_KV.put('auto-trade:enabled', 'true');
+  stubFetch({ market: makeMarket([row({ poiType: 'Order Block' })]), prices: { ABCUSDT: 99.9 }, discord, executor });
+  const out = await runWorker(env);
+  assert.equal(out.alerts, 1, 'Order Block 訊號還是要推播');
+  assert.equal(executor.calls.length, 0);
+  const field = discord[0].embeds[0].fields.find((f) => f.name.includes('自動下單'));
+  assert.match(field.value, /Order Block 類型的進場區目前不自動下單/);
+
+  const executor2 = { calls: [], wallet: { totalAvailableBalance: 1000, totalWalletBalance: 1000 }, instrument: demoInstrument };
+  const env2 = withExecutor({ AUTO_TRADE_EXCLUDE_POI: '' });
+  await env2.SMC_KV.put('auto-trade:enabled', 'true');
+  stubFetch({ market: makeMarket([row({ poiType: 'Order Block' })]), prices: { ABCUSDT: 99.9 }, discord: [], executor: executor2 });
+  await runWorker(env2);
+  assert.ok(executor2.calls.find((c) => c.url.endsWith('/trade')), '清空排除清單後應該正常下單');
+});
+
 test('算出的數量小於最小下單量：回報錯誤，但 Discord 照常推播（下單失敗不能擋住通知）', async () => {
   const discord = [];
   const executor = { calls: [], wallet: { totalAvailableBalance: 1000, totalWalletBalance: 1000 }, instrument: { ...demoInstrument, minQty: 50 } };
@@ -1192,7 +1292,7 @@ test('停損距離很近時，算出的保證金超過上限：先試著拉高�
   // 不用再縮數量。價格用 99.9（比 stop 高，劇本還沒失效，但夠接近進場區）。
   const discord = [];
   const executor = { calls: [], wallet: { totalAvailableBalance: 1000, totalWalletBalance: 1000 }, instrument: demoInstrument };
-  const env = withExecutor();
+  const env = withExecutor({ AUTO_TRADE_MIN_STOP_PCT: '0' });
   await env.SMC_KV.put('auto-trade:enabled', 'true');
   stubFetch({ market: makeMarket([row({ stop: 99.75 })]), prices: { ABCUSDT: 99.9 }, discord, executor });
   await runWorker(env);
@@ -1207,7 +1307,7 @@ test('停損距離很近時，就算拉滿槓桿保證金還是超過上限：�
   // 只能縮小數量：250*25/100 = 62.5。價格用 100（比 stop 高，劇本沒失效）。
   const discord = [];
   const executor = { calls: [], wallet: { totalAvailableBalance: 1000, totalWalletBalance: 1000 }, instrument: demoInstrument };
-  const env = withExecutor();
+  const env = withExecutor({ AUTO_TRADE_MIN_STOP_PCT: '0' });
   await env.SMC_KV.put('auto-trade:enabled', 'true');
   stubFetch({ market: makeMarket([row({ stop: 99.9 })]), prices: { ABCUSDT: 100 }, discord, executor });
   await runWorker(env);
@@ -1219,7 +1319,7 @@ test('停損距離很近時，就算拉滿槓桿保證金還是超過上限：�
 test('保證金上限縮完數量後低於最小下單量：直接跳過這筆，不進場', async () => {
   const discord = [];
   const executor = { calls: [], wallet: { totalAvailableBalance: 1000, totalWalletBalance: 1000 }, instrument: { ...demoInstrument, minQty: 100 } };
-  const env = withExecutor();
+  const env = withExecutor({ AUTO_TRADE_MIN_STOP_PCT: '0' });
   await env.SMC_KV.put('auto-trade:enabled', 'true');
   stubFetch({ market: makeMarket([row({ stop: 99.9 })]), prices: { ABCUSDT: 100 }, discord, executor });
   const out = await runWorker(env);
