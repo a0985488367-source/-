@@ -53,6 +53,8 @@ AUTO_TRADE_LEVERAGE_MAX = "10"
 AUTO_TRADE_MAX_MARGIN_PCT = "25"
 # 只自動下這些方向（逗號分隔，例如 "long,short"）；其他方向照樣推播、進模擬盤紀錄
 AUTO_TRADE_DIRECTIONS = "long"
+# 不自動下單的進場區類型（逗號分隔）；一樣照樣推播、進模擬盤紀錄
+AUTO_TRADE_EXCLUDE_POI = "Order Block"
 # Worker 自己即時掃描（需要 Workers Paid；開啟前留意對外部交易所 API 的
 # 請求量會增加，見 index.js 開頭的說明）。採分批架構：候選池 120 檔，
 # 每 10 分鐘只真的重新掃描其中 20 檔，結果累積進 KV，繞完一輪（120/20=6

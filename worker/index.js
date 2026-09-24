@@ -111,6 +111,9 @@
  *   Variable  AUTO_TRADE_DIRECTIONS  允許自動下單的方向，逗號分隔（預設 long）。
  *             不在清單裡的方向照樣推播 Discord、照樣進模擬盤紀錄，只是不下單，
  *             資料會繼續累積，之後可以用數據決定要不要重新打開。
+ *   Variable  AUTO_TRADE_EXCLUDE_POI  不自動下單的進場區類型，逗號分隔（預設 Order Block，
+ *             模擬盤紀錄裡唯一期望值為負的類型）。行為跟上面一樣：照樣推播、只是不下單；
+ *             設成空字串就全部類型都下。
  *   KV        SMC_KV 的 auto-trade:enabled 這個 key，預設不存在＝關閉
  *
  * 下單成功後會把這筆部位記進 SMC_KV（key 開頭 open-pos:），之後每次執行都
@@ -179,6 +182,7 @@ const DEFAULTS = {
   AUTO_TRADE_LEVERAGE_MAX: '10',
   AUTO_TRADE_MAX_MARGIN_PCT: '25',
   AUTO_TRADE_DIRECTIONS: 'long',
+  AUTO_TRADE_EXCLUDE_POI: 'Order Block',
   WORKER_SCAN_ENABLED: 'false',
   WORKER_SCAN_TOP: '120',              // 候選池總大小：想涵蓋幾檔（循環一輪會全部算過）
   WORKER_SCAN_BATCH_SIZE: '20',        // 每次真的重新掃描只算這麼多檔，請求量才不會一次太密集
@@ -206,8 +210,9 @@ function leverageForScore(env, score) {
   return Math.round(min + t * (max - min));
 }
 
-const allowedDirections = (env) =>
-  String(cfg(env, 'AUTO_TRADE_DIRECTIONS')).split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+const csv = (v) => String(v).split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+const allowedDirections = (env) => csv(cfg(env, 'AUTO_TRADE_DIRECTIONS'));
+const excludedPoiTypes = (env) => csv(cfg(env, 'AUTO_TRADE_EXCLUDE_POI'));
 
 export default {
   async scheduled(event, env, ctx) {
@@ -344,6 +349,7 @@ async function handleFetch(request, env) {
         leverageMax: Number(cfg(env, 'AUTO_TRADE_LEVERAGE_MAX')),
         maxMarginPct: Number(cfg(env, 'AUTO_TRADE_MAX_MARGIN_PCT')),
         directions: allowedDirections(env),
+        excludePoi: excludedPoiTypes(env),
         wallet,
         trackedOpenPositions: openPositions.length,
         openPositions,
@@ -836,6 +842,7 @@ function buildEmbed({ row: r, price }, market, autoTrade) {
 function autoTradeText(t) {
   if (t.skipped === 'no-keys') return '⏭️ 尚未設定 EXECUTOR_URL／EXECUTOR_HMAC_SECRET，已略過';
   if (t.skipped === 'direction') return '⏭️ 這個方向目前不自動下單（AUTO_TRADE_DIRECTIONS），只通知不下單';
+  if (t.skipped === 'poi') return `⏭️ ${t.poiType} 類型的進場區目前不自動下單（AUTO_TRADE_EXCLUDE_POI），只通知不下單`;
   if (t.error) return `❌ ${t.error}`;
   // 進場前雖然已經驗證過每一段出場單的數量都掛得上，但實際掛單當下還是
   // 可能因為限流／網路暫時失敗（跟數量大小無關）。這種情況停損已經生效，
@@ -962,6 +969,7 @@ async function autoTradeOrder(env, hit) {
   if (!env.EXECUTOR_URL || !env.EXECUTOR_HMAC_SECRET) return { skipped: 'no-keys' };
   const r = hit.row;
   if (!allowedDirections(env).includes(r.dir)) return { skipped: 'direction' };
+  if (excludedPoiTypes(env).includes(String(r.poiType).toLowerCase())) return { skipped: 'poi', poiType: r.poiType };
   try {
     const [wallet, instrument] = await Promise.all([
       executorCall(env, 'GET', '/balance'),

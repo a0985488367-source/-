@@ -520,6 +520,7 @@ Worker）」卡片，填一次 Worker 網址跟 token（只存這台裝置，不
 | `AUTO_TRADE_LEVERAGE_MAX` | 10 | 評分 100 分時用的槓桿倍數 |
 | `AUTO_TRADE_MAX_MARGIN_PCT` | 25 | 單筆最多佔用可用餘額的 %，避免停損很近時一張單吃光整個帳戶的保證金 |
 | `AUTO_TRADE_DIRECTIONS` | long | 允許自動下單的方向，逗號分隔（`long,short` 就是兩邊都下）。不在清單裡的方向照樣推播、照樣進模擬盤紀錄，只是不下單。預設只做多：模擬盤紀錄裡做空的期望值是負的 |
+| `AUTO_TRADE_EXCLUDE_POI` | Order Block | 不自動下單的進場區類型，逗號分隔（空字串＝全部都下）。行為同上：照樣推播、只是不下單。模擬盤 73 筆裡 Order Block 24 筆平均 -0.19R，是唯一負期望值的類型 |
 
 ### 每日晨報
 

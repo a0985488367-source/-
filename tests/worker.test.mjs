@@ -19,7 +19,7 @@ const row = (over = {}) => ({
   symbol: 'ABCUSDT', interval: '1h', dir: 'long', grade: 'A', score: 75,
   entry: 100, stop: 95, rr: 3, riskPct: 5,
   targets: [{ name: 'TP1', price: 115, rr: 3 }],
-  poiType: 'Order Block', status: 'waiting', valid: true,
+  poiType: 'FVG', status: 'waiting', valid: true,
   checksPassed: 8, checksTotal: 10, pd: { zone: 'discount', pct: 30 },
   ...over,
 });
@@ -1178,6 +1178,26 @@ test('AUTO_TRADE_DIRECTIONS 加上 short 之後空單會正常下單', async () 
   const tradeCall = executor.calls.find((c) => c.url.endsWith('/trade'));
   assert.ok(tradeCall, '允許做空時應該送出 /trade');
   assert.equal(tradeCall.body.side, 'Sell');
+});
+
+test('預設排除 Order Block 進場區：照常推播，但不送單；設成空字串就恢復下單', async () => {
+  const discord = [];
+  const executor = { calls: [], wallet: { totalAvailableBalance: 1000, totalWalletBalance: 1000 }, instrument: demoInstrument };
+  const env = withExecutor();
+  await env.SMC_KV.put('auto-trade:enabled', 'true');
+  stubFetch({ market: makeMarket([row({ poiType: 'Order Block' })]), prices: { ABCUSDT: 99.9 }, discord, executor });
+  const out = await runWorker(env);
+  assert.equal(out.alerts, 1, 'Order Block 訊號還是要推播');
+  assert.equal(executor.calls.length, 0);
+  const field = discord[0].embeds[0].fields.find((f) => f.name.includes('自動下單'));
+  assert.match(field.value, /Order Block 類型的進場區目前不自動下單/);
+
+  const executor2 = { calls: [], wallet: { totalAvailableBalance: 1000, totalWalletBalance: 1000 }, instrument: demoInstrument };
+  const env2 = withExecutor({ AUTO_TRADE_EXCLUDE_POI: '' });
+  await env2.SMC_KV.put('auto-trade:enabled', 'true');
+  stubFetch({ market: makeMarket([row({ poiType: 'Order Block' })]), prices: { ABCUSDT: 99.9 }, discord: [], executor: executor2 });
+  await runWorker(env2);
+  assert.ok(executor2.calls.find((c) => c.url.endsWith('/trade')), '清空排除清單後應該正常下單');
 });
 
 test('算出的數量小於最小下單量：回報錯誤，但 Discord 照常推播（下單失敗不能擋住通知）', async () => {
