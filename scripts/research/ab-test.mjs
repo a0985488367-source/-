@@ -23,6 +23,9 @@ const WARMUP = Number(opt('warmup', 320));
 const MIN_SCORE = Number(opt('min-score', 55));
 const COOLDOWN = Number(opt('cooldown', 12));
 const OUT = opt('out', 'data/research/ab-test.json');
+const ONLY = opt('only', '').split(',').filter(Boolean);
+const LIVE_MIN_SCORE = Number(opt('live-min-score', 65));
+const ROUND_TRIP_FEE = 0.0011;
 
 /** 受測的管理規則組合。base 是目前線上的行為（只有結構停損 + 最終目標）。 */
 const VARIANTS = {
@@ -48,7 +51,21 @@ const VARIANTS = {
   // 最終候選：保本鏢 + 成本價（含手續費緩衝）+ 追蹤停損
   FINAL:           { scalpR: 0.5, scalpFraction: 0.34, breakevenAtR: 0.5, breakevenOffsetR: 0.05, trailFromR: 1.5, trailGapR: 0.8 },
   FINAL_f50:       { scalpR: 0.5, scalpFraction: 0.50, breakevenAtR: 0.5, breakevenOffsetR: 0.05, trailFromR: 1.5, trailGapR: 0.8 },
+  // ── 進場後「發現不對」提早出場（收盤判斷）──
+  FINAL_stall6:    { stallBars: 6, stallMinR: 0.3 },
+  FINAL_stall12:   { stallBars: 12, stallMinR: 0.3 },
+  FINAL_stall24:   { stallBars: 24, stallMinR: 0.3 },
+  FINAL_zone:      { zoneCloseExit: true },
+  FINAL_zone_st12: { zoneCloseExit: true, stallBars: 12, stallMinR: 0.3 },
 };
+
+const live = (t) => t.dir === 'long' && t.poiType !== 'Order Block' && t.score >= LIVE_MIN_SCORE && t.stopPct >= 0.01;
+const GROUPS = [
+  ['全部', () => true],
+  ['線上過濾', live],
+  ['線上 前半', (t) => live(t) && t.half === 0],
+  ['線上 後半', (t) => live(t) && t.half === 1],
+];
 
 const log = (...a) => console.log(...a);
 
@@ -67,7 +84,9 @@ function collectSignals(candles, symbol, interval) {
       symbol, interval, index: i, time: candles[i].time,
       dir: s.dir, entry: s.entry, stop: s.stop, entryType: s.entryType,
       targets: s.targets.map((t) => ({ name: t.name, price: t.price, rr: t.rr, label: t.label })),
-      grade: s.grade, score: s.score,
+      grade: s.grade, score: s.score, poiType: s.poi.type, zone: s.entryZone,
+      stopPct: Math.abs(s.entry - s.stop) / s.entry,
+      half: i < (WARMUP + candles.length) / 2 ? 0 : 1,
     });
     cooldownUntil = i + COOLDOWN;
   }
@@ -91,18 +110,25 @@ function collectSignals(candles, symbol, interval) {
   log(`\n訊號總數：${signals.length}（所有變體共用同一份）\n`);
   if (!signals.length) { log('沒有訊號可測。'); process.exit(1); }
 
+  const net = (t) => ({ ...t, r: t.r - ROUND_TRIP_FEE / t.stopPct });
   const rows = [];
   for (const [name, cfg] of Object.entries(VARIANTS)) {
-    const s = summarize(runSignals(signals, candlesBy, cfg));
-    rows.push({ name, cfg, ...s });
+    if (ONLY.length && !ONLY.includes(name)) continue;
+    const closed = runSignals(signals, candlesBy, cfg);
+    for (const [group, f] of GROUPS) {
+      const hit = closed.filter(f);
+      rows.push({ name, group, cfg, ...summarize(hit), netExpectancy: summarize(hit.map(net)).expectancy ?? 0 });
+    }
   }
 
-  const head = ['規則', '筆數', '勝率', '總R', '期望值', '平均獲利', '平均虧損', '獲利因子', '最大回撤'];
-  const body = rows.map((r) => [
-    r.name, String(r.n), pct(r.winRate ?? 0), r2(r.totalR ?? 0), r2(r.expectancy ?? 0),
-    r2(r.avgWin ?? 0), r2(r.avgLoss ?? 0), (r.profitFactor ?? 0).toFixed(2), (r.maxDdR ?? 0).toFixed(1),
-  ]);
-  printTable(log, head, body);
+  for (const [group] of GROUPS) {
+    log(`\n■ ${group}`);
+    printTable(log, ['規則', '筆數', '勝率', '總R', '期望值', '扣手續費後', '平均獲利', '平均虧損', '獲利因子', '最大回撤'],
+      rows.filter((r) => r.group === group).map((r) => [
+        r.name, String(r.n), pct(r.winRate ?? 0), r2(r.totalR ?? 0), r2(r.expectancy ?? 0), r2(r.netExpectancy),
+        r2(r.avgWin ?? 0), r2(r.avgLoss ?? 0), (r.profitFactor ?? 0).toFixed(2), (r.maxDdR ?? 0).toFixed(1),
+      ]));
+  }
 
   await mkdir(OUT.split('/').slice(0, -1).join('/'), { recursive: true });
   await writeFile(OUT, JSON.stringify({ generatedAt: Date.now(), symbols: SYMBOLS, intervals: INTERVALS, signals: signals.length, rows }, null, 2));

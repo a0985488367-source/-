@@ -21,6 +21,9 @@ on:
       min_score:
         description: '最低分數'
         default: '55'
+      variants:
+        description: 'ab-test 只跑這些規則（逗號分隔）；留空＝全部'
+        default: ''
       commit:
         description: '是否把結果存回倉庫'
         default: 'true'
@@ -44,6 +47,7 @@ jobs:
           SYMBOLS: ${{ inputs.symbols }}
           INTERVALS: ${{ inputs.intervals }}
           MIN_SCORE: ${{ inputs.min_score }}
+          VARIANTS: ${{ inputs.variants }}
         run: |
           set -o pipefail
           if [ "$STUDY" = confluence ]; then SCRIPT=confluence-study; DEF_INT=30m,1h,4h; else SCRIPT=ab-test; DEF_INT=15m,1h; fi
@@ -51,6 +55,7 @@ jobs:
             --symbols="$SYMBOLS" \
             --intervals="${INTERVALS:-$DEF_INT}" \
             --min-score="$MIN_SCORE" \
+            --only="$VARIANTS" \
             | tee ab-output.txt
 
       - name: 寫進步驟摘要
