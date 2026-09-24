@@ -56,6 +56,19 @@ function collectSignals(candles, symbol, interval) {
 
 const live = (t) => t.dir === 'long' && t.poiType !== 'Order Block' && t.score >= LIVE_MIN_SCORE;
 
+// 評分權重候選：只改權重重新算分數，不動引擎，拿來跟現行分數比
+const WEIGHTS_NOW = { htfAlign: 18, structure: 15, pdSide: 12, poiFresh: 12, sweep: 12, stacked: 10, rr: 10, target: 10, momentum: 8, killzone: 5 };
+const WEIGHT_VARIANTS = {
+  現行: WEIGHTS_NOW,
+  新鮮POI加重_掃除減輕: { ...WEIGHTS_NOW, poiFresh: 20, sweep: 4 },
+  新鮮POI加倍_掃除歸零: { ...WEIGHTS_NOW, poiFresh: 24, sweep: 0 },
+};
+const scoreWith = (w, checks) => {
+  const total = Object.values(w).reduce((a, b) => a + b, 0);
+  return Math.round((Object.entries(w).reduce((s, [k, v]) => s + (checks[k] ? v : 0), 0) / total) * 100);
+};
+const liveWith = (w) => (t) => t.dir === 'long' && t.poiType !== 'Order Block' && scoreWith(w, t.checks) >= LIVE_MIN_SCORE;
+
 const CHECK_KEYS = ['htfAlign', 'structure', 'pdSide', 'poiFresh', 'sweep', 'stacked', 'rr', 'target', 'momentum', 'killzone'];
 const STOP_BUCKETS = [[0, 0.005], [0.005, 0.01], [0.01, 0.02], [0.02, 0.04], [0.04, 1]];
 
@@ -93,6 +106,12 @@ const SECTIONS = [
     ['前 停損<1%', (t) => t.half === 0 && t.stopPct < 0.01],
     ['後 停損≥1%', (t) => t.half === 1 && t.stopPct >= 0.01],
     ['後 停損<1%', (t) => t.half === 1 && t.stopPct < 0.01],
+  ])],
+  ['評分權重候選（線上過濾，用各自的分數套門檻）', Object.entries(WEIGHT_VARIANTS).flatMap(([name, w]) => [
+    [`${name} 全部`, liveWith(w)],
+    [`${name} 前半`, (t) => t.half === 0 && liveWith(w)(t)],
+    [`${name} 後半`, (t) => t.half === 1 && liveWith(w)(t)],
+    [`${name} ＋停損≥1%`, (t) => t.stopPct >= 0.01 && liveWith(w)(t)],
   ])],
   ['停損距離（線上過濾後；距離愈近，手續費吃掉的 R 愈多）', STOP_BUCKETS.map(([lo, hi]) => [
     `${(lo * 100).toFixed(1)}%–${(hi * 100).toFixed(1)}%`, (t) => live(t) && t.stopPct >= lo && t.stopPct < hi,
