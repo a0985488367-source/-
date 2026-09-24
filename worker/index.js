@@ -117,6 +117,9 @@
  *   Variable  AUTO_TRADE_MAX_OPEN_RISK_PCT  所有追蹤中部位「停損打到還會虧多少」加總的上限，
  *             占帳戶餘額的 %（預設 6，0＝不限制）。幣圈同漲同跌，同時開一堆同方向
  *             的單等於同一個賭注；已經搬到成本價的部位不佔額度。超過一樣只通知不下單。
+ *   Variable  AUTO_TRADE_MIN_STOP_PCT  停損距離（占進場價 %）低於這個值就不自動下單（預設 1，0＝不限制）。
+ *             手續費是按倉位價值收的，停損愈近、同樣風險金額的倉位愈大，
+ *             一進一出的吃單手續費（約 0.11%）在 0.5% 停損時就吃掉 0.22R。
  *   KV        SMC_KV 的 auto-trade:enabled 這個 key，預設不存在＝關閉
  *
  * 下單成功後會把這筆部位記進 SMC_KV（key 開頭 open-pos:），之後每次執行都
@@ -187,6 +190,7 @@ const DEFAULTS = {
   AUTO_TRADE_DIRECTIONS: 'long',
   AUTO_TRADE_EXCLUDE_POI: 'Order Block',
   AUTO_TRADE_MAX_OPEN_RISK_PCT: '6',
+  AUTO_TRADE_MIN_STOP_PCT: '1',
   WORKER_SCAN_ENABLED: 'false',
   WORKER_SCAN_TOP: '120',              // 候選池總大小：想涵蓋幾檔（循環一輪會全部算過）
   WORKER_SCAN_BATCH_SIZE: '20',        // 每次真的重新掃描只算這麼多檔，請求量才不會一次太密集
@@ -368,6 +372,7 @@ async function handleFetch(request, env) {
         directions: allowedDirections(env),
         excludePoi: excludedPoiTypes(env),
         maxOpenRiskPct: Number(cfg(env, 'AUTO_TRADE_MAX_OPEN_RISK_PCT')),
+        minStopPct: Number(cfg(env, 'AUTO_TRADE_MIN_STOP_PCT')),
         openRiskPct: wallet?.totalWalletBalance > 0
           ? Number(((openRiskAmount(await trackedPositions(env)) / wallet.totalWalletBalance) * 100).toFixed(2))
           : null,
@@ -863,6 +868,7 @@ function buildEmbed({ row: r, price }, market, autoTrade) {
 function autoTradeText(t) {
   if (t.skipped === 'no-keys') return '⏭️ 尚未設定 EXECUTOR_URL／EXECUTOR_HMAC_SECRET，已略過';
   if (t.skipped === 'direction') return '⏭️ 這個方向目前不自動下單（AUTO_TRADE_DIRECTIONS），只通知不下單';
+  if (t.skipped === 'tight-stop') return `⏭️ 停損距離只有 ${t.stopPct.toFixed(2)}%（下限 ${t.minStopPct}%，AUTO_TRADE_MIN_STOP_PCT），手續費會吃掉大半獲利，只通知不下單`;
   if (t.skipped === 'open-risk') return `⏭️ 持倉總風險已達 ${t.openRiskPct.toFixed(1)}%（上限 ${t.maxOpenRiskPct}%，AUTO_TRADE_MAX_OPEN_RISK_PCT），這筆只通知不下單`;
   if (t.skipped === 'poi') return `⏭️ ${t.poiType} 類型的進場區目前不自動下單（AUTO_TRADE_EXCLUDE_POI），只通知不下單`;
   if (t.error) return `❌ ${t.error}`;
@@ -992,6 +998,9 @@ async function autoTradeOrder(env, hit) {
   const r = hit.row;
   if (!allowedDirections(env).includes(r.dir)) return { skipped: 'direction' };
   if (excludedPoiTypes(env).includes(String(r.poiType).toLowerCase())) return { skipped: 'poi', poiType: r.poiType };
+  const stopPct = (Math.abs(r.entry - r.stop) / r.entry) * 100;
+  const minStopPct = Number(cfg(env, 'AUTO_TRADE_MIN_STOP_PCT'));
+  if (stopPct < minStopPct) return { skipped: 'tight-stop', stopPct, minStopPct };
   try {
     const [wallet, instrument] = await Promise.all([
       executorCall(env, 'GET', '/balance'),

@@ -57,6 +57,8 @@ AUTO_TRADE_DIRECTIONS = "long"
 AUTO_TRADE_EXCLUDE_POI = "Order Block"
 # 所有持倉停損打到時的虧損加總上限（占帳戶 %）；搬到成本價的部位不算
 AUTO_TRADE_MAX_OPEN_RISK_PCT = "6"
+# 停損距離（占進場價 %）低於這個就不下單：停損愈近，手續費吃掉的 R 愈多
+AUTO_TRADE_MIN_STOP_PCT = "1"
 # Worker 自己即時掃描（需要 Workers Paid；開啟前留意對外部交易所 API 的
 # 請求量會增加，見 index.js 開頭的說明）。採分批架構：候選池 120 檔，
 # 每 10 分鐘只真的重新掃描其中 20 檔，結果累積進 KV，繞完一輪（120/20=6

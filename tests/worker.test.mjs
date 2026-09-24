@@ -1209,6 +1209,19 @@ test('持倉總風險上限：停損已經搬到成本價以上的部位不佔�
   assert.ok(executor.calls.find((c) => c.url.endsWith('/trade')), '保本後的部位剩餘風險是 0，應該照常下單');
 });
 
+test('停損距離低於 1% 只通知不下單（手續費會吃掉大半獲利）', async () => {
+  const discord = [];
+  const executor = { calls: [], wallet: { totalAvailableBalance: 1000, totalWalletBalance: 1000 }, instrument: demoInstrument };
+  const env = withExecutor();
+  await env.SMC_KV.put('auto-trade:enabled', 'true');
+  stubFetch({ market: makeMarket([row({ entry: 100, stop: 99.4 })]), prices: { ABCUSDT: 99.95 }, discord, executor });
+  const out = await runWorker(env);
+  assert.equal(out.alerts, 1);
+  assert.equal(executor.calls.length, 0);
+  const field = discord[0].embeds[0].fields.find((f) => f.name.includes('自動下單'));
+  assert.match(field.value, /停損距離只有 0\.60%（下限 1%/);
+});
+
 test('持倉總風險上限設成 0 就不限制', async () => {
   const executor = { calls: [], wallet: { totalAvailableBalance: 1000, totalWalletBalance: 1000 }, instrument: demoInstrument };
   const env = withExecutor({ AUTO_TRADE_MAX_OPEN_RISK_PCT: '0' });
@@ -1279,7 +1292,7 @@ test('停損距離很近時，算出的保證金超過上限：先試著拉高�
   // 不用再縮數量。價格用 99.9（比 stop 高，劇本還沒失效，但夠接近進場區）。
   const discord = [];
   const executor = { calls: [], wallet: { totalAvailableBalance: 1000, totalWalletBalance: 1000 }, instrument: demoInstrument };
-  const env = withExecutor();
+  const env = withExecutor({ AUTO_TRADE_MIN_STOP_PCT: '0' });
   await env.SMC_KV.put('auto-trade:enabled', 'true');
   stubFetch({ market: makeMarket([row({ stop: 99.75 })]), prices: { ABCUSDT: 99.9 }, discord, executor });
   await runWorker(env);
@@ -1294,7 +1307,7 @@ test('停損距離很近時，就算拉滿槓桿保證金還是超過上限：�
   // 只能縮小數量：250*25/100 = 62.5。價格用 100（比 stop 高，劇本沒失效）。
   const discord = [];
   const executor = { calls: [], wallet: { totalAvailableBalance: 1000, totalWalletBalance: 1000 }, instrument: demoInstrument };
-  const env = withExecutor();
+  const env = withExecutor({ AUTO_TRADE_MIN_STOP_PCT: '0' });
   await env.SMC_KV.put('auto-trade:enabled', 'true');
   stubFetch({ market: makeMarket([row({ stop: 99.9 })]), prices: { ABCUSDT: 100 }, discord, executor });
   await runWorker(env);
@@ -1306,7 +1319,7 @@ test('停損距離很近時，就算拉滿槓桿保證金還是超過上限：�
 test('保證金上限縮完數量後低於最小下單量：直接跳過這筆，不進場', async () => {
   const discord = [];
   const executor = { calls: [], wallet: { totalAvailableBalance: 1000, totalWalletBalance: 1000 }, instrument: { ...demoInstrument, minQty: 100 } };
-  const env = withExecutor();
+  const env = withExecutor({ AUTO_TRADE_MIN_STOP_PCT: '0' });
   await env.SMC_KV.put('auto-trade:enabled', 'true');
   stubFetch({ market: makeMarket([row({ stop: 99.9 })]), prices: { ABCUSDT: 100 }, discord, executor });
   const out = await runWorker(env);

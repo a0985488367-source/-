@@ -57,11 +57,11 @@ function collectSignals(candles, symbol, interval) {
 const live = (t) => t.dir === 'long' && t.poiType !== 'Order Block' && t.score >= LIVE_MIN_SCORE;
 
 // 評分權重候選：只改權重重新算分數，不動引擎，拿來跟現行分數比
-const WEIGHTS_NOW = { htfAlign: 18, structure: 15, pdSide: 12, poiFresh: 12, sweep: 12, stacked: 10, rr: 10, target: 10, momentum: 8, killzone: 5 };
+const WEIGHTS_OLD = { htfAlign: 18, structure: 15, pdSide: 12, poiFresh: 12, sweep: 12, stacked: 10, rr: 10, target: 10, momentum: 8, killzone: 5 };
 const WEIGHT_VARIANTS = {
-  現行: WEIGHTS_NOW,
-  新鮮POI加重_掃除減輕: { ...WEIGHTS_NOW, poiFresh: 20, sweep: 4 },
-  新鮮POI加倍_掃除歸零: { ...WEIGHTS_NOW, poiFresh: 24, sweep: 0 },
+  舊版: WEIGHTS_OLD,
+  現行: { ...WEIGHTS_OLD, poiFresh: 20, sweep: 4 },
+  新鮮POI加倍_掃除歸零: { ...WEIGHTS_OLD, poiFresh: 24, sweep: 0 },
 };
 const scoreWith = (w, checks) => {
   const total = Object.values(w).reduce((a, b) => a + b, 0);
