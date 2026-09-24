@@ -1,0 +1,65 @@
+# 每週績效報告：Demo 帳戶淨值（週變化）、符合下單規則的訊號績效（扣手續費）、
+# 上真錢門檻進度，推到 Discord。淨值每週記一筆進 data/account-history.json。
+#
+# 排程只會在預設分支（main）上觸發；功能分支上可以用手動觸發測試。
+name: 每週績效報告
+
+on:
+  schedule:
+    - cron: '0 1 * * 1'   # 每週一 UTC 01:00 = 台灣 09:00
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: '只印出報告，不推 Discord、不記錄淨值'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: weekly-report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 產生並推送報告
+        env:
+          # workers.dev 網址本來就是公開的；換了子網域可以在 repo Variables 設 WORKER_URL 覆蓋
+          WORKER_URL: ${{ vars.WORKER_URL || 'https://smc-signals.crypto-radar-guardian-24x7.workers.dev' }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL || secrets.SMC }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            node scripts/weekly-report.mjs --dry-run
+          else
+            node scripts/weekly-report.mjs
+          fi
+
+      - name: 記錄這週淨值
+        if: ${{ inputs.dry_run != true }}
+        run: |
+          if [ -z "$(git status --porcelain data/account-history.json)" ]; then
+            echo "沒有新的淨值紀錄"
+            exit 0
+          fi
+          git config user.name "smc-signals[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/account-history.json
+          git commit -m "chore(data): 記錄每週淨值 [skip ci]"
+          BRANCH="${GITHUB_REF_NAME}"
+          for i in 1 2 3; do
+            git push origin "HEAD:$BRANCH" && exit 0
+            # 別的排程（模擬盤帳本）可能剛推過；這個檔只有這裡會寫，直接合併就不會衝突
+            git pull --no-rebase --no-edit origin "$BRANCH" || true
+            sleep 3
+          done
+          echo "::warning::淨值紀錄推送失敗"
