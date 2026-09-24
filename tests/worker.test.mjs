@@ -1153,6 +1153,33 @@ test('沒設定 Executor 時開啟自動下單：標記略過，完全不打任�
   assert.match(field.value, /尚未設定/);
 });
 
+const shortRow = () => row({ dir: 'short', entry: 100, stop: 105, targets: [{ name: 'TP1', price: 85, rr: 3 }] });
+
+test('預設只自動下多單：空單訊號照常推播，但不送單', async () => {
+  const discord = [];
+  const executor = { calls: [], wallet: { totalAvailableBalance: 1000, totalWalletBalance: 1000 }, instrument: demoInstrument };
+  const env = withExecutor();
+  await env.SMC_KV.put('auto-trade:enabled', 'true');
+  stubFetch({ market: makeMarket([shortRow()]), prices: { ABCUSDT: 100.05 }, discord, executor });
+  const out = await runWorker(env);
+  assert.equal(out.alerts, 1, '空單訊號還是要推播');
+  assert.equal(executor.calls.length, 0, '不允許的方向連餘額都不該查');
+  const field = discord[0].embeds[0].fields.find((f) => f.name.includes('自動下單'));
+  assert.match(field.value, /不自動下單/);
+});
+
+test('AUTO_TRADE_DIRECTIONS 加上 short 之後空單會正常下單', async () => {
+  const discord = [];
+  const executor = { calls: [], wallet: { totalAvailableBalance: 1000, totalWalletBalance: 1000 }, instrument: demoInstrument };
+  const env = withExecutor({ AUTO_TRADE_DIRECTIONS: 'long, short' });
+  await env.SMC_KV.put('auto-trade:enabled', 'true');
+  stubFetch({ market: makeMarket([shortRow()]), prices: { ABCUSDT: 100.05 }, discord, executor });
+  await runWorker(env);
+  const tradeCall = executor.calls.find((c) => c.url.endsWith('/trade'));
+  assert.ok(tradeCall, '允許做空時應該送出 /trade');
+  assert.equal(tradeCall.body.side, 'Sell');
+});
+
 test('算出的數量小於最小下單量：回報錯誤，但 Discord 照常推播（下單失敗不能擋住通知）', async () => {
   const discord = [];
   const executor = { calls: [], wallet: { totalAvailableBalance: 1000, totalWalletBalance: 1000 }, instrument: { ...demoInstrument, minQty: 50 } };
