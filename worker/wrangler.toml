@@ -52,7 +52,7 @@ AUTO_TRADE_LEVERAGE_MAX = "10"
 # 佔用可用餘額的這個 %，超過會先試著拉高槓桿省保證金，還是不夠才縮小數量
 AUTO_TRADE_MAX_MARGIN_PCT = "25"
 # 只自動下這些方向（逗號分隔，例如 "long,short"）；其他方向照樣推播、進模擬盤紀錄
-AUTO_TRADE_DIRECTIONS = "long"
+AUTO_TRADE_DIRECTIONS = "long,short"
 # 不自動下單的進場區類型（逗號分隔）；一樣照樣推播、進模擬盤紀錄
 AUTO_TRADE_EXCLUDE_POI = "Order Block"
 # 所有持倉停損打到時的虧損加總上限（占帳戶 %）；搬到成本價的部位不算
