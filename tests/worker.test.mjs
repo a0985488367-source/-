@@ -1033,7 +1033,7 @@ test('獲利達到 0.5R → 停損移到成本價 + 0.05R', async () => {
   assert.equal(pos.trailing, false);
 });
 
-test('獲利超過 1.5R → 改用追蹤停損，距離最高獲利 0.8R', async () => {
+test('獲利超過 1R → 改用追蹤停損，距離最高獲利 0.5R', async () => {
   const discord = [];
   const env = withExecutor();
   await env.SMC_KV.put('open-pos:ABCUSDT:long', JSON.stringify({
@@ -1041,15 +1041,15 @@ test('獲利超過 1.5R → 改用追蹤停損，距離最高獲利 0.8R', async
     maxFavorableR: 0.5, beMoved: true, trailing: false, qty: 2, riskAmount: 10, leverage: 5, grade: 'A', score: 75,
   }));
   const executor = { calls: [], positions: [{ symbol: 'ABCUSDT', side: 'Buy', size: '2' }] };
-  // entry 100、initialStop 95（risk=5），現價 110 → 獲利 2R，超過 1.5R 的追蹤門檻
-  // 鎖定 R = 2 - 0.8 = 1.2 → 停損 = 100 + 5*1.2 = 106
+  // entry 100、initialStop 95（risk=5），現價 110 → 獲利 2R，超過 1R 的追蹤門檻
+  // 鎖定 R = 2 - 0.5 = 1.5 → 停損 = 100 + 5*1.5 = 107.5
   stubFetch({ market: makeMarket([]), prices: { ABCUSDT: 110 }, discord, executor });
   await runWorker(env);
   const stopCall = executor.calls.find((c) => c.url.endsWith('/set-stop'));
-  assert.ok(stopCall, '獲利超過 1.5R 應該搬停損');
-  assert.equal(stopCall.body.stop_loss, '106');
+  assert.ok(stopCall, '獲利超過 1R 應該搬停損');
+  assert.equal(stopCall.body.stop_loss, '107.5');
   const pos = JSON.parse(await env.SMC_KV.get('open-pos:ABCUSDT:long'));
-  assert.equal(pos.stop, 106);
+  assert.equal(pos.stop, 107.5);
   assert.equal(pos.trailing, true);
   assert.equal(pos.maxFavorableR, 2);
 });
@@ -1058,16 +1058,16 @@ test('停損只會愈移愈緊：價格回落也不會把已經移動過的停�
   const discord = [];
   const env = withExecutor();
   await env.SMC_KV.put('open-pos:ABCUSDT:long', JSON.stringify({
-    symbol: 'ABCUSDT', dir: 'long', entry: 100, stop: 106, initialStop: 95, tickSize: 0.01,
+    symbol: 'ABCUSDT', dir: 'long', entry: 100, stop: 107.5, initialStop: 95, tickSize: 0.01,
     maxFavorableR: 2, beMoved: true, trailing: true, qty: 2, riskAmount: 10, leverage: 5, grade: 'A', score: 75,
   }));
   const executor = { calls: [], positions: [{ symbol: 'ABCUSDT', side: 'Buy', size: '2' }] };
-  // 價格從最高點回落到 104（還沒打到目前的追蹤停損 106，也沒創新高）
-  stubFetch({ market: makeMarket([]), prices: { ABCUSDT: 104 }, discord, executor });
+  // 價格從最高點回落到 108（還沒打到目前的追蹤停損 107.5，也沒創新高）
+  stubFetch({ market: makeMarket([]), prices: { ABCUSDT: 108 }, discord, executor });
   await runWorker(env);
   assert.equal(executor.calls.find((c) => c.url.endsWith('/set-stop')), undefined, '沒有創新高就不該再搬停損');
   const pos = JSON.parse(await env.SMC_KV.get('open-pos:ABCUSDT:long'));
-  assert.equal(pos.stop, 106, '停損應該維持在原本追蹤到的位置，不會因為價格回落而鬆開');
+  assert.equal(pos.stop, 107.5, '停損應該維持在原本追蹤到的位置，不會因為價格回落而鬆開');
   assert.equal(pos.maxFavorableR, 2, 'maxFavorableR 記錄的是曾經到過的最高點，不會因為回落而降低');
 });
 

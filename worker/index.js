@@ -135,7 +135,7 @@
  *      reduce-only 限價單，剩餘部位平均分給原本的目標價，也都掛成限價單——
  *      價格到了交易所自己成交，不用等 Worker 輪詢才發現。
  *   2. 移到成本價：獲利到 +0.5R 之後，把停損搬到進場價 +0.05R（多單，空單反向）。
- *   3. 追蹤停損：獲利超過 +1.5R 之後，停損改成跟著最高獲利走，距離 0.8R，
+ *   3. 追蹤停損：獲利超過 +1R 之後，停損改成跟著最高獲利走，距離 0.5R，
  *      只會愈移愈緊，不會反向鬆開。
  * 這兩條停損規則靠 Worker 每 2 分鐘輪詢現價、算目前的 maxFavorableR 有沒有
  * 過門檻，過了就透過 Executor 把停損單搬過去（分批出場單是開倉當下就掛好
@@ -1160,7 +1160,7 @@ async function checkClosedPositions(env) {
  * 套用跟 README「部位管理」那段驗證過的同一組規則（src/smc/manage.js 的
  * DEFAULT_MANAGEMENT）：
  *   maxFavorableR ≥ breakevenAtR（0.5）→ 停損搬到成本價 + 0.05R（多單）
- *   maxFavorableR ≥ trailFromR（1.5）  → 停損跟著最高獲利走，距離 0.8R
+ *   maxFavorableR ≥ trailFromR（1）  → 停損跟著最高獲利走，距離 0.5R
  * 停損只會愈移愈緊，不會反向鬆開。
  *
  * 分批出場的限價單開倉當下就掛好了，但實測發生過掛單當下失敗（限流／
