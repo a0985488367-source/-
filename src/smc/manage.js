@@ -37,8 +37,9 @@ export const DEFAULT_MANAGEMENT = {
   breakevenAtR: 0.5,     // 獲利達此 R 後把停損移到成本價。0 = 不使用
   breakevenOffsetR: 0.05, // 成本價再往獲利方向推移的 R（覆蓋手續費）
   scratchR: 0,           // 逆行達此 R 就認賠出場。實測顯示會惡化回撤，預設關閉
-  trailFromR: 1.5,       // 獲利達此 R 之後啟用追蹤停損。0 = 不使用
-  trailGapR: 0.8,        // 追蹤停損與最高獲利的距離（R）
+  // 追蹤停損 1R／0.5R：2026-09 兩組各 15 幣 × 30m/1h/4h、前後半段四格都贏原本的 1.5R／0.8R
+  trailFromR: 1,         // 獲利達此 R 之後啟用追蹤停損。0 = 不使用
+  trailGapR: 0.5,        // 追蹤停損與最高獲利的距離（R）
   entryWindowBars: 24,   // 限價單等待成交的最長根數
   maxHoldBars: 200,      // 成交後最長持有根數
   stallBars: 0,          // 成交後這麼多根都沒碰到 stallMinR 就收盤出場。0 = 不使用
