@@ -59,12 +59,14 @@ const VARIANTS = {
   FINAL_zone_st12: { zoneCloseExit: true, stallBars: 12, stallMinR: 0.3 },
 };
 
-const live = (t) => t.dir === 'long' && t.poiType !== 'Order Block' && t.score >= LIVE_MIN_SCORE && t.stopPct >= 0.01;
+const live = (t) => t.poiType !== 'Order Block' && t.score >= LIVE_MIN_SCORE && t.stopPct >= 0.01;
 const GROUPS = [
   ['全部', () => true],
   ['線上過濾', live],
   ['線上 前半', (t) => live(t) && t.half === 0],
   ['線上 後半', (t) => live(t) && t.half === 1],
+  ['線上 多單', (t) => live(t) && t.dir === 'long'],
+  ['線上 空單', (t) => live(t) && t.dir === 'short'],
 ];
 
 const log = (...a) => console.log(...a);

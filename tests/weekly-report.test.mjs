@@ -10,9 +10,9 @@ const trade = (over = {}) => ({
 const status = { wallet: { totalWalletBalance: 1100 }, trackedOpenPositions: 2, openRiskPct: 3.5, maxOpenRiskPct: 6 };
 const field = (embed, name) => embed.fields.find((f) => f.name.startsWith(name));
 
-test('只算符合目前下單規則的訊號：做空、Order Block、低分、停損太近都排除', () => {
+test('只算符合目前下單規則的訊號：多空都算，Order Block、低分、停損太近排除', () => {
   assert.ok(matchesLiveRules(trade()));
-  assert.ok(!matchesLiveRules(trade({ dir: 'short' })));
+  assert.ok(matchesLiveRules(trade({ dir: 'short', initialStop: 102 })));
   assert.ok(!matchesLiveRules(trade({ poiType: 'Order Block' })));
   assert.ok(!matchesLiveRules(trade({ score: 60 })));
   assert.ok(!matchesLiveRules(trade({ initialStop: 99.5 })));

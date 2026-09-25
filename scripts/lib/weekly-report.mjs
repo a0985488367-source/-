@@ -27,7 +27,7 @@ const ROUND_TRIP_FEE = 0.0011;
 export function matchesLiveRules(t, { minScore = 65, minStopPct = 1 } = {}) {
   const stop = t.initialStop ?? t.stop;
   const stopPct = (Math.abs(t.entry - stop) / t.entry) * 100;
-  return t.dir === 'long' && t.poiType !== 'Order Block' && t.score >= minScore && stopPct >= minStopPct;
+  return t.poiType !== 'Order Block' && t.score >= minScore && stopPct >= minStopPct;
 }
 
 export const netR = (t) => {
