@@ -13,10 +13,8 @@ const CHECKS = [
   { key: 'htfAlign', weight: 18, zh: '高週期偏向一致', en: 'HTF bias alignment' },
   { key: 'structure', weight: 15, zh: '進場週期已出現 CHoCH / BOS 確認', en: 'Entry TF structure confirmed' },
   { key: 'pdSide', weight: 12, zh: '價格位於正確的折價／溢價側', en: 'Correct premium/discount side' },
-  // poiFresh / sweep 的權重由回測決定（scripts/research/confluence-study.mjs，15 幣 × 30m/1h/4h、
-  // 前後半段資料分開驗證）：新鮮 POI 兩段都明顯較好；有掃除流動性的訊號兩段都反而較差。
-  { key: 'poiFresh', weight: 20, zh: '進場 POI 未被消耗（新鮮）', en: 'POI is unmitigated' },
-  { key: 'sweep', weight: 4, zh: '進場前已掃除反向流動性', en: 'Liquidity swept before entry' },
+  { key: 'poiFresh', weight: 12, zh: '進場 POI 未被消耗（新鮮）', en: 'POI is unmitigated' },
+  { key: 'sweep', weight: 12, zh: '進場前已掃除反向流動性', en: 'Liquidity swept before entry' },
   { key: 'stacked', weight: 10, zh: 'POI 具多重匯流（OB + FVG / OTE）', en: 'Stacked confluence at POI' },
   { key: 'rr', weight: 10, zh: '風報比達標', en: 'R:R meets minimum' },
   { key: 'target', weight: 10, zh: '目標方向存在未觸及流動性', en: 'Untapped liquidity at target' },

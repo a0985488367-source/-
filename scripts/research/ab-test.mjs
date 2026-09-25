@@ -59,7 +59,7 @@ const VARIANTS = {
   FINAL_zone_st12: { zoneCloseExit: true, stallBars: 12, stallMinR: 0.3 },
 };
 
-const live = (t) => t.poiType !== 'Order Block' && t.score >= LIVE_MIN_SCORE && t.stopPct >= 0.01;
+const live = (t) => t.score >= LIVE_MIN_SCORE;
 const GROUPS = [
   ['全部', () => true],
   ['線上過濾', live],

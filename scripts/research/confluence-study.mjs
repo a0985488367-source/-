@@ -54,20 +54,20 @@ function collectSignals(candles, symbol, interval) {
   return out;
 }
 
-const live = (t) => t.poiType !== 'Order Block' && t.score >= LIVE_MIN_SCORE;
+const live = (t) => t.score >= LIVE_MIN_SCORE;
 
 // 評分權重候選：只改權重重新算分數，不動引擎，拿來跟現行分數比
 const WEIGHTS_OLD = { htfAlign: 18, structure: 15, pdSide: 12, poiFresh: 12, sweep: 12, stacked: 10, rr: 10, target: 10, momentum: 8, killzone: 5 };
 const WEIGHT_VARIANTS = {
-  舊版: WEIGHTS_OLD,
-  現行: { ...WEIGHTS_OLD, poiFresh: 20, sweep: 4 },
+  現行: WEIGHTS_OLD,
+  新鮮POI加重_掃除減輕: { ...WEIGHTS_OLD, poiFresh: 20, sweep: 4 },
   新鮮POI加倍_掃除歸零: { ...WEIGHTS_OLD, poiFresh: 24, sweep: 0 },
 };
 const scoreWith = (w, checks) => {
   const total = Object.values(w).reduce((a, b) => a + b, 0);
   return Math.round((Object.entries(w).reduce((s, [k, v]) => s + (checks[k] ? v : 0), 0) / total) * 100);
 };
-const liveWith = (w) => (t) => t.poiType !== 'Order Block' && scoreWith(w, t.checks) >= LIVE_MIN_SCORE;
+const liveWith = (w) => (t) => scoreWith(w, t.checks) >= LIVE_MIN_SCORE;
 
 const CHECK_KEYS = ['htfAlign', 'structure', 'pdSide', 'poiFresh', 'sweep', 'stacked', 'rr', 'target', 'momentum', 'killzone'];
 const STOP_BUCKETS = [[0, 0.005], [0.005, 0.01], [0.01, 0.02], [0.02, 0.04], [0.04, 1]];
@@ -83,7 +83,7 @@ const SECTIONS = [
     ['價值區邊緣外 否', (t) => !t.valueEdge],
     ['低量節點 是', (t) => t.lvn],
     ['低量節點 否', (t) => !t.lvn],
-    ['線上過濾（非OB、≥分數門檻，多空都算）', live],
+    ['線上規則（≥分數門檻，多空都算）', live],
     ['線上過濾＋斐波那契', (t) => live(t) && t.fib != null],
     ['線上過濾＋高量節點', (t) => live(t) && t.hvn],
   ]],
