@@ -12,7 +12,7 @@ import { COLORS } from './outcome-embed.mjs';
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** 目前自動下單規則上線的時間；之前的紀錄是舊評分／舊過濾，不能拿來判斷新規則 */
-export const RULES_SINCE = Date.parse('2026-09-24T16:00:00Z');
+export const RULES_SINCE = Date.parse('2026-09-25T03:00:00Z');
 
 export const GO_LIVE = {
   minTrades: 200,
@@ -24,10 +24,8 @@ export const GO_LIVE = {
 /** 保守估計：進出都算吃單費 0.055% */
 const ROUND_TRIP_FEE = 0.0011;
 
-export function matchesLiveRules(t, { minScore = 65, minStopPct = 1 } = {}) {
-  const stop = t.initialStop ?? t.stop;
-  const stopPct = (Math.abs(t.entry - stop) / t.entry) * 100;
-  return t.poiType !== 'Order Block' && t.score >= minScore && stopPct >= minStopPct;
+export function matchesLiveRules(t, { minScore = 65 } = {}) {
+  return t.score >= minScore;
 }
 
 export const netR = (t) => {
