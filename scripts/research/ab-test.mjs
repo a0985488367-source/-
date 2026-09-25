@@ -57,6 +57,14 @@ const VARIANTS = {
   FINAL_stall24:   { stallBars: 24, stallMinR: 0.3 },
   FINAL_zone:      { zoneCloseExit: true },
   FINAL_zone_st12: { zoneCloseExit: true, stallBars: 12, stallMinR: 0.3 },
+  // ── 保本／追蹤停損的時機（其餘同 FINAL）──
+  BE075:           { breakevenAtR: 0.75 },
+  BE1:             { breakevenAtR: 1.0 },
+  BE_off:          { breakevenAtR: 0 },
+  TR2_1:           { trailFromR: 2, trailGapR: 1.0 },
+  TR1_05:          { trailFromR: 1, trailGapR: 0.5 },
+  TR_off:          { trailFromR: 0 },
+  BE1_TR2_1:       { breakevenAtR: 1.0, trailFromR: 2, trailGapR: 1.0 },
 };
 
 const live = (t) => t.score >= LIVE_MIN_SCORE;
