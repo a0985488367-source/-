@@ -11,7 +11,7 @@
 import { writeFile, mkdir } from 'node:fs/promises';
 import { analyze } from '../../src/smc/engine.js';
 import { ema } from '../../src/core/indicators.js';
-import { opt as optFrom, klines as fetchKlines, runSignals, summarize, pct, r2, printTable } from './lib.mjs';
+import { opt as optFrom, klines as fetchKlines, runSignals, summarize, pct, r2, printTable, simulatePortfolio } from './lib.mjs';
 
 const ARGS = process.argv.slice(2);
 const opt = (n, d) => optFrom(ARGS, n, d);
@@ -75,6 +75,17 @@ const VARIANTS = {
 };
 
 const live = (t) => t.score >= LIVE_MIN_SCORE && t.tp1R >= 1.5;
+// 目前線上完整規則：再加上 BTC 漲勢（或讀不到）不做空
+const liveNow = (t) => live(t) && (t.dir === 'long' || t.btcUp === false);
+const RISK_PCT = Number(opt('risk-pct', 5));
+const PORTFOLIO_RULES = [
+  ['不限制（現在）', {}],
+  ['同幣不加碼', { oneBySymbol: true }],
+  ['未保本最多 3 筆', { maxAtRisk: 3 }],
+  ['未保本最多 4 筆', { maxAtRisk: 4 }],
+  ['未保本最多 5 筆', { maxAtRisk: 5 }],
+  ['同幣不加碼＋未保本最多 4 筆', { oneBySymbol: true, maxAtRisk: 4 }],
+];
 const GROUPS = [
   ['全部', () => true],
   ['線上過濾', live],
@@ -169,9 +180,11 @@ function collectSignals(candles, symbol, interval) {
 
   const net = (t) => ({ ...t, r: t.r - ROUND_TRIP_FEE / t.stopPct });
   const rows = [];
+  let portfolioBase = null;
   for (const [name, cfg] of Object.entries(VARIANTS)) {
     if (ONLY.length && !ONLY.includes(name)) continue;
     const closed = runSignals(signals, candlesBy, cfg);
+    if (!portfolioBase) portfolioBase = { name, closed };
     for (const [group, f] of GROUPS) {
       const hit = closed.filter(f);
       rows.push({ name, group, cfg, ...summarize(hit), netExpectancy: summarize(hit.map(net)).expectancy ?? 0 });
@@ -186,6 +199,18 @@ function collectSignals(candles, symbol, interval) {
         r2(r.avgWin ?? 0), r2(r.avgLoss ?? 0), (r.profitFactor ?? 0).toFixed(2), (r.maxDdR ?? 0).toFixed(1),
       ]));
   }
+
+  // 帳戶層級：同時持倉、複利、每筆冒當下帳戶的 RISK_PCT%
+  const toSim = (t) => ({
+    ...net(t),
+    beTime: t.events.find((e) => e.type === 'breakeven')?.time ?? null,
+  });
+  const filled = portfolioBase.closed.filter((t) => t.filledTime && liveNow(t)).map(toSim);
+  log(`\n■ 帳戶模擬（規則 ${portfolioBase.name}、線上完整過濾、每筆 ${RISK_PCT}% 複利、已扣手續費）`);
+  const periods = [['全部', () => true], ['前半', (t) => t.half === 0], ['後半', (t) => t.half === 1]];
+  const portfolioRows = PORTFOLIO_RULES.map(([name, rule]) => [name, ...periods.map(([, f]) => simulatePortfolio(filled.filter(f), { riskPct: RISK_PCT, ...rule }))]);
+  printTable(log, ['做法', ...periods.flatMap(([p]) => [`${p} 筆數`, `${p} 倍數`, `${p} 最大回撤`])],
+    portfolioRows.map(([name, ...res]) => [name, ...res.flatMap((x) => [String(x.taken), `${x.multiple.toFixed(2)}x`, `${x.maxDdPct.toFixed(1)}%`])]));
 
   await mkdir(OUT.split('/').slice(0, -1).join('/'), { recursive: true });
   await writeFile(OUT, JSON.stringify({ generatedAt: Date.now(), symbols: SYMBOLS, intervals: INTERVALS, signals: signals.length, rows }, null, 2));

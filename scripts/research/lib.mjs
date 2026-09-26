@@ -64,3 +64,39 @@ export function printTable(log, head, body) {
   log(w.map((n) => '─'.repeat(n)).join('  '));
   for (const b of body) log(line(b));
 }
+
+/**
+ * 帳戶層級模擬：照時間開倉／平倉，每筆冒「開倉當下帳戶」的 riskPct%，平倉時 r 直接滾進帳戶（複利）。
+ * trades 需要 filledTime、closedTime、r（已扣手續費）、symbol、beTime（停損移到成本價的時間，沒有就 null）。
+ *   oneBySymbol  同一個幣已經有持倉就不再開
+ *   maxAtRisk    還沒保本（停損還在成本價另一側）的持倉最多幾筆
+ * 回撤用平倉後的帳戶計算（持倉中的浮動虧損不算），所以實際會再大一點。
+ */
+export function simulatePortfolio(trades, { riskPct = 5, maxAtRisk = Infinity, oneBySymbol = false } = {}) {
+  const ev = [];
+  trades.forEach((t, i) => {
+    ev.push({ time: t.filledTime, kind: 1, i });
+    ev.push({ time: Math.max(t.closedTime, t.filledTime + 1), kind: 0, i });
+  });
+  ev.sort((a, b) => a.time - b.time || a.kind - b.kind);
+  let equity = 1, peak = 1, maxDd = 0, taken = 0;
+  const open = new Map();
+  for (const e of ev) {
+    const t = trades[e.i];
+    if (e.kind === 0) {
+      const p = open.get(e.i);
+      if (!p) continue;
+      open.delete(e.i);
+      equity += p.risk * t.r;
+      peak = Math.max(peak, equity);
+      maxDd = Math.max(maxDd, 1 - equity / peak);
+      continue;
+    }
+    const positions = [...open.values()];
+    if (oneBySymbol && positions.some((p) => p.symbol === t.symbol)) continue;
+    if (positions.filter((p) => !(p.beTime != null && p.beTime <= e.time)).length >= maxAtRisk) continue;
+    open.set(e.i, { risk: (equity * riskPct) / 100, symbol: t.symbol, beTime: t.beTime });
+    taken++;
+  }
+  return { taken, multiple: equity, maxDdPct: maxDd * 100 };
+}
