@@ -151,6 +151,48 @@ function collectSignals(candles, symbol, interval) {
   return out;
 }
 
+/**
+ * 出場原因分析：線上會下的單最後是怎麼出場的，以及「保本／追蹤停損出場之後，價格有沒有又走到 TP1」
+ * （之後的走勢用原本的停損當判斷：先碰 TP1 算「錯過」，先碰原停損或抱滿 maxHold 根都沒碰到算「還好有走」）
+ */
+function exitBreakdown(trades, candlesBy, maxHold = 200) {
+  const KIND = [
+    ['全額停損', (t) => t.exitReason === 'stop'],
+    ['保本出場', (t) => t.exitReason === 'breakeven'],
+    ['追蹤停損（沒到 TP1）', (t) => t.exitReason === 'trail' && !t.hitTargets.length],
+    ['追蹤停損（有到 TP1）', (t) => t.exitReason === 'trail' && t.hitTargets.length > 0],
+    ['打到最後目標', (t) => t.exitReason === 'target'],
+    ['抱太久平倉', (t) => t.exitReason === 'maxHold'],
+  ];
+  const after = (t) => {
+    const c = candlesBy.get(`${t.symbol}|${t.interval}`);
+    const long = t.dir === 'long';
+    const risk = Math.abs(t.entry - t.initialStop);
+    const tp1 = long ? t.entry + risk * t.tp1R : t.entry - risk * t.tp1R;
+    let j = c.findIndex((k) => k.time > t.closedTime);
+    if (j < 0) return null;
+    for (const end = Math.min(c.length, j + maxHold); j < end; j++) {
+      const k = c[j];
+      if (long ? k.low <= t.initialStop : k.high >= t.initialStop) return 'stop';
+      if (long ? k.high >= tp1 : k.low <= tp1) return 'tp1';
+    }
+    return j >= c.length ? null : 'none';
+  };
+  const rows = KIND.map(([name, f]) => {
+    const hit = trades.filter(f);
+    const avg = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
+    const later = name === '保本出場' || name === '追蹤停損（沒到 TP1）' ? hit.map(after).filter(Boolean) : [];
+    const missed = later.filter((x) => x === 'tp1').length;
+    return [
+      name, String(hit.length), pct((hit.length / trades.length) * 100),
+      r2(avg(hit.map((t) => t.r))), r2(avg(hit.map((t) => t.maxFavorableR))),
+      later.length ? `${pct((missed / later.length) * 100)}（${missed}/${later.length}）` : '-',
+    ];
+  });
+  log('\n■ 出場原因（線上完整過濾、已扣手續費）');
+  printTable(log, ['出場方式', '筆數', '佔比', '平均R', '最多曾賺到R', '出場後又走到TP1'], rows);
+}
+
 (async () => {
   const candlesBy = new Map();
   const signals = [];
@@ -214,6 +256,8 @@ function collectSignals(candles, symbol, interval) {
   const portfolioRows = PORTFOLIO_RULES.map(([name, rule]) => [name, ...periods.map(([, f]) => simulatePortfolio(filled.filter(f), { riskPct: RISK_PCT, ...rule }))]);
   printTable(log, ['做法', ...periods.flatMap(([p]) => [`${p} 筆數`, `${p} 倍數`, `${p} 最大回撤`])],
     portfolioRows.map(([name, ...res]) => [name, ...res.flatMap((x) => [String(x.taken), `${x.multiple.toFixed(2)}x`, `${x.maxDdPct.toFixed(1)}%`])]));
+
+  exitBreakdown(filled, candlesBy);
 
   await mkdir(OUT.split('/').slice(0, -1).join('/'), { recursive: true });
   await writeFile(OUT, JSON.stringify({ generatedAt: Date.now(), symbols: SYMBOLS, intervals: INTERVALS, signals: signals.length, rows }, null, 2));
