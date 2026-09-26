@@ -65,6 +65,11 @@ const VARIANTS = {
   TR1_05:          { trailFromR: 1, trailGapR: 0.5 },
   TR_off:          { trailFromR: 0 },
   BE1_TR2_1:       { breakevenAtR: 1.0, trailFromR: 2, trailGapR: 1.0 },
+  // ── 目前線上（DEFAULT_MANAGEMENT 原樣）與保本鏢出場比例 ──
+  NOW:             {},
+  SC20:            { scalpFraction: 0.2 },
+  SC10:            { scalpFraction: 0.1 },
+  SC0:             { scalpR: 0 },
 };
 
 const live = (t) => t.score >= LIVE_MIN_SCORE;
@@ -74,6 +79,11 @@ const GROUPS = [
   ['線上 前半', (t) => live(t) && t.half === 0],
   ['線上 後半', (t) => live(t) && t.half === 1],
   ['線上 多單', (t) => live(t) && t.dir === 'long'],
+  // 只做第一個目標夠遠的單：「賺的時候賺多」要靠訊號本身的目標夠遠
+  ...[1.5, 2, 3].flatMap((rr) => [
+    [`線上 TP1≥${rr}R 前半`, (t) => live(t) && t.tp1R >= rr && t.half === 0],
+    [`線上 TP1≥${rr}R 後半`, (t) => live(t) && t.tp1R >= rr && t.half === 1],
+  ]),
   ['線上 空單', (t) => live(t) && t.dir === 'short'],
 ];
 
@@ -96,6 +106,7 @@ function collectSignals(candles, symbol, interval) {
       targets: s.targets.map((t) => ({ name: t.name, price: t.price, rr: t.rr, label: t.label })),
       grade: s.grade, score: s.score, poiType: s.poi.type, zone: s.entryZone,
       stopPct: Math.abs(s.entry - s.stop) / s.entry,
+      tp1R: s.targets[0].rr,
       half: i < (WARMUP + candles.length) / 2 ? 0 : 1,
     });
     cooldownUntil = i + COOLDOWN;
