@@ -26,7 +26,8 @@ const COOLDOWN = Number(opt('cooldown', 12));
 const OUT = opt('out', 'data/research/ab-test.json');
 const ONLY = opt('only', '').split(',').filter(Boolean);
 const LIVE_MIN_SCORE = Number(opt('live-min-score', 65));
-const ROUND_TRIP_FEE = 0.0011;
+// 一進一出的成本（占倉位價值）：吃單手續費 0.11%；流動性差的幣可以另外加滑價
+const ROUND_TRIP_FEE = Number(opt('fee', 0.0011));
 const BTC_EMA = Number(opt('btc-ema', 200));
 
 /** 受測的管理規則組合。base 是目前線上的行為（只有結構停損 + 最終目標）。 */
