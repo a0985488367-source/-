@@ -41,9 +41,18 @@ function makeKv() {
 const EXECUTOR_URL = 'https://executor.test';
 
 /** 攔截 fetch：回傳指定的 market 與價格，並收集送往 Discord 的內容；executor 選填，用來測自動下單（Worker 現在不直接打 Bybit，改打獨立的 Executor 服務） */
-function stubFetch({ market, prices, discord, executor }) {
+/** BTC K 線（OKX 格式、新到舊）：trend 'up' 一路漲、'down' 一路跌，最後一根當作還沒收盤 */
+const okxBtcCandles = (trend, n = 260) => Array.from({ length: n }, (_, i) => {
+  const close = trend === 'up' ? 50000 + i * 10 : 80000 - i * 10;
+  return [String(1.7e12 + i * 3.6e6), String(close), String(close + 5), String(close - 5), String(close), '1'];
+}).reverse();
+
+function stubFetch({ market, prices, discord, executor, btcTrend }) {
   globalThis.fetch = async (url, init) => {
     const u = String(url);
+    if (btcTrend && u.includes('okx.com/api/v5/market/candles') && u.includes('BTC-USDT')) {
+      return new Response(JSON.stringify({ code: '0', data: okxBtcCandles(btcTrend) }), { status: 200 });
+    }
     if (u.startsWith(MARKET_URL)) return new Response(JSON.stringify(market), { status: 200 });
     if (u.includes('api.bybit.com/v5/market/tickers')) {
       const list = Object.entries(prices).map(([symbol, price]) => ({ symbol, lastPrice: String(price) }));
@@ -1169,7 +1178,7 @@ test('AUTO_TRADE_DIRECTIONS 加上 short 之後空單會正常下單', async () 
   const executor = { calls: [], wallet: { totalAvailableBalance: 1000, totalWalletBalance: 1000 }, instrument: demoInstrument };
   const env = withExecutor({ AUTO_TRADE_DIRECTIONS: 'long, short' });
   await env.SMC_KV.put('auto-trade:enabled', 'true');
-  stubFetch({ market: makeMarket([shortRow()]), prices: { ABCUSDT: 100.05 }, discord, executor });
+  stubFetch({ market: makeMarket([shortRow()]), prices: { ABCUSDT: 100.05 }, discord, executor, btcTrend: 'down' });
   await runWorker(env);
   const tradeCall = executor.calls.find((c) => c.url.endsWith('/trade'));
   assert.ok(tradeCall, '允許做空時應該送出 /trade');
@@ -1252,6 +1261,40 @@ test('第一個止盈不到 1.5R：目標太近，只通知不下單', async () 
   assert.equal(executor.calls.length, 0);
   const field = discord[0].embeds[0].fields.find((f) => f.name.includes('自動下單'));
   assert.match(field.value, /第一個止盈只有 1\.20R（下限 1\.5R/);
+});
+
+test('BTC 同週期在 EMA200 之上（漲勢）：空單只通知不下單', async () => {
+  const discord = [];
+  const executor = { calls: [], wallet: { totalAvailableBalance: 1000, totalWalletBalance: 1000 }, instrument: demoInstrument };
+  const env = withExecutor({ AUTO_TRADE_DIRECTIONS: 'long,short' });
+  await env.SMC_KV.put('auto-trade:enabled', 'true');
+  stubFetch({ market: makeMarket([shortRow()]), prices: { ABCUSDT: 100.05 }, discord, executor, btcTrend: 'up' });
+  const out = await runWorker(env);
+  assert.equal(out.alerts, 1);
+  assert.equal(executor.calls.length, 0);
+  const field = discord[0].embeds[0].fields.find((f) => f.name.includes('自動下單'));
+  assert.match(field.value, /EMA200 之上（漲勢），空單只通知不下單/);
+});
+
+test('讀不到 BTC 走勢：空單先不下（寧可少做，不在漲勢裡做空）', async () => {
+  const discord = [];
+  const executor = { calls: [], wallet: { totalAvailableBalance: 1000, totalWalletBalance: 1000 }, instrument: demoInstrument };
+  const env = withExecutor({ AUTO_TRADE_DIRECTIONS: 'long,short' });
+  await env.SMC_KV.put('auto-trade:enabled', 'true');
+  stubFetch({ market: makeMarket([shortRow()]), prices: { ABCUSDT: 100.05 }, discord, executor });
+  await runWorker(env);
+  assert.equal(executor.calls.length, 0);
+  const field = discord[0].embeds[0].fields.find((f) => f.name.includes('自動下單'));
+  assert.match(field.value, /讀不到 BTC 走勢/);
+});
+
+test('BTC 漲勢不影響多單', async () => {
+  const executor = { calls: [], wallet: { totalAvailableBalance: 1000, totalWalletBalance: 1000 }, instrument: demoInstrument };
+  const env = withExecutor();
+  await env.SMC_KV.put('auto-trade:enabled', 'true');
+  stubFetch({ market: makeMarket([row()]), prices: { ABCUSDT: 99.9 }, discord: [], executor, btcTrend: 'up' });
+  await runWorker(env);
+  assert.ok(executor.calls.find((c) => c.url.endsWith('/trade')));
 });
 
 test('持倉總風險上限設成 0 就不限制', async () => {

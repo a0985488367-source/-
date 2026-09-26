@@ -63,6 +63,8 @@ AUTO_TRADE_MIN_STOP_PCT = "0"
 AUTO_TRADE_MIN_SIZE_PCT = "50"
 # 第一個止盈目標至少要幾 R 才下單（目標太近的單只通知）
 AUTO_TRADE_MIN_TP1_RR = "1.5"
+# BTC 同週期收在這條 EMA 之上（漲勢）就不下空單；0＝不限制
+AUTO_TRADE_BTC_TREND_EMA = "200"
 # Worker 自己即時掃描（需要 Workers Paid；開啟前留意對外部交易所 API 的
 # 請求量會增加，見 index.js 開頭的說明）。採分批架構：候選池 120 檔，
 # 每 10 分鐘只真的重新掃描其中 20 檔，結果累積進 KV，繞完一輪（120/20=6
