@@ -1222,6 +1222,29 @@ test('停損距離低於 1% 只通知不下單（手續費會吃掉大半獲利�
   assert.match(field.value, /停損距離只有 0\.60%（下限 1%/);
 });
 
+test('可用保證金被佔掉、倉位只剩該有大小的一半不到：不硬開', async () => {
+  const discord = [];
+  // 帳戶總額 1000、可用只剩 300：照可用餘額算只開得到該有大小的約 30%（數量再往下取整）
+  const executor = { calls: [], wallet: { totalAvailableBalance: 300, totalWalletBalance: 1000 }, instrument: demoInstrument };
+  const env = withExecutor();
+  await env.SMC_KV.put('auto-trade:enabled', 'true');
+  stubFetch({ market: makeMarket([row()]), prices: { ABCUSDT: 99.9 }, discord, executor });
+  const out = await runWorker(env);
+  assert.equal(out.alerts, 1, '還是要推播');
+  assert.equal(executor.calls.find((c) => c.url.endsWith('/trade')), undefined);
+  const field = discord[0].embeds[0].fields.find((f) => f.name.includes('自動下單'));
+  assert.match(field.value, /倉位太小.*（低於 50%/);
+});
+
+test('可用保證金還夠（倉位有該有大小的一半以上）：照常下單', async () => {
+  const executor = { calls: [], wallet: { totalAvailableBalance: 600, totalWalletBalance: 1000 }, instrument: demoInstrument };
+  const env = withExecutor();
+  await env.SMC_KV.put('auto-trade:enabled', 'true');
+  stubFetch({ market: makeMarket([row()]), prices: { ABCUSDT: 99.9 }, discord: [], executor });
+  await runWorker(env);
+  assert.ok(executor.calls.find((c) => c.url.endsWith('/trade')));
+});
+
 test('持倉總風險上限設成 0 就不限制', async () => {
   const executor = { calls: [], wallet: { totalAvailableBalance: 1000, totalWalletBalance: 1000 }, instrument: demoInstrument };
   const env = withExecutor({ AUTO_TRADE_MAX_OPEN_RISK_PCT: '0' });

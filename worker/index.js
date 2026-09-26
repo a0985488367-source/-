@@ -120,6 +120,8 @@
  *   Variable  AUTO_TRADE_MIN_STOP_PCT  停損距離（占進場價 %）低於這個值就不自動下單（預設 1，0＝不限制）。
  *             手續費是按倉位價值收的，停損愈近、同樣風險金額的倉位愈大，
  *             一進一出的吃單手續費（約 0.11%）在 0.5% 停損時就吃掉 0.22R。
+ *   Variable  AUTO_TRADE_MIN_SIZE_PCT  倉位最少要有「用帳戶總額算出來該有的大小」的這個 %（預設 50，0＝不限制）。
+ *             可用保證金被其他部位佔掉、或保證金上限縮量之後小於這個比例，就只通知不下單。
  *   KV        SMC_KV 的 auto-trade:enabled 這個 key，預設不存在＝關閉
  *
  * 下單成功後會把這筆部位記進 SMC_KV（key 開頭 open-pos:），之後每次執行都
@@ -191,6 +193,7 @@ const DEFAULTS = {
   AUTO_TRADE_EXCLUDE_POI: 'Order Block',
   AUTO_TRADE_MAX_OPEN_RISK_PCT: '6',
   AUTO_TRADE_MIN_STOP_PCT: '1',
+  AUTO_TRADE_MIN_SIZE_PCT: '50',
   WORKER_SCAN_ENABLED: 'false',
   WORKER_SCAN_TOP: '120',              // 候選池總大小：想涵蓋幾檔（循環一輪會全部算過）
   WORKER_SCAN_BATCH_SIZE: '20',        // 每次真的重新掃描只算這麼多檔，請求量才不會一次太密集
@@ -373,6 +376,7 @@ async function handleFetch(request, env) {
         excludePoi: excludedPoiTypes(env),
         maxOpenRiskPct: Number(cfg(env, 'AUTO_TRADE_MAX_OPEN_RISK_PCT')),
         minStopPct: Number(cfg(env, 'AUTO_TRADE_MIN_STOP_PCT')),
+        minSizePct: Number(cfg(env, 'AUTO_TRADE_MIN_SIZE_PCT')),
         openRiskPct: wallet?.totalWalletBalance > 0
           ? Number(((openRiskAmount(await trackedPositions(env)) / wallet.totalWalletBalance) * 100).toFixed(2))
           : null,
@@ -868,6 +872,7 @@ function buildEmbed({ row: r, price }, market, autoTrade) {
 function autoTradeText(t) {
   if (t.skipped === 'no-keys') return '⏭️ 尚未設定 EXECUTOR_URL／EXECUTOR_HMAC_SECRET，已略過';
   if (t.skipped === 'direction') return '⏭️ 這個方向目前不自動下單（AUTO_TRADE_DIRECTIONS），只通知不下單';
+  if (t.skipped === 'too-small') return `⏭️ 倉位太小：可用保證金不夠，這筆只能開到該有大小的 ${t.sizePct.toFixed(0)}%（低於 ${t.minSizePct}%，AUTO_TRADE_MIN_SIZE_PCT），不硬開`;
   if (t.skipped === 'tight-stop') return `⏭️ 停損距離只有 ${t.stopPct.toFixed(2)}%（下限 ${t.minStopPct}%，AUTO_TRADE_MIN_STOP_PCT），手續費會吃掉大半獲利，只通知不下單`;
   if (t.skipped === 'open-risk') return `⏭️ 持倉總風險已達 ${t.openRiskPct.toFixed(1)}%（上限 ${t.maxOpenRiskPct}%，AUTO_TRADE_MAX_OPEN_RISK_PCT），這筆只通知不下單`;
   if (t.skipped === 'poi') return `⏭️ ${t.poiType} 類型的進場區目前不自動下單（AUTO_TRADE_EXCLUDE_POI），只通知不下單`;
@@ -1040,6 +1045,17 @@ async function autoTradeOrder(env, hit) {
       }
     }
     if (qty < minQty) return { error: `算出數量 ${qty} 小於最小下單量 ${minQty}（保證金上限 ${maxMarginPct}% 限制），可調高 AUTO_TRADE_MAX_MARGIN_PCT` };
+
+    // 數量是用「可用餘額」算的，其他部位佔掉保證金之後可用餘額會變很少，
+    // 再加上保證金上限縮量，新單可能只剩原本該有的一小部分——這種單賺了
+    // 也沒意義、還是一樣吃手續費。跟「用帳戶總額算出來該有的風險」比，
+    // 不到 AUTO_TRADE_MIN_SIZE_PCT 就不開。
+    const minSizePct = Number(cfg(env, 'AUTO_TRADE_MIN_SIZE_PCT'));
+    if (minSizePct > 0) {
+      const plannedRisk = (Number(wallet.totalWalletBalance ?? accountSize) * riskPct) / 100;
+      const sizePct = ((qty * perUnit) / plannedRisk) * 100;
+      if (sizePct < minSizePct) return { skipped: 'too-small', sizePct, minSizePct };
+    }
 
     // 加密貨幣大多同漲同跌，多筆同方向部位等於同一個賭注；所有追蹤中部位
     // 「停損打到還會虧多少」加上這筆，超過上限就只通知不下單。已經搬到
