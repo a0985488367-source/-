@@ -124,6 +124,8 @@
  *             可用保證金被其他部位佔掉、或保證金上限縮量之後小於這個比例，就只通知不下單。
  *   Variable  AUTO_TRADE_MIN_TP1_RR  第一個止盈目標至少要幾 R 才下單（預設 1.5，0＝不限制）。
  *             回測兩組各 15 幣、前後半段四格都比全部都做好，最大回撤也小很多。
+ *   Variable  AUTO_TRADE_BTC_TREND_EMA  BTC 同週期最後一根已收盤 K 棒在這條 EMA 之上（漲勢）就不下空單（預設 200，0＝不限制）。
+ *             讀不到 BTC 走勢時也不下空單。回測：EMA200 四格都贏；EMA50 不成立，所以只用長期趨勢。
  *   KV        SMC_KV 的 auto-trade:enabled 這個 key，預設不存在＝關閉
  *
  * 下單成功後會把這筆部位記進 SMC_KV（key 開頭 open-pos:），之後每次執行都
@@ -180,6 +182,8 @@
 
 import { scanMarket } from '../src/market/scan.js';
 import { DEFAULT_MANAGEMENT, buildLadder } from '../src/smc/manage.js';
+import { PROVIDERS } from '../src/data/providers.js';
+import { ema } from '../src/core/indicators.js';
 
 const DEFAULTS = {
   MARKET_URL: 'https://raw.githubusercontent.com/a0985488367-source/-/main/data/market.json',
@@ -197,6 +201,7 @@ const DEFAULTS = {
   AUTO_TRADE_MIN_STOP_PCT: '1',
   AUTO_TRADE_MIN_SIZE_PCT: '50',
   AUTO_TRADE_MIN_TP1_RR: '1.5',
+  AUTO_TRADE_BTC_TREND_EMA: '200',
   WORKER_SCAN_ENABLED: 'false',
   WORKER_SCAN_TOP: '120',              // 候選池總大小：想涵蓋幾檔（循環一輪會全部算過）
   WORKER_SCAN_BATCH_SIZE: '20',        // 每次真的重新掃描只算這麼多檔，請求量才不會一次太密集
@@ -226,6 +231,20 @@ function leverageForScore(env, score) {
 
 const csv = (v) => String(v).split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
 const allowedDirections = (env) => csv(cfg(env, 'AUTO_TRADE_DIRECTIONS'));
+
+/** BTC 同週期最後一根已收盤 K 棒是否在 EMA 之上；讀不到回傳 null。OKX 在前面：Cloudflare 的 IP 打 Binance／Bybit 常被擋 */
+async function btcAboveEma(interval, period) {
+  for (const id of ['okx', 'binance', 'bybit']) {
+    try {
+      const c = await PROVIDERS[id].fetchKlines('BTCUSDT', interval, { limit: period + 50 });
+      const closed = c.slice(0, -1); // 最後一根還沒收盤
+      const e = ema(closed.map((k) => k.close), period).at(-1);
+      const last = closed.at(-1)?.close;
+      if (Number.isFinite(e) && Number.isFinite(last)) return last > e;
+    } catch { /* 換下一家 */ }
+  }
+  return null;
+}
 
 async function trackedPositions(env) {
   if (!env.SMC_KV) return [];
@@ -381,6 +400,7 @@ async function handleFetch(request, env) {
         minStopPct: Number(cfg(env, 'AUTO_TRADE_MIN_STOP_PCT')),
         minSizePct: Number(cfg(env, 'AUTO_TRADE_MIN_SIZE_PCT')),
         minTp1R: Number(cfg(env, 'AUTO_TRADE_MIN_TP1_RR')),
+        btcTrendEma: Number(cfg(env, 'AUTO_TRADE_BTC_TREND_EMA')),
         openRiskPct: wallet?.totalWalletBalance > 0
           ? Number(((openRiskAmount(await trackedPositions(env)) / wallet.totalWalletBalance) * 100).toFixed(2))
           : null,
@@ -876,6 +896,9 @@ function buildEmbed({ row: r, price }, market, autoTrade) {
 function autoTradeText(t) {
   if (t.skipped === 'no-keys') return '⏭️ 尚未設定 EXECUTOR_URL／EXECUTOR_HMAC_SECRET，已略過';
   if (t.skipped === 'direction') return '⏭️ 這個方向目前不自動下單（AUTO_TRADE_DIRECTIONS），只通知不下單';
+  if (t.skipped === 'btc-uptrend') return t.unknown
+    ? `⏭️ 讀不到 BTC 走勢，無法確認不是漲勢，空單先不下（AUTO_TRADE_BTC_TREND_EMA）`
+    : `⏭️ BTC 同週期收盤在 EMA${t.btcEma} 之上（漲勢），空單只通知不下單（AUTO_TRADE_BTC_TREND_EMA）`;
   if (t.skipped === 'near-target') return `⏭️ 第一個止盈只有 ${Number.isFinite(t.tp1R) ? t.tp1R.toFixed(2) : '—'}R（下限 ${t.minTp1R}R，AUTO_TRADE_MIN_TP1_RR），目標太近，只通知不下單`;
   if (t.skipped === 'too-small') return `⏭️ 倉位太小：可用保證金不夠，這筆只能開到該有大小的 ${t.sizePct.toFixed(0)}%（低於 ${t.minSizePct}%，AUTO_TRADE_MIN_SIZE_PCT），不硬開`;
   if (t.skipped === 'tight-stop') return `⏭️ 停損距離只有 ${t.stopPct.toFixed(2)}%（下限 ${t.minStopPct}%，AUTO_TRADE_MIN_STOP_PCT），手續費會吃掉大半獲利，只通知不下單`;
@@ -1014,6 +1037,11 @@ async function autoTradeOrder(env, hit) {
   const stopPct = (Math.abs(r.entry - r.stop) / r.entry) * 100;
   const minStopPct = Number(cfg(env, 'AUTO_TRADE_MIN_STOP_PCT'));
   if (stopPct < minStopPct) return { skipped: 'tight-stop', stopPct, minStopPct };
+  const btcEma = Number(cfg(env, 'AUTO_TRADE_BTC_TREND_EMA'));
+  if (r.dir === 'short' && btcEma > 0) {
+    const up = await btcAboveEma(r.interval, btcEma);
+    if (up !== false) return { skipped: 'btc-uptrend', unknown: up == null, btcEma };
+  }
   try {
     const [wallet, instrument] = await Promise.all([
       executorCall(env, 'GET', '/balance'),
