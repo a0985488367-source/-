@@ -122,9 +122,12 @@ test('tradeFromSetup 依進場方式決定初始狀態', () => {
   const t = tradeFromSetup({ id: 'x', symbol: 'BTCUSDT', interval: '15m', setup, candleTime: T0 });
   assert.equal(t.status, 'active');
   assert.equal(t.filledTime, T0);
-  // 預設會在最前面插入保本鏢，原本的流動性目標往後移一格
-  assert.equal(t.targets[0].name, 'TP0');
+  // 預設不插入保本鏢（scalpR: 0），第一段就是原本的流動性目標
+  assert.equal(t.targets[0].name, 'TP1');
   assert.equal(t.targets.at(-1).label, '流動性');
+  // 打開保本鏢時插在最前面，原本的目標往後移一格
+  const withScalp = tradeFromSetup({ id: 'z', symbol: 'BTCUSDT', interval: '15m', setup, candleTime: T0, management: { scalpR: 0.5, scalpFraction: 0.34 } });
+  assert.equal(withScalp.targets[0].name, 'TP0');
 
   const t2 = tradeFromSetup({ id: 'y', symbol: 'BTCUSDT', interval: '15m', setup: { ...setup, entryType: 'limit' }, candleTime: T0 });
   assert.equal(t2.status, 'pending');

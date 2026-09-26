@@ -24,8 +24,9 @@ export const GO_LIVE = {
 /** 保守估計：進出都算吃單費 0.055% */
 const ROUND_TRIP_FEE = 0.0011;
 
-export function matchesLiveRules(t, { minScore = 65 } = {}) {
-  return t.score >= minScore;
+export function matchesLiveRules(t, { minScore = 65, minTp1R = 1.5 } = {}) {
+  const tp1R = (t.targets ?? []).find((x) => !x.scalp)?.rr;
+  return t.score >= minScore && tp1R >= minTp1R;
 }
 
 export const netR = (t) => {

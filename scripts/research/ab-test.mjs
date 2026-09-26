@@ -10,6 +10,7 @@
 
 import { writeFile, mkdir } from 'node:fs/promises';
 import { analyze } from '../../src/smc/engine.js';
+import { ema } from '../../src/core/indicators.js';
 import { opt as optFrom, klines as fetchKlines, runSignals, summarize, pct, r2, printTable } from './lib.mjs';
 
 const ARGS = process.argv.slice(2);
@@ -26,6 +27,7 @@ const OUT = opt('out', 'data/research/ab-test.json');
 const ONLY = opt('only', '').split(',').filter(Boolean);
 const LIVE_MIN_SCORE = Number(opt('live-min-score', 65));
 const ROUND_TRIP_FEE = 0.0011;
+const BTC_EMA = Number(opt('btc-ema', 200));
 
 /** 受測的管理規則組合。base 是目前線上的行為（只有結構停損 + 最終目標）。 */
 const VARIANTS = {
@@ -65,15 +67,39 @@ const VARIANTS = {
   TR1_05:          { trailFromR: 1, trailGapR: 0.5 },
   TR_off:          { trailFromR: 0 },
   BE1_TR2_1:       { breakevenAtR: 1.0, trailFromR: 2, trailGapR: 1.0 },
+  // ── 目前線上（DEFAULT_MANAGEMENT 原樣）與保本鏢出場比例 ──
+  NOW:             {},
+  SC20:            { scalpFraction: 0.2 },
+  SC10:            { scalpFraction: 0.1 },
+  SC0:             { scalpR: 0 },
 };
 
-const live = (t) => t.score >= LIVE_MIN_SCORE;
+const live = (t) => t.score >= LIVE_MIN_SCORE && t.tp1R >= 1.5;
 const GROUPS = [
   ['全部', () => true],
   ['線上過濾', live],
   ['線上 前半', (t) => live(t) && t.half === 0],
   ['線上 後半', (t) => live(t) && t.half === 1],
   ['線上 多單', (t) => live(t) && t.dir === 'long'],
+  // 各時間週期分開看
+  ...['30m', '1h', '4h'].flatMap((tf) => [
+    [`線上 ${tf} 前半`, (t) => live(t) && t.interval === tf && t.half === 0],
+    [`線上 ${tf} 後半`, (t) => live(t) && t.interval === tf && t.half === 1],
+  ]),
+  // BTC 大盤方向（同週期收盤價在 EMA 之上＝漲勢）：順勢＝多單配漲勢、空單配跌勢
+  ['線上 順勢 前半', (t) => live(t) && t.withBtc === true && t.half === 0],
+  ['線上 順勢 後半', (t) => live(t) && t.withBtc === true && t.half === 1],
+  ['線上 逆勢 前半', (t) => live(t) && t.withBtc === false && t.half === 0],
+  ['線上 逆勢 後半', (t) => live(t) && t.withBtc === false && t.half === 1],
+  ['線上 空單 BTC跌勢', (t) => live(t) && t.dir === 'short' && t.btcUp === false],
+  ['線上 空單 BTC漲勢', (t) => live(t) && t.dir === 'short' && t.btcUp === true],
+  ['線上 多單 BTC漲勢', (t) => live(t) && t.dir === 'long' && t.btcUp === true],
+  ['線上 多單 BTC跌勢', (t) => live(t) && t.dir === 'long' && t.btcUp === false],
+  // 只做第一個目標夠遠的單：「賺的時候賺多」要靠訊號本身的目標夠遠
+  ...[1.5, 2, 3].flatMap((rr) => [
+    [`線上 TP1≥${rr}R 前半`, (t) => live(t) && t.tp1R >= rr && t.half === 0],
+    [`線上 TP1≥${rr}R 後半`, (t) => live(t) && t.tp1R >= rr && t.half === 1],
+  ]),
   ['線上 空單', (t) => live(t) && t.dir === 'short'],
 ];
 
@@ -96,6 +122,7 @@ function collectSignals(candles, symbol, interval) {
       targets: s.targets.map((t) => ({ name: t.name, price: t.price, rr: t.rr, label: t.label })),
       grade: s.grade, score: s.score, poiType: s.poi.type, zone: s.entryZone,
       stopPct: Math.abs(s.entry - s.stop) / s.entry,
+      tp1R: s.targets[0].rr,
       half: i < (WARMUP + candles.length) / 2 ? 0 : 1,
     });
     cooldownUntil = i + COOLDOWN;
@@ -115,6 +142,19 @@ function collectSignals(candles, symbol, interval) {
         signals.push(...s);
         log(`  ${symbol} ${interval}: ${c.length} 根 K 棒 → ${s.length} 個訊號`);
       } catch (e) { log(`  ${symbol} ${interval}: 取得資料失敗（${e.message}）`); }
+    }
+  }
+  // 每個訊號標上當下 BTC 同週期的趨勢（只看訊號那根之前已收盤的 K 棒，沒有未來函數）
+  for (const interval of INTERVALS) {
+    const c = candlesBy.get(`BTCUSDT|${interval}`) ?? await fetchKlines('BTCUSDT', interval, LIMIT).catch(() => null);
+    if (!c) { log(`  BTCUSDT ${interval}: 取不到，這個週期不標大盤方向`); continue; }
+    const e = ema(c.map((k) => k.close), BTC_EMA);
+    for (const sig of signals.filter((x) => x.interval === interval)) {
+      let lo = 0, hi = c.length - 1, idx = -1;
+      while (lo <= hi) { const m = (lo + hi) >> 1; if (c[m].time <= sig.time) { idx = m; lo = m + 1; } else hi = m - 1; }
+      if (idx < 0 || e[idx] == null) continue;
+      sig.btcUp = c[idx].close > e[idx];
+      sig.withBtc = sig.dir === 'long' ? sig.btcUp : !sig.btcUp;
     }
   }
   log(`\n訊號總數：${signals.length}（所有變體共用同一份）\n`);

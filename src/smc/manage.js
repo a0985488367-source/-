@@ -32,7 +32,8 @@ export const finite = (v, fallback = 0) => (Number.isFinite(v) ? v : fallback);
  * 改善全部來自「進場之後怎麼管」。
  */
 export const DEFAULT_MANAGEMENT = {
-  scalpR: 0.5,           // 保本鏢距離（R）。0 = 不使用
+  // 保本鏢 2026-09 關閉：兩組各 15 幣、前後半段，+0.5R 不先出（停損仍移到成本價）四格都持平或更好
+  scalpR: 0,             // 保本鏢距離（R）。0 = 不使用
   scalpFraction: 0.34,   // 保本鏢出場比例（0–0.9）
   breakevenAtR: 0.5,     // 獲利達此 R 後把停損移到成本價。0 = 不使用
   breakevenOffsetR: 0.05, // 成本價再往獲利方向推移的 R（覆蓋手續費）

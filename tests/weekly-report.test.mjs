@@ -4,17 +4,20 @@ import { buildWeeklyReport, matchesLiveRules, netR, RULES_SINCE } from '../scrip
 
 const NOW = RULES_SINCE + 30 * 24 * 3600 * 1000;
 const trade = (over = {}) => ({
-  dir: 'long', poiType: 'FVG', score: 70, entry: 100, initialStop: 98, r: 1,
+  dir: 'long', poiType: 'FVG', score: 70, entry: 100, initialStop: 98, r: 1, targets: [{ name: 'TP1', rr: 2 }],
   filledTime: NOW - 2 * 86400000, closedTime: NOW - 86400000, ...over,
 });
 const status = { wallet: { totalWalletBalance: 1100 }, trackedOpenPositions: 2, openRiskPct: 3.5, maxOpenRiskPct: 6 };
 const field = (embed, name) => embed.fields.find((f) => f.name.startsWith(name));
 
-test('只算符合目前下單規則的訊號：多空、各種進場區都算，只排除低於 65 分', () => {
+test('只算符合目前下單規則的訊號：多空、各種進場區都算，排除低於 65 分與第一個目標不到 1.5R', () => {
   assert.ok(matchesLiveRules(trade()));
   assert.ok(matchesLiveRules(trade({ dir: 'short', initialStop: 102 })));
   assert.ok(matchesLiveRules(trade({ poiType: 'Order Block' })));
   assert.ok(!matchesLiveRules(trade({ score: 60 })));
+  assert.ok(!matchesLiveRules(trade({ targets: [{ name: 'TP1', rr: 1.2 }] })));
+  // 舊紀錄最前面的保本鏢不算「第一個目標」
+  assert.ok(matchesLiveRules(trade({ targets: [{ name: 'TP0', rr: 0.5, scalp: true }, { name: 'TP1', rr: 2 }] })));
 });
 
 test('扣手續費：停損 2% 時一進一出 0.11% 約吃掉 0.055R', () => {
