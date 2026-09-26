@@ -74,7 +74,7 @@ const VARIANTS = {
   SC0:             { scalpR: 0 },
 };
 
-const live = (t) => t.score >= LIVE_MIN_SCORE;
+const live = (t) => t.score >= LIVE_MIN_SCORE && t.tp1R >= 1.5;
 const GROUPS = [
   ['全部', () => true],
   ['線上過濾', live],

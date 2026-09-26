@@ -835,29 +835,25 @@ test('開啟後價格到了：用可用餘額 × 風險 % 算數量，送出一�
   assert.match(field.value, /5x 槓桿/);
 });
 
-test('保本鏢與目標價會一次算好、放進 /trade 的 ladder 欄位送給 Executor', async () => {
+test('分批出場目標會一次算好、放進 /trade 的 ladder 欄位送給 Executor（預設不掛保本鏢）', async () => {
   const discord = [];
   const executor = { calls: [], wallet: { totalAvailableBalance: 1000, totalWalletBalance: 1000 }, instrument: demoInstrument };
   const env = withExecutor();
   await env.SMC_KV.put('auto-trade:enabled', 'true');
-  // entry 100、stop 95（risk=5）、目標 115（rr=3）：保本鏢在 100+5*0.5=102.5，
-  // 佔 34%；剩下 66% 全部給唯一的目標 115
+  // entry 100、stop 95（risk=5）、唯一目標 115（rr=3）：沒有保本鏢，全部 2 顆都掛在 115
   stubFetch({ market: makeMarket([row()]), prices: { ABCUSDT: 99.9 }, discord, executor });
   await runWorker(env);
 
   const tradeCall = executor.calls.find((c) => c.url.endsWith('/trade'));
-  assert.equal(tradeCall.body.ladder.length, 2, '保本鏢 + 1 個目標，ladder 應該有 2 段');
-
-  const scalpLeg = tradeCall.body.ladder.find((l) => Number(l.price) === 102.5);
-  assert.ok(scalpLeg, '應該有一段保本鏢（102.5 = 100 + 5*0.5）');
-  assert.equal(scalpLeg.qty, '0.6', '2 顆 × 34% ≈ 0.68，對齊步進 0.1 捨去成 0.6');
+  assert.equal(tradeCall.body.ladder.length, 1, '只有 1 個目標、沒有保本鏢，ladder 應該只有 1 段');
+  assert.equal(tradeCall.body.ladder.find((l) => Number(l.price) === 102.5), undefined, '預設不掛 +0.5R 的保本鏢');
 
   const tp1Leg = tradeCall.body.ladder.find((l) => Number(l.price) === 115);
   assert.ok(tp1Leg, '應該有一段 TP1');
-  assert.equal(tp1Leg.qty, '1.3', '2 顆 × 66% ≈ 1.32，對齊步進 0.1 捨去成 1.3');
+  assert.equal(tp1Leg.qty, '2', '全部部位都在 TP1 出場');
 
   const pos = JSON.parse(await env.SMC_KV.get('open-pos:ABCUSDT:long'));
-  assert.equal(pos.ladder.length, 2, 'KV 也要記住這兩段分批出場單（Executor 回傳的 orderId）');
+  assert.equal(pos.ladder.length, 1, 'KV 也要記住這段出場單（Executor 回傳的 orderId）');
   assert.ok(pos.ladder.every((l) => l.orderId));
   assert.equal(pos.initialStop, 95);
   assert.equal(pos.maxFavorableR, 0);
@@ -1245,6 +1241,19 @@ test('可用保證金還夠（倉位有該有大小的一半以上）：照常�
   assert.ok(executor.calls.find((c) => c.url.endsWith('/trade')));
 });
 
+test('第一個止盈不到 1.5R：目標太近，只通知不下單', async () => {
+  const discord = [];
+  const executor = { calls: [], wallet: { totalAvailableBalance: 1000, totalWalletBalance: 1000 }, instrument: demoInstrument };
+  const env = withExecutor();
+  await env.SMC_KV.put('auto-trade:enabled', 'true');
+  stubFetch({ market: makeMarket([row({ targets: [{ name: 'TP1', price: 106, rr: 1.2 }] })]), prices: { ABCUSDT: 99.9 }, discord, executor });
+  const out = await runWorker(env);
+  assert.equal(out.alerts, 1);
+  assert.equal(executor.calls.length, 0);
+  const field = discord[0].embeds[0].fields.find((f) => f.name.includes('自動下單'));
+  assert.match(field.value, /第一個止盈只有 1\.20R（下限 1\.5R/);
+});
+
 test('持倉總風險上限設成 0 就不限制', async () => {
   const executor = { calls: [], wallet: { totalAvailableBalance: 1000, totalWalletBalance: 1000 }, instrument: demoInstrument };
   const env = withExecutor({ AUTO_TRADE_MAX_OPEN_RISK_PCT: '0' });
@@ -1292,13 +1301,14 @@ test('算出的數量小於最小下單量：回報錯誤，但 Discord 照常�
 test('分批出場階梯任何一段掛不了單（低於最小下單量）就整筆跳過，不會開出沒有止盈的裸部位', async () => {
   // 實測踩過的坑：以前是「先開倉，掛腿單時哪一段太小就默默跳過那一段」，
   // 極端情況下全部段都太小，整筆變成完全沒有止盈的裸部位。這裡故意讓
-  // 總量（qty=2）通過最小下單量檢查，但保本鏢那一段（34% ≈ 0.68 → 捨去
-  // 成 0.6）低於最小下單量（1），驗證整筆會直接跳過，連進場單都不會送。
+  // 總量（qty=2）通過最小下單量檢查，但兩個目標各分一半（1）低於最小下單量
+  // （1.5），驗證整筆會直接跳過，連進場單都不會送。
   const discord = [];
-  const executor = { calls: [], wallet: { totalAvailableBalance: 1000, totalWalletBalance: 1000 }, instrument: { ...demoInstrument, minQty: 1 } };
+  const executor = { calls: [], wallet: { totalAvailableBalance: 1000, totalWalletBalance: 1000 }, instrument: { ...demoInstrument, minQty: 1.5 } };
   const env = withExecutor();
   await env.SMC_KV.put('auto-trade:enabled', 'true');
-  stubFetch({ market: makeMarket([row()]), prices: { ABCUSDT: 99.9 }, discord, executor });
+  const twoTargets = [{ name: 'TP1', price: 110, rr: 2 }, { name: 'TP2', price: 115, rr: 3 }];
+  stubFetch({ market: makeMarket([row({ targets: twoTargets })]), prices: { ABCUSDT: 99.9 }, discord, executor });
   const out = await runWorker(env);
   assert.equal(out.alerts, 1, '下單失敗不該擋住 Discord 通知');
   const field = discord[0].embeds[0].fields.find((f) => f.name.includes('自動下單'));
