@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { simulatePortfolio, pagedKlines } from '../scripts/research/lib.mjs';
+import { simulatePortfolio, pagedKlines, researchTargets } from '../scripts/research/lib.mjs';
 
 const t = (over) => ({ symbol: 'A', filledTime: 0, closedTime: 10, r: 1, beTime: null, ...over });
 
@@ -50,4 +50,14 @@ test('pagedKlines 超過 1000 根會用 endTime 往前分段抓，到上市第�
 
   const capped = await pagedKlines(provider, 'X', '1m', 5000);
   assert.equal(capped.length, 2500);
+});
+
+test('researchTargets：固定 R 出場與目標等比例拉近（多空都對）', () => {
+  const long = { entry: 100, stop: 98, targets: [{ price: 104, rr: 2 }, { price: 108, rr: 4 }] };
+  assert.deepEqual(researchTargets(long, { fixedTpR: 1.5 }), [{ name: 'TP1', price: 103, rr: 1.5 }]);
+  assert.deepEqual(researchTargets(long, { tpScale: 0.5 }).map((t) => [t.price, t.rr]), [[102, 1], [104, 2]]);
+  assert.equal(researchTargets(long, {}), long.targets);
+  const short = { entry: 100, stop: 102, targets: [{ price: 96, rr: 2 }] };
+  assert.equal(researchTargets(short, { fixedTpR: 1 })[0].price, 98);
+  assert.equal(researchTargets(short, { tpScale: 0.75 })[0].price, 97);
 });

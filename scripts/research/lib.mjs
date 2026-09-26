@@ -26,6 +26,23 @@ export async function pagedKlines(provider, symbol, interval, limit) {
   return out.slice(-limit);
 }
 
+/**
+ * 研究用：改寫訊號的止盈目標（線上不用）
+ *   fixedTpR  整筆在固定 R 一次出場，取代原本的結構目標
+ *   tpScale   原本每個目標離進場價的距離都乘上這個倍數（例如 0.75＝全部拉近四分之一）
+ */
+export function researchTargets(sig, cfg = {}) {
+  const risk = Math.abs(sig.entry - sig.stop);
+  const dir = sig.stop < sig.entry ? 1 : -1;
+  if (cfg.fixedTpR > 0) {
+    return [{ name: 'TP1', price: sig.entry + dir * risk * cfg.fixedTpR, rr: cfg.fixedTpR }];
+  }
+  if (cfg.tpScale > 0 && cfg.tpScale !== 1) {
+    return sig.targets.map((t) => ({ ...t, price: sig.entry + (t.price - sig.entry) * cfg.tpScale, rr: t.rr * cfg.tpScale }));
+  }
+  return sig.targets;
+}
+
 /** 讓每個訊號照管理規則往後逐根跑到結束；還沒結束的不計入 */
 export function runSignals(signals, candlesBy, cfg) {
   const closed = [];
@@ -33,7 +50,7 @@ export function runSignals(signals, candlesBy, cfg) {
     const candles = candlesBy.get(`${sig.symbol}|${sig.interval}`);
     const t = {
       ...sig,
-      targets: buildLadder(sig.entry, sig.stop, sig.targets, cfg),
+      targets: buildLadder(sig.entry, sig.stop, researchTargets(sig, cfg), cfg),
       status: sig.entryType === 'market' ? 'active' : 'pending',
       hitTargets: [], events: [], remaining: 1, realizedR: 0,
       barsSinceOpen: 0, barsSinceFill: 0, maxFavorableR: 0, maxAdverseR: 0,

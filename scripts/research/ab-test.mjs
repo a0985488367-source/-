@@ -73,6 +73,15 @@ const VARIANTS = {
   SC20:            { scalpFraction: 0.2 },
   SC10:            { scalpFraction: 0.1 },
   SC0:             { scalpR: 0 },
+  // ── 止盈目標是不是設太遠（保本／追蹤停損照舊）──
+  TPX1:            { fixedTpR: 1 },
+  TPX15:           { fixedTpR: 1.5 },
+  TPX2:            { fixedTpR: 2 },
+  TPX3:            { fixedTpR: 3 },
+  TPS05:           { tpScale: 0.5 },
+  TPS075:          { tpScale: 0.75 },
+  HALF1:           { scalpR: 1, scalpFraction: 0.5 },
+  HALF15:          { scalpR: 1.5, scalpFraction: 0.5 },
 };
 
 const live = (t) => t.score >= LIVE_MIN_SCORE && t.tp1R >= 1.5;
@@ -225,11 +234,13 @@ function exitBreakdown(trades, candlesBy, maxHold = 200) {
 
   const net = (t) => ({ ...t, r: t.r - ROUND_TRIP_FEE / t.stopPct });
   const rows = [];
+  const variantSims = [];
   let portfolioBase = null;
   for (const [name, cfg] of Object.entries(VARIANTS)) {
     if (ONLY.length && !ONLY.includes(name)) continue;
     const closed = runSignals(signals, candlesBy, cfg);
     if (!portfolioBase) portfolioBase = { name, closed };
+    variantSims.push([name, closed]);
     for (const [group, f] of GROUPS) {
       const hit = closed.filter(f);
       rows.push({ name, group, cfg, ...summarize(hit), netExpectancy: summarize(hit.map(net)).expectancy ?? 0 });
@@ -256,6 +267,18 @@ function exitBreakdown(trades, candlesBy, maxHold = 200) {
   const portfolioRows = PORTFOLIO_RULES.map(([name, rule]) => [name, ...periods.map(([, f]) => simulatePortfolio(filled.filter(f), { riskPct: RISK_PCT, ...rule }))]);
   printTable(log, ['做法', ...periods.flatMap(([p]) => [`${p} 筆數`, `${p} 倍數`, `${p} 最大回撤`])],
     portfolioRows.map(([name, ...res]) => [name, ...res.flatMap((x) => [String(x.taken), `${x.multiple.toFixed(2)}x`, `${x.maxDdPct.toFixed(1)}%`])]));
+
+  if (variantSims.length > 1) {
+    log(`\n■ 各規則帳戶模擬（線上完整過濾、每筆 ${RISK_PCT}% 複利、不限制持倉、已扣手續費）`);
+    printTable(log, ['規則', ...periods.flatMap(([p]) => [`${p} 倍數`, `${p} 最大回撤`])],
+      variantSims.map(([name, closed]) => {
+        const list = closed.filter((t) => t.filledTime && liveNow(t)).map(toSim);
+        return [name, ...periods.flatMap(([, f]) => {
+          const x = simulatePortfolio(list.filter(f), { riskPct: RISK_PCT });
+          return [`${x.multiple.toFixed(2)}x`, `${x.maxDdPct.toFixed(1)}%`];
+        })];
+      }));
+  }
 
   exitBreakdown(filled, candlesBy);
 
