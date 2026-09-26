@@ -27,6 +27,12 @@ on:
       btc_ema:
         description: 'ab-test 判斷 BTC 漲跌用的 EMA 長度'
         default: '200'
+      fee:
+        description: 'ab-test 每筆一進一出的成本（占倉位價值），預設 0.0011；要算滑價就加大'
+        default: '0.0011'
+      limit:
+        description: '每個幣／週期抓幾根 K 棒（超過 1000 會自動分段往前抓；愈多愈穩但跑愈久）'
+        default: '1000'
       commit:
         description: '是否把結果存回倉庫'
         default: 'true'
@@ -37,7 +43,7 @@ permissions:
 jobs:
   ab:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -52,6 +58,8 @@ jobs:
           MIN_SCORE: ${{ inputs.min_score }}
           VARIANTS: ${{ inputs.variants }}
           BTC_EMA: ${{ inputs.btc_ema }}
+          FEE: ${{ inputs.fee }}
+          LIMIT: ${{ inputs.limit }}
         run: |
           set -o pipefail
           if [ "$STUDY" = confluence ]; then SCRIPT=confluence-study; DEF_INT=30m,1h,4h; else SCRIPT=ab-test; DEF_INT=15m,1h; fi
@@ -61,6 +69,8 @@ jobs:
             --min-score="$MIN_SCORE" \
             --only="$VARIANTS" \
             --btc-ema="${BTC_EMA:-200}" \
+            --fee="${FEE:-0.0011}" \
+            --limit="${LIMIT:-1000}" \
             | tee ab-output.txt
 
       - name: 寫進步驟摘要
