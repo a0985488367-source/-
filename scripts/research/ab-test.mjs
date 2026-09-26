@@ -91,6 +91,13 @@ const GROUPS = [
   ['線上 順勢 後半', (t) => live(t) && t.withBtc === true && t.half === 1],
   ['線上 逆勢 前半', (t) => live(t) && t.withBtc === false && t.half === 0],
   ['線上 逆勢 後半', (t) => live(t) && t.withBtc === false && t.half === 1],
+  // 候選規則：BTC 漲勢時不做空（其餘照舊）
+  ['線上＋BTC漲勢不做空 前半', (t) => live(t) && !(t.dir === 'short' && t.btcUp === true) && t.half === 0],
+  ['線上＋BTC漲勢不做空 後半', (t) => live(t) && !(t.dir === 'short' && t.btcUp === true) && t.half === 1],
+  ['線上 空單 BTC漲勢 前半', (t) => live(t) && t.dir === 'short' && t.btcUp === true && t.half === 0],
+  ['線上 空單 BTC漲勢 後半', (t) => live(t) && t.dir === 'short' && t.btcUp === true && t.half === 1],
+  ['線上 空單 BTC跌勢 前半', (t) => live(t) && t.dir === 'short' && t.btcUp === false && t.half === 0],
+  ['線上 空單 BTC跌勢 後半', (t) => live(t) && t.dir === 'short' && t.btcUp === false && t.half === 1],
   ['線上 空單 BTC跌勢', (t) => live(t) && t.dir === 'short' && t.btcUp === false],
   ['線上 空單 BTC漲勢', (t) => live(t) && t.dir === 'short' && t.btcUp === true],
   ['線上 多單 BTC漲勢', (t) => live(t) && t.dir === 'long' && t.btcUp === true],
