@@ -85,6 +85,8 @@ const PORTFOLIO_RULES = [
   ['未保本最多 4 筆', { maxAtRisk: 4 }],
   ['未保本最多 5 筆', { maxAtRisk: 5 }],
   ['同幣不加碼＋未保本最多 4 筆', { oneBySymbol: true, maxAtRisk: 4 }],
+  // 每單風險 % 對速度與回撤的影響（其餘不限制）
+  ...[2, 3, 4, 5, 6].map((r) => [`每單 ${r}%`, { riskPct: r }]),
 ];
 const GROUPS = [
   ['全部', () => true],
