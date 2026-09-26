@@ -3,13 +3,27 @@ import { buildLadder, stepTrade } from '../../src/smc/manage.js';
 
 export const opt = (args, n, d) => (args.find((a) => a.startsWith(`--${n}=`)) || `--${n}=${d}`).slice(n.length + 3);
 
+/** 抓最近 limit 根 K 線；交易所單次最多給 1000 根，超過就用 endTime 往前一段一段補 */
 export async function klines(symbol, interval, limit) {
   let err;
   for (const id of ['binance', 'okx', 'bybit']) {
-    try { return await PROVIDERS[id].fetchKlines(symbol, interval, { limit }); }
+    try { return await pagedKlines(PROVIDERS[id], symbol, interval, limit); }
     catch (e) { err = e; }
   }
   throw err;
+}
+
+export async function pagedKlines(provider, symbol, interval, limit) {
+  let out = [];
+  let endTime;
+  while (out.length < limit) {
+    const page = await provider.fetchKlines(symbol, interval, { limit: Math.min(1000, limit - out.length), endTime });
+    const older = page.filter((c) => !out.length || c.time < out[0].time);
+    if (!older.length) break; // 已經到上市第一根
+    out = [...older, ...out];
+    endTime = out[0].time - 1;
+  }
+  return out.slice(-limit);
 }
 
 /** 讓每個訊號照管理規則往後逐根跑到結束；還沒結束的不計入 */
