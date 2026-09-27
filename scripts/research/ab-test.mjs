@@ -212,6 +212,8 @@ function collectSignals(candles, symbol, interval) {
       dir: s.dir, entry: s.entry, stop: s.stop, entryType: s.entryType,
       targets: s.targets.map((t) => ({ name: t.name, price: t.price, rr: t.rr, label: t.label })),
       grade: s.grade, score: s.score, poiType: s.poi.type, zone: s.entryZone,
+      checks: Object.fromEntries((s.checklist ?? []).map((c) => [c.key, c.ok])),
+      extras: s.extras ?? {}, rrFinal: s.rrFinal,
       stopPct: Math.abs(s.entry - s.stop) / s.entry,
       tp1R: s.targets[0].rr,
       half: i < (WARMUP + candles.length) / 2 ? 0 : 1,
@@ -261,6 +263,46 @@ function exitBreakdown(trades, candlesBy, maxHold = 200) {
   });
   log('\n■ 出場原因（線上完整過濾、已扣手續費）');
   printTable(log, ['出場方式', '筆數', '佔比', '平均R', '最多曾賺到R', '出場後又走到TP1'], rows);
+}
+
+/**
+ * 找進場優勢：把「細K區間」的交易按各種條件拆開，看扣完手續費每筆賺多少（前半／後半／全部）。
+ * 用 5 分鐘精準版的結果（*_5M 變體），分數門檻用 MIN_SCORE（比線上寬，樣本比較多）。
+ */
+function edgeBreakdown(name, trades) {
+  const pool = trades.filter((t) => t.inSub);
+  if (!pool.length) return;
+  const netR = (t) => t.r - ROUND_TRIP_FEE / t.stopPct;
+  const bucket = (label, lo, hi, f) => [label, (t) => f(t) >= lo && f(t) < hi];
+  const CHECK_ZH = { htfAlign: '高週期同向', structure: '結構確認', pdSide: '折價／溢價側', poiFresh: '進場區新鮮', sweep: '掃過流動性', stacked: '多重匯流', rr: '風報比達標', target: '目標有流動性', momentum: '動能同向', killzone: '在 killzone' };
+  const COND = [
+    ['全部', () => true],
+    ['線上過濾', liveNow],
+    ...['30m', '1h', '4h'].map((tf) => [`週期 ${tf}`, (t) => t.interval === tf]),
+    ['多單', (t) => t.dir === 'long'], ['空單', (t) => t.dir === 'short'],
+    ['順 BTC 趨勢', (t) => t.withBtc === true], ['逆 BTC 趨勢', (t) => t.withBtc === false],
+    bucket('分數 55-64', 55, 65, (t) => t.score), bucket('分數 65-74', 65, 75, (t) => t.score),
+    bucket('分數 75-84', 75, 85, (t) => t.score), bucket('分數 85+', 85, 999, (t) => t.score),
+    ...Object.keys(CHECK_ZH).flatMap((k) => [
+      [`✔ ${CHECK_ZH[k]}`, (t) => t.checks?.[k] === true], [`✘ ${CHECK_ZH[k]}`, (t) => t.checks?.[k] === false],
+    ]),
+    ...[...new Set(pool.map((t) => t.poiType))].map((p) => [`進場區 ${p}`, (t) => t.poiType === p]),
+    ['市價進場（已在區內）', (t) => t.entryType === 'market'], ['限價等回踩', (t) => t.entryType !== 'market'],
+    bucket('停損 <0.5%', 0, 0.005, (t) => t.stopPct), bucket('停損 0.5-1%', 0.005, 0.01, (t) => t.stopPct),
+    bucket('停損 1-2%', 0.01, 0.02, (t) => t.stopPct), bucket('停損 2-4%', 0.02, 0.04, (t) => t.stopPct),
+    bucket('停損 4%+', 0.04, 9, (t) => t.stopPct),
+    bucket('TP1 <1.5R', 0, 1.5, (t) => t.tp1R), bucket('TP1 1.5-2R', 1.5, 2, (t) => t.tp1R),
+    bucket('TP1 2-3R', 2, 3, (t) => t.tp1R), bucket('TP1 3R+', 3, 999, (t) => t.tp1R),
+    ['fib 在進場區', (t) => !!t.extras?.fib], ['HVN 在進場區', (t) => !!t.extras?.hvn],
+    ['價值區邊緣', (t) => !!t.extras?.valueEdge], ['LVN 在進場區', (t) => !!t.extras?.lvn],
+    ...[[0, 6], [6, 12], [12, 18], [18, 24]].map(([a, b]) => [`台灣 ${a}-${b} 點進場`, (t) => t.filledTime && twHour(t.filledTime) >= a && twHour(t.filledTime) < b]),
+  ];
+  const cell = (xs) => (xs.length ? `${r2(xs.reduce((a, t) => a + netR(t), 0) / xs.length)}（${xs.length}）` : '-');
+  log(`\n■ 找進場優勢（${name}、細K區間、分數≥${MIN_SCORE}、扣手續費每筆 R，括號是筆數）`);
+  printTable(log, ['條件', '前半', '後半', '全部'], COND.map(([label, f]) => {
+    const hit = pool.filter(f);
+    return [label, cell(hit.filter((t) => t.subHalf === 0)), cell(hit.filter((t) => t.subHalf === 1)), cell(hit)];
+  }));
 }
 
 /**
@@ -378,6 +420,7 @@ function btcChangeBeforeFill(c, t) {
   }
 
   exitBreakdown(filled, candlesBy);
+  for (const [name, closed] of variantSims) if (name.endsWith('_5M')) edgeBreakdown(name, closed);
 
   await mkdir(OUT.split('/').slice(0, -1).join('/'), { recursive: true });
   await writeFile(OUT, JSON.stringify({ generatedAt: Date.now(), symbols: SYMBOLS, intervals: INTERVALS, signals: signals.length, rows }, null, 2));
