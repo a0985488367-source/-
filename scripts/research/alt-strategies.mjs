@@ -25,6 +25,18 @@ const LIMIT = Number(opt('limit', 5000));
 const SUB = opt('sub', '5m');
 const SUB_DAYS = Number(opt('sub-days', 150));
 const FEE = Number(opt('fee', 0.0011));
+// --fee-model=split：手續費依「掛單（maker）／吃單（taker）」分開算，取代固定的 --fee
+//   進場：市價＝taker、限價掛單＝maker；出場：止盈限價單＝maker，停損／追蹤停損＝taker
+const FEE_MODEL = opt('fee-model', 'flat');
+const MAKER = Number(opt('maker-fee', 0.0002));
+const TAKER = Number(opt('taker-fee', 0.00055));
+// --entries=market,L0:1,L0.25:2 進場方式：market＝下一根開盤市價；
+//   L<幾倍 ATR>:<等幾根>＝在訊號收盤價往有利方向退幾倍 ATR 掛限價單，等這麼多根沒成交就放棄
+const ENTRIES = opt('entries', 'market').split(',').filter(Boolean).map((e) => {
+  if (e === 'market') return { name: 'market' };
+  const [off, bars] = e.slice(1).split(':').map(Number);
+  return { name: e, offsetAtr: off, bars: bars || 1 };
+});
 const WARMUP = 210;
 const log = (...a) => console.log(...a);
 
@@ -85,7 +97,7 @@ const DETAIL = opt('detail', 'DONCH55,EMA_20_50,MACD_ZERO,ICHIMOKU,SUPERTREND').
 const DETAIL_TF = opt('detail-tf', '4h');
 
 const prepared = new Map();
-function buildSignals(symbol, interval, c, name) {
+function buildSignals(symbol, interval, c, name, en = ENTRIES[0] ?? { name: 'market' }) {
   const key = `${symbol}|${interval}`;
   if (!prepared.has(key)) prepared.set(key, prepare(c));
   const x = prepared.get(key);
@@ -93,12 +105,14 @@ function buildSignals(symbol, interval, c, name) {
   for (let i = WARMUP; i < c.length - 1; i++) {
     const s = STRATEGIES[name](x, i);
     if (!s || !(x.a[i] > 0)) continue;
-    const entry = c[i + 1].open;
+    const market = en.name === 'market';
+    const long = s.dir === 'long';
+    const entry = market ? c[i + 1].open : c[i].close + (long ? -1 : 1) * en.offsetAtr * x.a[i];
     const risk = x.a[i] * s.stopAtr;
-    const stop = s.dir === 'long' ? entry - risk : entry + risk;
+    const stop = long ? entry - risk : entry + risk;
     out.push({
-      symbol, interval, index: i, time: c[i].time, dir: s.dir, entry, stop, entryType: 'market',
-      filledTime: c[i + 1].time, stopPct: risk / entry, strategy: name,
+      symbol, interval, index: i, time: c[i].time, dir: s.dir, entry, stop, entryType: market ? 'market' : 'limit',
+      ...(market ? { filledTime: c[i + 1].time } : {}), stopPct: risk / entry, strategy: name,
       half: i < (WARMUP + c.length) / 2 ? 0 : 1,
     });
   }
@@ -187,14 +201,16 @@ function runCombo(candlesBy, mid, netR) {
     const s = withTargets(sigs, tpR);
     // 上限算「所有還開著的單」（跟線上最多同時幾張一樣），所以不帶保本時間
     const tag = (t) => ({ ...t, r: netR(t), beTime: null, label: `${name}／${exitName}` });
-    const coarse = onePerSymbol(runSignals(s, candlesBy, cfg)).map(tag);
-    const fine = SUB ? onePerSymbol(runSignals(s, candlesBy, { ...cfg, subBars: true })).map(tag) : [];
+    const coarse = runSet(s, candlesBy, cfg).map(tag);
+    const fine = SUB ? runSet(s, candlesBy, { ...cfg, subBars: true }).map(tag) : [];
     return { label: `${name}／${exitName}`, coarse, fine };
   });
   const groups = per.length > 1 ? [...per.map((p) => [p]), per] : [per];
-  const RISKS = [1, 2, 3, 4, 5];
-  const CAPS = [3, 5, 8, Infinity];
-  const DIRS = [Infinity, 3];
+  const list = (k, d) => opt(k, d).split(',').map((v) => (v === 'inf' ? Infinity : Number(v)));
+  const RISKS = list('risks', '1,1.5,2,2.5,3,4');
+  const CAPS = list('caps', '3,5,8,10,12,inf');
+  const DIRS = list('dirs', 'inf,3,4,5,6');
+  const json = [];
   for (const g of groups) {
     const all = (k) => g.flatMap((p) => p[k]);
     const periods = [
@@ -210,11 +226,15 @@ function runCombo(candlesBy, mid, netR) {
     const rows = [];
     for (const risk of RISKS) for (const cap of CAPS) for (const dir of DIRS) {
       if (dir !== Infinity && dir >= cap) continue;
+      if (groups.length > 1 && g !== groups.at(-1) && !(risk === 3 && cap === 5 && dir === 3)) continue; // 單一策略只印目前設定當對照
       const res = periods.map((p) => {
         const x = simulatePortfolio(p.xs, { riskPct: risk, maxAtRisk: cap, maxSameDirAtRisk: dir, oneBySymbol: true });
         const monthly = p.days > 0 ? (x.multiple ** (30 / p.days) - 1) * 100 : 0;
         return { ...x, monthly };
       });
+      json.push({ g: g.map((p) => p.label).join('+'), risk, cap: cap === Infinity ? 0 : cap, dir: dir === Infinity ? 0 : dir,
+        m: res.map((x) => Math.round(x.multiple * 1000) / 1000), dd: res.map((x) => Math.round(x.maxDdPct)), mo: res.map((x) => Math.round(x.monthly * 10) / 10),
+        days: periods.map((p) => Math.round(p.days)) });
       rows.push([
         `${risk}%`, cap === Infinity ? '不限' : String(cap), dir === Infinity ? '不限' : String(dir),
         ...res.map((x) => `${x.multiple.toFixed(2)}x／${x.maxDdPct.toFixed(0)}%`),
@@ -228,6 +248,21 @@ function runCombo(candlesBy, mid, netR) {
     log('  每格＝最後倍數／最大回撤；每月＝換算成每 30 天的複利成長；同一個幣同時只抱一張');
     printTable(log, ['每單風險', '最多同時', '同方向最多', '原週期 前半', '原週期 後半', '5M 前半', '5M 後半', '最大回撤', '每月（最差段）', '每月（平均）'], rows);
   }
+  log('\nCOMBO_JSON ' + JSON.stringify(json));
+}
+
+/** 一進一出的手續費（占倉位價值） */
+function feeOf(t) {
+  if (FEE_MODEL !== 'split') return FEE;
+  const entryFee = t.entryType === 'limit' ? MAKER : TAKER;
+  const makerExit = t.status === 'target' ? 1 : t.events.filter((e) => e.type === 'target' && e.partial).reduce((a, e) => a + e.partial, 0);
+  return entryFee + makerExit * MAKER + (1 - makerExit) * TAKER;
+}
+
+/** 跑一組訊號：沒成交（限價單等太久）的不算；同一個幣同時只抱一張 */
+function runSet(sigs, candlesBy, cfg, en) {
+  const c = en && en.name !== 'market' ? { ...cfg, entryWindowBars: en.bars, fillBarPath: true } : cfg;
+  return onePerSymbol(runSignals(sigs, candlesBy, c).filter((t) => !(t.status === 'expired' && t.exitReason === 'timeout')));
 }
 
 const withTargets = (sigs, tpR) => sigs.map((s) => ({
@@ -255,7 +290,7 @@ const withTargets = (sigs, tpR) => sigs.map((s) => ({
     log(`  ${symbol} 資料完成`);
   }
   const mid = (subStart + subEnd) / 2;
-  const netR = (t) => t.r - FEE / t.stopPct;
+  const netR = (t) => t.r - feeOf(t) / t.stopPct;
   const cell = (xs) => (xs.length ? `${r2(xs.reduce((a, t) => a + netR(t), 0) / xs.length)}（${xs.length}）` : '-');
   const weeks = SUB_DAYS / 7;
 
@@ -265,15 +300,16 @@ const withTargets = (sigs, tpR) => sigs.map((s) => ({
   const summary = [];
   for (const interval of INTERVALS) {
     const rows = [];
-    for (const name of Object.keys(STRATEGIES)) {
+    for (const name of Object.keys(STRATEGIES)) for (const en of ENTRIES) {
       const sigs = SYMBOLS.flatMap((sym) => {
         const c = candlesBy.get(`${sym}|${interval}`);
-        return c ? buildSignals(sym, interval, c, name) : [];
+        return c ? buildSignals(sym, interval, c, name, en) : [];
       });
-      for (const [exitName, { tpR, cfg }] of Object.entries(EXITS)) {
+      for (const [exitName0, { tpR, cfg }] of Object.entries(EXITS)) {
+        const exitName = en.name === 'market' ? exitName0 : `${exitName0}／${en.name}`;
         const s = withTargets(sigs, tpR);
-        const coarse = onePerSymbol(runSignals(s, candlesBy, cfg));
-        const fine = SUB ? onePerSymbol(runSignals(s, candlesBy, { ...cfg, subBars: true })) : [];
+        const coarse = runSet(s, candlesBy, cfg, en);
+        const fine = SUB ? runSet(s, candlesBy, { ...cfg, subBars: true }, en) : [];
         const fineHalf = (h) => fine.filter((t) => (t.filledTime < mid ? 0 : 1) === h);
         rows.push([
           name, exitName,
