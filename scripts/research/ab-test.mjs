@@ -88,6 +88,7 @@ const live = (t) => t.score >= LIVE_MIN_SCORE && t.tp1R >= 1.5;
 // 目前線上完整規則：再加上 BTC 漲勢（或讀不到）不做空
 const liveNow = (t) => live(t) && (t.dir === 'long' || t.btcUp === false);
 const RISK_PCT = Number(opt('risk-pct', 5));
+const twHour = (ms) => new Date(ms + 8 * 3_600_000).getUTCHours();
 const PORTFOLIO_RULES = [
   ['不限制（現在）', {}],
   ['同幣不加碼', { oneBySymbol: true }],
@@ -95,6 +96,17 @@ const PORTFOLIO_RULES = [
   ['未保本最多 4 筆', { maxAtRisk: 4 }],
   ['未保本最多 5 筆', { maxAtRisk: 5 }],
   ['同幣不加碼＋未保本最多 4 筆', { oneBySymbol: true, maxAtRisk: 4 }],
+  // 一次好幾張一起停損：同方向上限、每小時新單上限、疊單縮小、單日停損、BTC 急跌不開多
+  ['同方向未保本最多 2 筆', { maxSameDirAtRisk: 2 }],
+  ['同方向未保本最多 3 筆', { maxSameDirAtRisk: 3 }],
+  ['每小時最多新開 1 筆', { maxNewPerHour: 1 }],
+  ['每小時最多新開 2 筆', { maxNewPerHour: 2 }],
+  ['疊單時風險 ×0.5', { stackScale: 0.5 }],
+  ['疊單時風險 ×0.7', { stackScale: 0.7 }],
+  ['單日虧 10% 停手', { dailyStopPct: 10 }],
+  ['單日虧 15% 停手', { dailyStopPct: 15 }],
+  ['BTC 剛跌 >0.5% 不開多', { skip: (t) => t.dir === 'long' && t.btcChg != null && t.btcChg <= -0.5 }],
+  ['BTC 剛跌 >1% 不開多', { skip: (t) => t.dir === 'long' && t.btcChg != null && t.btcChg <= -1 }],
   // 每單風險 % 對速度與回撤的影響（其餘不限制）
   ...[2, 3, 4, 5, 6].map((r) => [`每單 ${r}%`, { riskPct: r }]),
 ];
@@ -131,6 +143,16 @@ const GROUPS = [
     [`線上 TP1≥${rr}R 後半`, (t) => live(t) && t.tp1R >= rr && t.half === 1],
   ]),
   ['線上 空單', (t) => live(t) && t.dir === 'short'],
+  // 進場前 BTC 剛剛的漲跌（30m／1h 單看最近一小時，4h 單看最近一根）：多單遇到 BTC 急跌是不是特別容易停損
+  ...[['跌 >1%', (x) => x <= -1], ['跌 0.5～1%', (x) => x > -1 && x <= -0.5], ['其他', (x) => x > -0.5]].flatMap(([n, f]) => [
+    [`線上 多單 BTC剛${n} 前半`, (t) => liveNow(t) && t.dir === 'long' && t.btcChg != null && f(t.btcChg) && t.half === 0],
+    [`線上 多單 BTC剛${n} 後半`, (t) => liveNow(t) && t.dir === 'long' && t.btcChg != null && f(t.btcChg) && t.half === 1],
+  ]),
+  // 進場時段（台灣時間）
+  ...[[0, 6], [6, 12], [12, 18], [18, 24]].flatMap(([a, b]) => [
+    [`線上 台灣${a}-${b}點 前半`, (t) => liveNow(t) && t.filledTime && twHour(t.filledTime) >= a && twHour(t.filledTime) < b && t.half === 0],
+    [`線上 台灣${a}-${b}點 後半`, (t) => liveNow(t) && t.filledTime && twHour(t.filledTime) >= a && twHour(t.filledTime) < b && t.half === 1],
+  ]),
 ];
 
 const log = (...a) => console.log(...a);
@@ -202,6 +224,19 @@ function exitBreakdown(trades, candlesBy, maxHold = 200) {
   printTable(log, ['出場方式', '筆數', '佔比', '平均R', '最多曾賺到R', '出場後又走到TP1'], rows);
 }
 
+/**
+ * 進場那根 K 棒開始前，BTC 最近一小時的漲跌 %（30m 看 2 根、1h 看 1 根、4h 看最近 1 根）。
+ * 只用進場前已經收盤的 K 棒，跟 Worker 下單當下看得到的資訊一樣。
+ */
+function btcChangeBeforeFill(c, t) {
+  if (!c || !t.filledTime) return null;
+  const bars = t.interval === '30m' ? 2 : t.interval === '15m' ? 4 : 1;
+  let lo = 0, hi = c.length - 1, i = -1;
+  while (lo <= hi) { const m = (lo + hi) >> 1; if (c[m].time < t.filledTime) { i = m; lo = m + 1; } else hi = m - 1; }
+  if (i - bars < 0) return null;
+  return (c[i].close / c[i - bars].close - 1) * 100;
+}
+
 (async () => {
   const candlesBy = new Map();
   const signals = [];
@@ -217,9 +252,11 @@ function exitBreakdown(trades, candlesBy, maxHold = 200) {
     }
   }
   // 每個訊號標上當下 BTC 同週期的趨勢（只看訊號那根之前已收盤的 K 棒，沒有未來函數）
+  const btcBy = new Map();
   for (const interval of INTERVALS) {
     const c = candlesBy.get(`BTCUSDT|${interval}`) ?? await fetchKlines('BTCUSDT', interval, LIMIT).catch(() => null);
     if (!c) { log(`  BTCUSDT ${interval}: 取不到，這個週期不標大盤方向`); continue; }
+    btcBy.set(interval, c);
     const e = ema(c.map((k) => k.close), BTC_EMA);
     for (const sig of signals.filter((x) => x.interval === interval)) {
       let lo = 0, hi = c.length - 1, idx = -1;
@@ -239,6 +276,7 @@ function exitBreakdown(trades, candlesBy, maxHold = 200) {
   for (const [name, cfg] of Object.entries(VARIANTS)) {
     if (ONLY.length && !ONLY.includes(name)) continue;
     const closed = runSignals(signals, candlesBy, cfg);
+    for (const t of closed) t.btcChg = btcChangeBeforeFill(btcBy.get(t.interval), t);
     if (!portfolioBase) portfolioBase = { name, closed };
     variantSims.push([name, closed]);
     for (const [group, f] of GROUPS) {

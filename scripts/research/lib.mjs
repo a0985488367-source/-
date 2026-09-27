@@ -98,19 +98,31 @@ export function printTable(log, head, body) {
 
 /**
  * 帳戶層級模擬：照時間開倉／平倉，每筆冒「開倉當下帳戶」的 riskPct%，平倉時 r 直接滾進帳戶（複利）。
- * trades 需要 filledTime、closedTime、r（已扣手續費）、symbol、beTime（停損移到成本價的時間，沒有就 null）。
- *   oneBySymbol  同一個幣已經有持倉就不再開
- *   maxAtRisk    還沒保本（停損還在成本價另一側）的持倉最多幾筆
+ * trades 需要 filledTime、closedTime、r（已扣手續費）、symbol、dir、beTime（停損移到成本價的時間，沒有就 null）。
+ *   oneBySymbol       同一個幣已經有持倉就不再開
+ *   maxAtRisk         還沒保本（停損還在成本價另一側）的持倉最多幾筆
+ *   maxSameDirAtRisk  同一個方向、還沒保本的持倉最多幾筆
+ *   maxNewPerHour     最近一小時內最多新開幾筆
+ *   stackScale        每多一筆還沒保本的持倉，新單的風險就再乘上這個倍數（0.5＝5%、2.5%、1.25%…）
+ *   dailyStopPct      當天（台灣時間）帳戶從當天開始跌超過這個 % 就不再開新單，隔天恢復
+ *   skip              (t) => true 的單不開
  * 回撤用平倉後的帳戶計算（持倉中的浮動虧損不算），所以實際會再大一點。
  */
-export function simulatePortfolio(trades, { riskPct = 5, maxAtRisk = Infinity, oneBySymbol = false } = {}) {
+export function simulatePortfolio(trades, {
+  riskPct = 5, maxAtRisk = Infinity, oneBySymbol = false, maxSameDirAtRisk = Infinity,
+  maxNewPerHour = Infinity, stackScale = 1, dailyStopPct = 0, skip = null,
+} = {}) {
   const ev = [];
   trades.forEach((t, i) => {
     ev.push({ time: t.filledTime, kind: 1, i });
     ev.push({ time: Math.max(t.closedTime, t.filledTime + 1), kind: 0, i });
   });
   ev.sort((a, b) => a.time - b.time || a.kind - b.kind);
+  const HOUR = 3_600_000;
+  const dayOf = (ms) => Math.floor((ms + 8 * HOUR) / (24 * HOUR));
   let equity = 1, peak = 1, maxDd = 0, taken = 0;
+  let day = null, dayStart = 1;
+  const opened = [];
   const open = new Map();
   for (const e of ev) {
     const t = trades[e.i];
@@ -123,10 +135,19 @@ export function simulatePortfolio(trades, { riskPct = 5, maxAtRisk = Infinity, o
       maxDd = Math.max(maxDd, 1 - equity / peak);
       continue;
     }
+    if (dayOf(e.time) !== day) { day = dayOf(e.time); dayStart = equity; }
+    if (skip && skip(t)) continue;
+    if (dailyStopPct > 0 && equity < dayStart * (1 - dailyStopPct / 100)) continue;
     const positions = [...open.values()];
     if (oneBySymbol && positions.some((p) => p.symbol === t.symbol)) continue;
-    if (positions.filter((p) => !(p.beTime != null && p.beTime <= e.time)).length >= maxAtRisk) continue;
-    open.set(e.i, { risk: (equity * riskPct) / 100, symbol: t.symbol, beTime: t.beTime });
+    const atRisk = positions.filter((p) => !(p.beTime != null && p.beTime <= e.time));
+    if (atRisk.length >= maxAtRisk) continue;
+    if (atRisk.filter((p) => p.dir === t.dir).length >= maxSameDirAtRisk) continue;
+    while (opened.length && opened[0] <= e.time - HOUR) opened.shift();
+    if (opened.length >= maxNewPerHour) continue;
+    opened.push(e.time);
+    const scale = stackScale ** atRisk.length;
+    open.set(e.i, { risk: (equity * riskPct * scale) / 100, symbol: t.symbol, dir: t.dir, beTime: t.beTime });
     taken++;
   }
   return { taken, multiple: equity, maxDdPct: maxDd * 100 };

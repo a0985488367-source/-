@@ -61,3 +61,34 @@ test('researchTargets：固定 R 出場與目標等比例拉近（多空都對�
   assert.equal(researchTargets(short, { fixedTpR: 1 })[0].price, 98);
   assert.equal(researchTargets(short, { tpScale: 0.75 })[0].price, 97);
 });
+
+test('同方向未保本上限、每小時新單上限', () => {
+  const H = 3_600_000;
+  const trades = [
+    t({ symbol: 'A', dir: 'long', filledTime: 0, closedTime: 10 * H }),
+    t({ symbol: 'B', dir: 'long', filledTime: 1, closedTime: 10 * H }),
+    t({ symbol: 'C', dir: 'short', filledTime: 2, closedTime: 10 * H }),
+    t({ symbol: 'D', dir: 'long', filledTime: 2 * H, closedTime: 10 * H }),
+  ];
+  assert.equal(simulatePortfolio(trades, { maxSameDirAtRisk: 1 }).taken, 2, '多單只留 A，空單 C 照開');
+  assert.equal(simulatePortfolio(trades, { maxNewPerHour: 2 }).taken, 3, '第一小時只開 A、B，兩小時後的 D 可以開');
+});
+
+test('疊單縮小風險、單日虧損停手、skip 過濾', () => {
+  const H = 3_600_000;
+  const stacked = simulatePortfolio([
+    t({ symbol: 'A', filledTime: 0, closedTime: 10, r: -1 }),
+    t({ symbol: 'B', filledTime: 1, closedTime: 10, r: -1 }),
+  ], { riskPct: 10, stackScale: 0.5 });
+  assert.ok(Math.abs(stacked.multiple - (1 - 0.1 - 0.05)) < 1e-9, '第二筆只冒一半');
+
+  const daily = simulatePortfolio([
+    t({ symbol: 'A', filledTime: 0, closedTime: 1, r: -1 }),
+    t({ symbol: 'B', filledTime: 2, closedTime: 3, r: -1 }),
+    t({ symbol: 'C', filledTime: 4, closedTime: 5, r: -1 }),
+    t({ symbol: 'D', filledTime: 30 * H, closedTime: 30 * H + 1, r: 1 }),
+  ], { riskPct: 10, dailyStopPct: 15 });
+  assert.equal(daily.taken, 3, '同一天虧超過 15% 後 C 不開，隔天 D 照開');
+
+  assert.equal(simulatePortfolio([t({}), t({ symbol: 'B', dir: 'long' })], { skip: (x) => x.dir === 'long' }).taken, 1);
+});
