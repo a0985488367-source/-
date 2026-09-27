@@ -101,6 +101,20 @@ function buildSignals(symbol, interval, c, name) {
   return out;
 }
 
+/**
+ * 同一個幣同時只抱一張：上一張還沒平倉時出現的新訊號不算（實際下單也是這樣）。
+ * 不過濾的話，突破行情裡同一個幣會連續加碼好幾張，統計跟帳戶模擬都會失真。
+ */
+function onePerSymbol(trades) {
+  const lastClose = new Map();
+  return [...trades].sort((a, b) => a.filledTime - b.filledTime).filter((t) => {
+    const key = `${t.symbol}|${t.interval}`;
+    if (t.filledTime < (lastClose.get(key) ?? -Infinity)) return false;
+    lastClose.set(key, t.closedTime);
+    return true;
+  });
+}
+
 /** 詳細統計：勝率、平均賺賠、最長連虧、多空分開、帳戶模擬（每單 2／3／5%，同時持倉、複利） */
 function printDetails(details, mid, netR) {
   if (!details.length) return;
@@ -126,16 +140,20 @@ function printDetails(details, mid, netR) {
         const x = simulatePortfolio(sim, { riskPct: risk });
         return `${x.multiple.toFixed(2)}x／${x.maxDdPct.toFixed(0)}%`;
       };
+      const acctCap = (risk, cap) => {
+        const x = simulatePortfolio(sim, { riskPct: risk, maxAtRisk: cap });
+        return `${x.multiple.toFixed(2)}x／${x.maxDdPct.toFixed(0)}%`;
+      };
       rows.push([
         name, exitName, period, String(list.length), pct((wins.length / rs.length) * 100),
         r2(avg(wins)), r2(avg(losses)), r2(avg(rs)), String(worst),
         r2(avg(sorted.filter((t) => t.dir === 'long').map(netR))), r2(avg(sorted.filter((t) => t.dir === 'short').map(netR))),
-        acct(2), acct(3), acct(5),
+        acct(1), acct(2), acct(3), acctCap(2, 5),
       ]);
     }
   }
   log(`\n■ 詳細統計（${DETAIL_TF}；每筆 R 已扣手續費；帳戶＝最後倍數／最大回撤，同時持倉、複利）`);
-  printTable(log, ['策略', '出場', '期間', '筆數', '勝率', '平均賺', '平均虧', '每筆', '最長連虧', '多單', '空單', '帳戶 2%', '帳戶 3%', '帳戶 5%'], rows);
+  printTable(log, ['策略', '出場', '期間', '筆數', '勝率', '平均賺', '平均虧', '每筆', '最長連虧', '多單', '空單', '帳戶 1%', '帳戶 2%', '帳戶 3%', '2%＋未保本最多5張'], rows);
 }
 
 const withTargets = (sigs, tpR) => sigs.map((s) => ({
@@ -177,8 +195,8 @@ const withTargets = (sigs, tpR) => sigs.map((s) => ({
       });
       for (const [exitName, { tpR, cfg }] of Object.entries(EXITS)) {
         const s = withTargets(sigs, tpR);
-        const coarse = runSignals(s, candlesBy, cfg);
-        const fine = SUB ? runSignals(s, candlesBy, { ...cfg, subBars: true }) : [];
+        const coarse = onePerSymbol(runSignals(s, candlesBy, cfg));
+        const fine = SUB ? onePerSymbol(runSignals(s, candlesBy, { ...cfg, subBars: true })) : [];
         const fineHalf = (h) => fine.filter((t) => (t.filledTime < mid ? 0 : 1) === h);
         rows.push([
           name, exitName,
