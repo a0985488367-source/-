@@ -14,6 +14,7 @@
 
 import { opt as optFrom, klines, runSignals, r2, pct, printTable, simulatePortfolio } from './lib.mjs';
 import { ema, atr, rsi } from '../../src/core/indicators.js';
+import { breakoutSignal } from '../../src/strategies/breakout.js';
 
 const ARGS = process.argv.slice(2);
 const opt = (n, d) => optFrom(ARGS, n, d);
@@ -50,15 +51,10 @@ const STRATEGIES = {
   },
 };
 
+/** 唐奇安突破：跟線上自動下單共用 src/strategies/breakout.js 的判斷 */
 function donchian(x, i, n) {
-  const { c, e200 } = x;
-  if (i < n + 1 || e200[i] == null) return null;
-  let hi = -Infinity, lo = Infinity, hiPrev = -Infinity, loPrev = Infinity;
-  for (let j = i - n; j < i; j++) { hi = Math.max(hi, c[j].high); lo = Math.min(lo, c[j].low); }
-  for (let j = i - n - 1; j < i - 1; j++) { hiPrev = Math.max(hiPrev, c[j].high); loPrev = Math.min(loPrev, c[j].low); }
-  if (c[i].close > hi && c[i].close > e200[i] && !(c[i - 1].close > hiPrev)) return { dir: 'long', stopAtr: 2 };
-  if (c[i].close < lo && c[i].close < e200[i] && !(c[i - 1].close < loPrev)) return { dir: 'short', stopAtr: 2 };
-  return null;
+  const s = breakoutSignal(x.c, { lookback: n }, i, { ema: x.e200, atr: x.a });
+  return s ? { dir: s.dir, stopAtr: 2 } : null;
 }
 
 /** 出場規則（stepTrade 的設定＋止盈 R） */

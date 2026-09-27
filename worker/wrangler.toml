@@ -65,6 +65,14 @@ AUTO_TRADE_MIN_SIZE_PCT = "50"
 AUTO_TRADE_MIN_TP1_RR = "1.5"
 # BTC 同週期收在這條 EMA 之上（漲勢）就不下空單；0＝不限制
 AUTO_TRADE_BTC_TREND_EMA = "200"
+# 4 小時突破策略（跟 SMC 一起跑，見 src/strategies/breakout.js）：每根 4h K 棒收盤後，
+# 收盤突破近 55 根高／低點且在 EMA200 同一側就市價進場；停損 2 ATR、止盈固定 1R，之後不動。
+# 回測（2026-09，三組各 15 幣、5 分鐘精準版）扣手續費每筆約 +0.04～+0.11R、勝率約 55%。
+# 同一個幣已經有部位就不開；突破單最多同時 BREAKOUT_MAX_OPEN 張。幣種清單留空＝程式內建的 44 檔
+BREAKOUT_ENABLED = "true"
+BREAKOUT_RISK_PCT = "3"
+BREAKOUT_MAX_OPEN = "5"
+BREAKOUT_TP_R = "1"
 # Worker 自己即時掃描（需要 Workers Paid；開啟前留意對外部交易所 API 的
 # 請求量會增加，見 index.js 開頭的說明）。採分批架構：候選池 120 檔，
 # 每 10 分鐘只真的重新掃描其中 20 檔，結果累積進 KV，繞完一輪（120/20=6
