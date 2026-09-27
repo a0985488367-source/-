@@ -84,6 +84,7 @@ function klinesFor(symbol) {
 }
 
 const klineCategories = [];
+const rateLimited = new Set();
 function stub({ discord, executor, lastPrice = 105 }) {
   globalThis.fetch = async (url, init = {}) => {
     const u = String(url);
@@ -91,6 +92,7 @@ function stub({ discord, executor, lastPrice = 105 }) {
     if (u.startsWith(MARKET_URL)) return j({ generatedAt: new Date().toISOString(), rows: [] });
     if (u.includes('api.bybit.com/v5/market/kline')) {
       const symbol = new URL(u).searchParams.get('symbol');
+      if (rateLimited.has(symbol)) return new Response('too many', { status: 429 });
       klineCategories.push(new URL(u).searchParams.get('category'));
       const list = klinesFor(symbol).reverse().map((k) => [String(k.time), String(k.open), String(k.high), String(k.low), String(k.close), '1', '1']);
       return j({ retCode: 0, result: { list } });
@@ -204,4 +206,41 @@ test('SMC 自動下單：同一個幣有突破單或反方向部位 → 不下�
   assert.equal(out.alerts, 1, JSON.stringify(out));
   assert.match(JSON.stringify(discord), /已經有突破單部位/);
   assert.equal(executor.calls.filter((c) => c.url.endsWith('/trade')).length, 0);
+});
+
+test('Worker 突破：每次只判斷一批，被限流（429）的幣下一次再試，全部判斷完才算這根做完', async () => {
+  const executor = { calls: [] };
+  stub({ discord: [], executor });
+  const env = makeEnv({}, { BREAKOUT_BATCH_SIZE: '1' });
+
+  rateLimited.add('ABCUSDT');
+  const first = await runWorker(env);
+  assert.equal(first.breakout.retryLater, 1);
+  assert.equal(first.breakout.remaining, 2);
+
+  rateLimited.clear();
+  const second = await runWorker(env); // 輪到 XYZ
+  assert.equal(second.breakout.signals, 0);
+  assert.equal(second.breakout.remaining, 1);
+
+  const third = await runWorker(env); // 重試 ABC → 有突破訊號、下單
+  assert.equal(third.breakout.signals, 1);
+  assert.equal(third.breakout.orders[0].orderId, 'bo-order');
+  assert.equal(third.breakout.remaining, 0);
+
+  const fourth = await runWorker(env);
+  assert.equal(fourth.breakout.skipped, 'already-checked');
+});
+
+test('Worker 突破：同一個幣一直被限流，試滿次數就放棄，不會卡住整根 K 棒', async () => {
+  const executor = { calls: [] };
+  stub({ discord: [], executor });
+  const env = makeEnv({}, { BREAKOUT_SYMBOLS: 'ABCUSDT', BREAKOUT_MAX_TRIES: '2' });
+  rateLimited.add('ABCUSDT');
+  assert.equal((await runWorker(env)).breakout.retryLater, 1);
+  const last = await runWorker(env);
+  assert.equal(last.breakout.remaining, 0);
+  assert.match(last.breakout.gaveUp[0], /^ABCUSDT：/);
+  assert.equal((await runWorker(env)).breakout.skipped, 'already-checked');
+  rateLimited.clear();
 });

@@ -224,6 +224,9 @@ const DEFAULTS = {
   BREAKOUT_LEVERAGE: '5',
   BREAKOUT_DIRECTIONS: 'long,short',
   BREAKOUT_MAX_DELAY_MIN: '30',  // K 棒收盤超過這麼久才看到就不進場（進場價跟回測差太多）
+  BREAKOUT_BATCH_SIZE: '15',     // 每次 tick（2 分鐘）最多判斷幾檔，避免被交易所限流
+  BREAKOUT_CONCURRENCY: '2',     // 同時發出的 K 棒請求數
+  BREAKOUT_MAX_TRIES: '3',       // 同一根 K 棒每個幣最多試幾次（被限流就下一次 tick 再試）
 };
 
 /** 回測驗證過的三組幣（2026-09），PEPE 在 Bybit 合約是 1000PEPEUSDT，先拿掉 */
@@ -1445,19 +1448,42 @@ async function runBreakout(env, { dry = false } = {}) {
 
   const opts = { lookback: Number(cfg(env, 'BREAKOUT_LOOKBACK')), stopAtr: Number(cfg(env, 'BREAKOUT_STOP_ATR')) };
   const dirs = csv(cfg(env, 'BREAKOUT_DIRECTIONS'));
-  const symbols = breakoutSymbols(env);
-  const scanned = await mapLimit(symbols, 5, async (symbol) => {
+  // Cloudflare 的對外 IP 是共用的，一次打太多會被交易所限流（HTTP 429）：
+  // 每次 tick 只判斷一批，被限流／還沒更新的幣留到下一次 tick 重試（每個幣最多 BREAKOUT_MAX_TRIES 次）
+  const pendingKey = `breakout:pending:${interval}`;
+  const saved = JSON.parse((await env.SMC_KV.get(pendingKey)) ?? 'null');
+  const state = saved?.bar === barOpen ? saved : { bar: barOpen, pending: breakoutSymbols(env), tries: {} };
+  const batchSize = Number(cfg(env, 'BREAKOUT_BATCH_SIZE'));
+  const maxTries = Number(cfg(env, 'BREAKOUT_MAX_TRIES'));
+  const batch = state.pending.slice(0, batchSize);
+  const scanned = await mapLimit(batch, Number(cfg(env, 'BREAKOUT_CONCURRENCY')), async (symbol) => {
     const candles = await fetchKlinesAny(env, symbol, interval, 300);
     const closed = candles.filter((c) => c.time + ms <= now);
     if (closed.at(-1)?.time !== barOpen) return { symbol, error: 'K 棒還沒更新到剛收盤那根' };
     const sig = breakoutSignal(closed, opts);
     return sig ? { symbol, ...sig } : { symbol };
   });
-  const failed = scanned.map((x, i) => (x?.error ? `${symbols[i]}：${x.error}` : null)).filter(Boolean);
-  const fetchErrors = failed.length;
+
+  const retry = [];
+  const failed = [];
+  scanned.forEach((x, i) => {
+    if (!x?.error) return;
+    const symbol = batch[i];
+    state.tries[symbol] = (state.tries[symbol] ?? 0) + 1;
+    if (state.tries[symbol] < maxTries) retry.push(symbol);
+    else failed.push(`${symbol}：${x.error}`);
+  });
+  state.pending = [...state.pending.slice(batch.length), ...retry];
+  state.gaveUp = [...(state.gaveUp ?? []), ...failed];
   const signals = scanned.filter((x) => x?.dir && dirs.includes(x.dir));
-  // 先記「這根判斷過了」再下單：中途出錯也不會在下一次 tick 重複進場（Executor 另有 signal_id 冪等）
-  if (!dry) await env.SMC_KV.put(doneKey, String(barOpen), { expirationTtl: 7 * 86400 });
+  // 先記下進度再下單：中途出錯也不會在下一次 tick 重複進場（Executor 另有 signal_id 冪等）
+  if (!dry) {
+    if (state.pending.length) await env.SMC_KV.put(pendingKey, JSON.stringify(state), { expirationTtl: 86400 });
+    else {
+      await env.SMC_KV.put(doneKey, String(barOpen), { expirationTtl: 7 * 86400 });
+      await env.SMC_KV.delete(pendingKey);
+    }
+  }
 
   const orders = [];
   for (const sig of signals) {
@@ -1466,7 +1492,15 @@ async function runBreakout(env, { dry = false } = {}) {
     orders.push({ symbol: sig.symbol, dir: sig.dir, ...res });
     if (res.orderId || res.error) await postDiscord(env, buildBreakoutEmbed(sig, res, interval)).catch(() => {});
   }
-  return { bar, checked: symbols.length, fetchErrors, ...(failed.length ? { failed: failed.slice(0, 20) } : {}), signals: signals.length, orders };
+  return {
+    bar,
+    checked: batch.length - retry.length - failed.length,
+    retryLater: retry.length,
+    remaining: state.pending.length,
+    ...(state.gaveUp.length ? { gaveUp: state.gaveUp.slice(0, 20) } : {}),
+    signals: signals.length,
+    orders,
+  };
 }
 
 async function breakoutOrder(env, sig, interval, barOpen) {
