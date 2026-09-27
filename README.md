@@ -538,6 +538,29 @@ Worker）」卡片，填一次 Worker 網址跟 token（只存這台裝置，不
 | `AUTO_TRADE_MIN_TP1_RR` | 1.5 | 第一個止盈目標至少要幾 R 才自動下單（0＝不限制）。回測（兩組各 15 幣、前後半段）四格都比全部都做好，交易少一半、總獲利差不多、最大回撤小很多 |
 | `AUTO_TRADE_BTC_TREND_EMA` | 200 | BTC 同週期最後一根已收盤 K 棒在這條 EMA 之上（漲勢）時，空單只通知不下單；讀不到 BTC 走勢時也不下空單（0＝不限制）。回測（兩組各 15 幣、前後半段）EMA200 四格都贏、壞行情的最大回撤大幅下降；EMA50 不成立 |
 
+#### 4 小時突破策略（跟 SMC 一起跑）
+
+2026-09 用 5 分鐘 K 棒精準回測後發現，SMC 訊號扣手續費每筆約 −0.05R（之前的回測把限價單成交那根 K 棒
+「成交前」的高低點算成獲利，高估了約 0.08R）。改找別種做法，4 小時唐奇安突破三組各 15 幣、前後半段、
+兩種算法 12 格全部為正（每筆約 +0.04～+0.11R、勝率約 55%），所以加進自動下單跟 SMC 一起在 Demo 跑。
+
+- 判斷：每根 4h K 棒收盤後，收盤突破近 55 根高點（跌破低點）且在 EMA200 同一側、而且是剛突破的第一根
+  （`src/strategies/breakout.js`，回測 `scripts/research/alt-strategies.mjs` 共用同一份）
+- 進場：市價；停損 2 ATR；止盈固定 1R 一次全出，之後停損不動（不保本、不追蹤）
+- 風險：每單帳戶總額 `BREAKOUT_RISK_PCT`（3%），突破單最多同時 `BREAKOUT_MAX_OPEN`（5）張；
+  同一個幣已經有部位就不開，SMC 也不會在有突破單或反方向部位的幣上下單（Bybit 單向持倉會互相平倉）
+
+| 變數 | 預設 | 說明 |
+|---|---|---|
+| `BREAKOUT_ENABLED` | false（wrangler.toml 開啟） | 開關，也要 KV 的自動下單開關是開的 |
+| `BREAKOUT_RISK_PCT` | 3 | 每單冒帳戶總額的 %（回測 5% 會爆倉） |
+| `BREAKOUT_MAX_OPEN` | 5 | 突破單最多同時幾張 |
+| `BREAKOUT_TP_R` | 1 | 固定止盈 R |
+| `BREAKOUT_LOOKBACK`／`BREAKOUT_STOP_ATR` | 55／2 | 突破幾根、停損幾倍 ATR |
+| `BREAKOUT_SYMBOLS` | 空＝內建 44 檔 | 逗號分隔的幣種清單 |
+| `BREAKOUT_LEVERAGE` | 5 | 槓桿（保證金超過 `AUTO_TRADE_MAX_MARGIN_PCT` 會自動拉高） |
+| `BREAKOUT_MAX_DELAY_MIN` | 30 | K 棒收盤超過這麼久才看到就不進場 |
+
 ### 每日晨報
 
 每天台灣時間 08:00 推一份總結：各幣種現價與偏向、關鍵時間價位（PDH/PDL/PWH/PWL）、

@@ -184,6 +184,7 @@ import { scanMarket } from '../src/market/scan.js';
 import { DEFAULT_MANAGEMENT, buildLadder } from '../src/smc/manage.js';
 import { PROVIDERS } from '../src/data/providers.js';
 import { ema } from '../src/core/indicators.js';
+import { breakoutSignal } from '../src/strategies/breakout.js';
 
 const DEFAULTS = {
   MARKET_URL: 'https://raw.githubusercontent.com/a0985488367-source/-/main/data/market.json',
@@ -211,7 +212,30 @@ const DEFAULTS = {
   WORKER_SCAN_CONCURRENCY: '3', // 單批內同時發出的請求數，共用 IP 愈大愈容易被限流
   GITHUB_REPO: 'a0985488367-source/-',
   GITHUB_MARKET_PATH: 'data/market.json',
+  // 4 小時突破策略（見 src/strategies/breakout.js、runBreakout()）；預設關閉
+  BREAKOUT_ENABLED: 'false',
+  BREAKOUT_INTERVAL: '4h',
+  BREAKOUT_SYMBOLS: '',          // 留空＝BREAKOUT_DEFAULT_SYMBOLS（回測用的 45 檔扣掉 Bybit 沒有的）
+  BREAKOUT_RISK_PCT: '3',        // 每單冒帳戶總額的 %
+  BREAKOUT_MAX_OPEN: '5',        // 突破單最多同時幾張
+  BREAKOUT_LOOKBACK: '55',
+  BREAKOUT_STOP_ATR: '2',
+  BREAKOUT_TP_R: '1',            // 固定止盈 R，全部一次出場，不保本不追蹤
+  BREAKOUT_LEVERAGE: '5',
+  BREAKOUT_DIRECTIONS: 'long,short',
+  BREAKOUT_MAX_DELAY_MIN: '30',  // K 棒收盤超過這麼久才看到就不進場（進場價跟回測差太多）
 };
+
+/** 回測驗證過的三組幣（2026-09），PEPE 在 Bybit 合約是 1000PEPEUSDT，先拿掉 */
+const BREAKOUT_DEFAULT_SYMBOLS = [
+  'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'DOGEUSDT', 'ADAUSDT', 'AVAXUSDT', 'LINKUSDT', 'LTCUSDT',
+  'DOTUSDT', 'NEARUSDT', 'APTUSDT', 'ARBUSDT', 'OPUSDT',
+  'SUIUSDT', 'TRXUSDT', 'ATOMUSDT', 'FILUSDT', 'INJUSDT', 'SEIUSDT', 'TIAUSDT', 'WLDUSDT', 'AAVEUSDT', 'UNIUSDT',
+  'ETCUSDT', 'BCHUSDT', 'HBARUSDT', 'ICPUSDT',
+  'FETUSDT', 'RENDERUSDT', 'STXUSDT', 'IMXUSDT', 'GRTUSDT', 'ALGOUSDT', 'SANDUSDT', 'MANAUSDT', 'AXSUSDT', 'CRVUSDT',
+  'LDOUSDT', 'DYDXUSDT', 'JUPUSDT', 'ENAUSDT', 'ORDIUSDT',
+];
+const INTERVAL_MS = { '1h': 3_600_000, '2h': 7_200_000, '4h': 14_400_000, '1d': 86_400_000 };
 
 const cfg = (env, key) => env[key] ?? DEFAULTS[key];
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -401,6 +425,19 @@ async function handleFetch(request, env) {
         minSizePct: Number(cfg(env, 'AUTO_TRADE_MIN_SIZE_PCT')),
         minTp1R: Number(cfg(env, 'AUTO_TRADE_MIN_TP1_RR')),
         btcTrendEma: Number(cfg(env, 'AUTO_TRADE_BTC_TREND_EMA')),
+        breakout: {
+          enabled: cfg(env, 'BREAKOUT_ENABLED') === 'true',
+          interval: cfg(env, 'BREAKOUT_INTERVAL'),
+          riskPct: Number(cfg(env, 'BREAKOUT_RISK_PCT')),
+          maxOpen: Number(cfg(env, 'BREAKOUT_MAX_OPEN')),
+          lookback: Number(cfg(env, 'BREAKOUT_LOOKBACK')),
+          stopAtr: Number(cfg(env, 'BREAKOUT_STOP_ATR')),
+          tpR: Number(cfg(env, 'BREAKOUT_TP_R')),
+          leverage: Number(cfg(env, 'BREAKOUT_LEVERAGE')),
+          directions: csv(cfg(env, 'BREAKOUT_DIRECTIONS')),
+          symbols: breakoutSymbols(env).length,
+          lastCheckedBar: env.SMC_KV ? await env.SMC_KV.get(`breakout:done:${cfg(env, 'BREAKOUT_INTERVAL')}`).then((v) => (v ? new Date(Number(v)).toISOString() : null)) : null,
+        },
         openRiskPct: wallet?.totalWalletBalance > 0
           ? Number(((openRiskAmount(await trackedPositions(env)) / wallet.totalWalletBalance) * 100).toFixed(2))
           : null,
@@ -450,17 +487,19 @@ async function run(env, { dry = false } = {}) {
   // 偵測後面：先把已經不在的部位清掉，剩下的才需要考慮搬停損。
   const closedPositions = dry ? { checked: 0, closed: 0 } : await checkClosedPositions(env).catch(() => ({ checked: 0, closed: 0, error: true }));
   const trailingStops = dry ? { checked: 0, moved: 0 } : await updateTrailingStops(env).catch(() => ({ checked: 0, moved: 0, error: true }));
+  // 4 小時突破策略跟 SMC 訊號互相獨立（不看 market.json），每根 4h K 棒收盤後判斷一次
+  const breakout = await runBreakout(env, { dry }).catch((e) => ({ error: e.message }));
 
   const market = await getFreshMarket(env);
   const ageMin = (Date.now() - new Date(market.generatedAt).getTime()) / 60000;
   if (ageMin > Number(cfg(env, 'MAX_MARKET_AGE_MIN'))) {
-    return { skipped: 'market-too-old', ageMinutes: Math.round(ageMin), closedPositions, trailingStops };
+    return { skipped: 'market-too-old', ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout };
   }
 
   const minScore = Number(cfg(env, 'MIN_SCORE'));
   const nearPct = Number(cfg(env, 'NEAR_PCT'));
   const watch = market.rows.filter((r) => r.valid && r.status === 'waiting' && r.score >= minScore);
-  if (!watch.length) return { checked: 0, alerts: 0, ageMinutes: Math.round(ageMin), closedPositions, trailingStops };
+  if (!watch.length) return { checked: 0, alerts: 0, ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout };
 
   const prices = await getPrices(watch.map((r) => r.symbol));
   const hits = [];
@@ -505,6 +544,7 @@ async function run(env, { dry = false } = {}) {
     autoTradeOn,
     closedPositions,
     trailingStops,
+    breakout,
     ageMinutes: Math.round(ageMin),
     ms: Date.now() - t0,
     dry,
@@ -904,6 +944,7 @@ function autoTradeText(t) {
   if (t.skipped === 'tight-stop') return `⏭️ 停損距離只有 ${t.stopPct.toFixed(2)}%（下限 ${t.minStopPct}%，AUTO_TRADE_MIN_STOP_PCT），手續費會吃掉大半獲利，只通知不下單`;
   if (t.skipped === 'open-risk') return `⏭️ 持倉總風險已達 ${t.openRiskPct.toFixed(1)}%（上限 ${t.maxOpenRiskPct}%，AUTO_TRADE_MAX_OPEN_RISK_PCT），這筆只通知不下單`;
   if (t.skipped === 'poi') return `⏭️ ${t.poiType} 類型的進場區目前不自動下單（AUTO_TRADE_EXCLUDE_POI），只通知不下單`;
+  if (t.skipped === 'has-position') return `⏭️ 這個幣已經有${String(t.existing).startsWith('breakout') ? '突破單' : '反方向的'}部位，避免互相平倉或加碼，只通知不下單`;
   if (t.error) return `❌ ${t.error}`;
   // 進場前雖然已經驗證過每一段出場單的數量都掛得上，但實際掛單當下還是
   // 可能因為限流／網路暫時失敗（跟數量大小無關）。這種情況停損已經生效，
@@ -1037,6 +1078,11 @@ async function autoTradeOrder(env, hit) {
   const stopPct = (Math.abs(r.entry - r.stop) / r.entry) * 100;
   const minStopPct = Number(cfg(env, 'AUTO_TRADE_MIN_STOP_PCT'));
   if (stopPct < minStopPct) return { skipped: 'tight-stop', stopPct, minStopPct };
+  // Bybit 單向持倉：同一個幣反方向下單會直接減倉／平掉原本的部位；突破單有自己的出場規則，也不能被加碼
+  const existing = (await trackedPositions(env)).find((p) => p.symbol === r.symbol);
+  if (existing && (existing.strategy === 'breakout' || existing.dir !== r.dir)) {
+    return { skipped: 'has-position', existing: `${existing.strategy ?? 'smc'}:${existing.dir}` };
+  }
   const btcEma = Number(cfg(env, 'AUTO_TRADE_BTC_TREND_EMA'));
   if (r.dir === 'short' && btcEma > 0) {
     const up = await btcAboveEma(r.interval, btcEma);
@@ -1264,6 +1310,8 @@ async function updateTrailingStops(env) {
   for (const { key, pos } of positions) {
     const price = prices[pos.symbol];
     if (!price) continue;
+    // 突破單照回測的規則：固定止盈、停損不動（不保本、不追蹤）
+    if (pos.management === 'fixed') continue;
     const long = pos.dir === 'long';
     const initialStop = Number.isFinite(pos.initialStop) ? pos.initialStop : pos.stop;
     const risk = Math.abs(pos.entry - initialStop);
@@ -1313,8 +1361,187 @@ function buildCloseEmbed(pos, exitPrice) {
         { name: '數量', value: String(pos.qty), inline: true },
         { name: '槓桿', value: `${pos.leverage}x`, inline: true },
         { name: '當初風險', value: `${fmt(pos.riskAmount)} USDT`, inline: true },
-        { name: '等級', value: `${pos.grade}（${pos.score} 分）`, inline: true },
+        pos.strategy === 'breakout'
+          ? { name: '策略', value: `${pos.interval ?? '4h'} 突破（止盈 ${pos.targets?.[0]?.rr ?? 1}R）`, inline: true }
+          : { name: '等級', value: `${pos.grade}（${pos.score} 分）`, inline: true },
       ],
+      footer: { text: '僅供研究，非投資建議' },
+      timestamp: new Date().toISOString(),
+    }],
+  };
+}
+
+/* ------------------------------------------------------------ 4 小時突破 */
+
+const breakoutSymbols = (env) => {
+  const list = String(cfg(env, 'BREAKOUT_SYMBOLS')).split(',').map((x) => x.trim().toUpperCase()).filter(Boolean);
+  return list.length ? list : BREAKOUT_DEFAULT_SYMBOLS;
+};
+
+/** 同時最多 limit 個請求（共用 IP 一次打太多容易被交易所限流） */
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i], i).catch((e) => ({ error: e.message }));
+    }
+  }));
+  return out;
+}
+
+async function fetchKlinesAny(env, symbol, interval, limit) {
+  let err;
+  for (const id of csv(cfg(env, 'WORKER_SCAN_PROVIDERS') ?? 'bybit,binance,okx')) {
+    if (!PROVIDERS[id]) continue;
+    try { return await PROVIDERS[id].fetchKlines(symbol, interval, { limit }); } catch (e) { err = e; }
+  }
+  throw err ?? new Error('沒有可用的資料源');
+}
+
+/**
+ * 4 小時突破策略：每根 4h K 棒收盤後判斷一次清單上的幣，有訊號就市價進場。
+ * 規則跟回測共用 src/strategies/breakout.js；出場是固定 1R 止盈（一張 reduce-only
+ * 限價單）＋ 2 ATR 停損，之後都不動（updateTrailingStops 會跳過 management: 'fixed'）。
+ * 同一根 K 棒只判斷一次（KV breakout:done:<週期>），同一個幣已經有部位（不管是
+ * SMC 還是突破單）就不開，突破單最多同時 BREAKOUT_MAX_OPEN 張。
+ */
+async function runBreakout(env, { dry = false } = {}) {
+  if (cfg(env, 'BREAKOUT_ENABLED') !== 'true') return { enabled: false };
+  if (!env.SMC_KV) return { skipped: 'no-kv' };
+  const interval = cfg(env, 'BREAKOUT_INTERVAL');
+  const ms = INTERVAL_MS[interval];
+  if (!ms) return { error: `不支援的週期 ${interval}` };
+
+  const now = Date.now();
+  const barOpen = Math.floor(now / ms) * ms - ms; // 剛收盤的那一根
+  const bar = new Date(barOpen).toISOString();
+  const doneKey = `breakout:done:${interval}`;
+  if (!dry && (await env.SMC_KV.get(doneKey)) === String(barOpen)) return { skipped: 'already-checked', bar };
+  const delayMin = (now - (barOpen + ms)) / 60000;
+  if (delayMin > Number(cfg(env, 'BREAKOUT_MAX_DELAY_MIN'))) {
+    if (!dry) await env.SMC_KV.put(doneKey, String(barOpen), { expirationTtl: 7 * 86400 });
+    return { skipped: 'too-late', bar, delayMin: Math.round(delayMin) };
+  }
+  if (!dry && !(await isAutoTradeEnabled(env))) return { skipped: 'auto-trade-off', bar };
+
+  const opts = { lookback: Number(cfg(env, 'BREAKOUT_LOOKBACK')), stopAtr: Number(cfg(env, 'BREAKOUT_STOP_ATR')) };
+  const dirs = csv(cfg(env, 'BREAKOUT_DIRECTIONS'));
+  const symbols = breakoutSymbols(env);
+  const scanned = await mapLimit(symbols, 5, async (symbol) => {
+    const candles = await fetchKlinesAny(env, symbol, interval, 300);
+    const closed = candles.filter((c) => c.time + ms <= now);
+    if (closed.at(-1)?.time !== barOpen) return { symbol, error: 'K 棒還沒更新到剛收盤那根' };
+    const sig = breakoutSignal(closed, opts);
+    return sig ? { symbol, ...sig } : { symbol };
+  });
+  const fetchErrors = scanned.filter((x) => x?.error).length;
+  const signals = scanned.filter((x) => x?.dir && dirs.includes(x.dir));
+  // 先記「這根判斷過了」再下單：中途出錯也不會在下一次 tick 重複進場（Executor 另有 signal_id 冪等）
+  if (!dry) await env.SMC_KV.put(doneKey, String(barOpen), { expirationTtl: 7 * 86400 });
+
+  const orders = [];
+  for (const sig of signals) {
+    if (dry) { orders.push({ symbol: sig.symbol, dir: sig.dir, dry: true }); continue; }
+    const res = await breakoutOrder(env, sig, interval, barOpen);
+    orders.push({ symbol: sig.symbol, dir: sig.dir, ...res });
+    if (res.orderId || res.error) await postDiscord(env, buildBreakoutEmbed(sig, res, interval)).catch(() => {});
+  }
+  return { bar, checked: symbols.length, fetchErrors, signals: signals.length, orders };
+}
+
+async function breakoutOrder(env, sig, interval, barOpen) {
+  if (!env.EXECUTOR_URL || !env.EXECUTOR_HMAC_SECRET) return { skipped: 'no-keys' };
+  const tracked = await trackedPositions(env);
+  if (tracked.some((p) => p.symbol === sig.symbol)) return { skipped: 'has-position' };
+  const maxOpen = Number(cfg(env, 'BREAKOUT_MAX_OPEN'));
+  const openBreakouts = tracked.filter((p) => p.strategy === 'breakout').length;
+  if (maxOpen > 0 && openBreakouts >= maxOpen) return { skipped: 'max-open', openBreakouts, maxOpen };
+
+  try {
+    const [wallet, instrument, prices] = await Promise.all([
+      executorCall(env, 'GET', '/balance'),
+      executorCall(env, 'GET', '/instrument', { query: { symbol: sig.symbol } }),
+      getPrices([sig.symbol]).catch(() => ({})),
+    ]);
+    if (wallet.error) return { error: `查餘額失敗：${wallet.error}` };
+    if (instrument.error) return { error: `查合約資訊失敗：${instrument.error}` };
+    const { qtyStep, minQty, tickSize, maxLeverage } = instrument;
+    const available = Number(wallet.totalAvailableBalance ?? 0);
+    const equity = Number(wallet.totalWalletBalance ?? available);
+    if (!(equity > 0)) return { error: '帳戶餘額為 0' };
+
+    const long = sig.dir === 'long';
+    const entry = Number(prices[sig.symbol]) || sig.close;
+    const risk = sig.stopDistance;
+    const stop = long ? entry - risk : entry + risk;
+    const tpR = Number(cfg(env, 'BREAKOUT_TP_R'));
+    const tp = long ? entry + risk * tpR : entry - risk * tpR;
+    if (!(risk > 0) || !(stop > 0)) return { error: '停損距離異常' };
+
+    const riskPct = Number(cfg(env, 'BREAKOUT_RISK_PCT'));
+    const riskAmount = (equity * riskPct) / 100;
+    let qty = roundStep(riskAmount / risk, qtyStep);
+    let leverage = Math.min(Number(cfg(env, 'BREAKOUT_LEVERAGE')), maxLeverage);
+    // 單筆保證金上限（跟 SMC 共用 AUTO_TRADE_MAX_MARGIN_PCT）：先拉高槓桿，還不夠才縮量
+    const maxMargin = available * (Number(cfg(env, 'AUTO_TRADE_MAX_MARGIN_PCT')) / 100);
+    if (maxMargin > 0 && (qty * entry) / leverage > maxMargin) {
+      leverage = Math.min(maxLeverage, Math.max(leverage, Math.ceil((qty * entry) / maxMargin)));
+      if ((qty * entry) / leverage > maxMargin) qty = roundStep((maxMargin * leverage) / entry, qtyStep);
+    }
+    if (!(qty >= minQty)) return { error: `算出數量 ${qty} 小於最小下單量 ${minQty}` };
+    const minSizePct = Number(cfg(env, 'AUTO_TRADE_MIN_SIZE_PCT'));
+    const sizePct = ((qty * risk) / riskAmount) * 100;
+    if (minSizePct > 0 && sizePct < minSizePct) return { skipped: 'too-small', sizePct: Math.round(sizePct), minSizePct };
+
+    const trade = await executorCall(env, 'POST', '/trade', {
+      body: {
+        signal_id: `bo:${sig.symbol}:${sig.dir}:${interval}:${barOpen}`,
+        symbol: sig.symbol,
+        side: long ? 'Buy' : 'Sell',
+        qty: String(qty),
+        leverage: String(leverage),
+        stop_loss: String(roundTick(stop, tickSize)),
+        ladder: [{ name: 'TP1', price: String(roundTick(tp, tickSize)), qty: String(qty) }],
+      },
+    });
+    if (trade.error) return { error: trade.error };
+    const ladder = (trade.ladder || []).map((leg) => ({ name: leg.name, price: leg.price, fraction: 1, qty: leg.qty, ...(leg.orderId ? { orderId: leg.orderId } : { error: leg.error }) }));
+
+    await env.SMC_KV.put(`open-pos:${sig.symbol}:${sig.dir}`, JSON.stringify({
+      symbol: sig.symbol, dir: sig.dir, entry, stop, initialStop: stop,
+      targets: [{ name: 'TP1', price: tp, rr: tpR }], ladder, tickSize,
+      maxFavorableR: 0, beMoved: false, trailing: false,
+      strategy: 'breakout', management: 'fixed', interval, bar: barOpen,
+      qty, riskAmount, leverage, openedAt: Date.now(),
+    }));
+    return { orderId: trade.orderId, qty, riskAmount, leverage, entry, stop, tp, ladder };
+  } catch (e) {
+    return { error: e.message };
+  }
+}
+
+function buildBreakoutEmbed(sig, res, interval) {
+  const base = sig.symbol.replace(/USDT$/, '');
+  const long = sig.dir === 'long';
+  const ok = !!res.orderId;
+  return {
+    username: 'SMC 即時守門員',
+    embeds: [{
+      title: `🚀 ${base}/USDT ${interval} 突破${long ? '做多' : '做空'}${ok ? ' · 🤖 已下單（Demo）' : ''}`,
+      color: ok ? (long ? 0x26a69a : 0xef5350) : 0x9e9e9e,
+      description: ok
+        ? `收盤${long ? '突破' : '跌破'}近 55 根${long ? '高' : '低'}點，市價進場；停損 2 ATR、止盈 1R，之後不移動停損。`
+        : `有突破訊號，但下單失敗：${res.error}`,
+      fields: ok ? [
+        { name: '進場約', value: fmt(res.entry), inline: true },
+        { name: '停損', value: fmt(res.stop), inline: true },
+        { name: '止盈（1R）', value: fmt(res.tp), inline: true },
+        { name: '數量', value: String(res.qty), inline: true },
+        { name: '槓桿', value: `${res.leverage}x`, inline: true },
+        { name: '風險', value: `${fmt(res.riskAmount)} USDT`, inline: true },
+      ] : [],
       footer: { text: '僅供研究，非投資建議' },
       timestamp: new Date().toISOString(),
     }],
