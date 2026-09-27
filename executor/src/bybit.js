@@ -114,6 +114,33 @@ export async function getInstrument(symbol) {
   };
 }
 
+/**
+ * 往前 days 天的歷史紀錄（成交明細、已平倉損益）。Bybit 這兩個端點一次最多查 7 天、
+ * 一頁最多 100 筆，所以一週一週往前查、每週再翻頁。
+ */
+async function pagedHistory(path, days) {
+  const DAY = 86_400_000;
+  const now = Date.now();
+  const from = now - days * DAY;
+  const out = [];
+  for (let end = now; end > from; end -= 7 * DAY) {
+    const start = Math.max(end - 7 * DAY + 1, from);
+    let cursor;
+    for (let page = 0; page < 50; page++) {
+      const r = await bybitCall('GET', path, {
+        category: 'linear', startTime: String(start), endTime: String(end), limit: '100', cursor,
+      }, { retries: 1 });
+      out.push(...(r?.list ?? []));
+      cursor = r?.nextPageCursor;
+      if (!cursor || !(r?.list ?? []).length) break;
+    }
+  }
+  return out;
+}
+
+export const getExecutions = (days) => pagedHistory('/v5/execution/list', days);
+export const getClosedPnl = (days) => pagedHistory('/v5/position/closed-pnl', days);
+
 export async function getPositions(symbol) {
   const r = await bybitCall(
     'GET', '/v5/position/list',

@@ -1,0 +1,28 @@
+# Demo 帳戶實際成交的績效報告（依策略分開統計）
+#
+# 跟 Executor 拿最近幾天的成交明細（GET /history），還原成一筆一筆的交易，
+# 結果印在 log 和步驟摘要。Executor 要先部署過有 /history 的版本（fly deploy）。
+name: Demo 實際績效報告
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: '往前查幾天（最多 90）'
+        default: '30'
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: 產生報告
+        env:
+          EXECUTOR_URL: ${{ secrets.EXECUTOR_URL }}
+          EXECUTOR_HMAC_SECRET: ${{ secrets.EXECUTOR_HMAC_SECRET }}
+          DAYS: ${{ inputs.days }}
+        run: node scripts/demo-report.mjs

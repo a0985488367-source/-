@@ -25,6 +25,7 @@ Bybit Demo Trading API
 | GET | `/health` | 存活檢查（不需要驗證）：連線狀態、是否觸發緊急停止 |
 | GET | `/balance` | 查可用餘額 |
 | GET | `/instrument?symbol=X` | 查合約規格（qtyStep／最小下單量／tickSize／槓桿上限） |
+| GET | `/history?days=30` | 最近幾天（最多 90）的成交明細＋已平倉損益（唯讀），給 `demo-report.yml` 績效報告用 |
 | GET | `/position?symbol=X`（可省略） | 查目前實際持倉 |
 | POST | `/trade` | 開新倉位：市價進場 + 停損 + 分批出場階梯，一次送出 |
 | POST | `/add-exit-leg` | 補掛單一段分批出場限價單（給 ladder 修補用） |

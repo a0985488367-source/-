@@ -6,6 +6,7 @@ import { config } from './config.js';
 import {
   getBalance, getInstrument, getPositions, setLeverage, setStopLoss,
   cancelAllOrders, placeReduceOnlyLimit, placeMarketEntry, bybitCall,
+  getExecutions, getClosedPnl,
 } from './bybit.js';
 
 const json = (res, status, obj) => {
@@ -182,6 +183,31 @@ export async function handlePosition(req, res, query) {
   } catch (e) {
     return json(res, 200, { error: e.message });
   }
+}
+
+/**
+ * GET /history?days=30 —— 最近幾天的成交明細＋已平倉損益（唯讀），給績效報告用。
+ * 兩個來源分開查，一個失敗不影響另一個（已平倉損益端點對 Demo 帳戶偶爾不穩）。
+ */
+export async function handleHistory(req, res, query) {
+  const days = Math.min(90, Math.max(1, Math.round(Number(query.days) || 30)));
+  const out = { days, executions: [], closedPnl: [], errors: {} };
+  try {
+    out.executions = (await getExecutions(days)).map((e) => ({
+      symbol: e.symbol, side: e.side, orderId: e.orderId, orderLinkId: e.orderLinkId, orderType: e.orderType,
+      stopOrderType: e.stopOrderType, execType: e.execType, execPrice: Number(e.execPrice), execQty: Number(e.execQty),
+      execFee: Number(e.execFee), closedSize: Number(e.closedSize ?? 0), isMaker: e.isMaker, execTime: Number(e.execTime),
+    }));
+  } catch (e) { out.errors.executions = e.message; }
+  try {
+    out.closedPnl = (await getClosedPnl(days)).map((p) => ({
+      symbol: p.symbol, side: p.side, qty: Number(p.qty), orderId: p.orderId,
+      avgEntryPrice: Number(p.avgEntryPrice), avgExitPrice: Number(p.avgExitPrice),
+      closedPnl: Number(p.closedPnl), leverage: Number(p.leverage),
+      createdTime: Number(p.createdTime), updatedTime: Number(p.updatedTime),
+    }));
+  } catch (e) { out.errors.closedPnl = e.message; }
+  return json(res, 200, out);
 }
 
 /** GET /balance */
