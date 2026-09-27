@@ -180,17 +180,18 @@ function printDetails(details, mid, netR) {
  * 會把這幾組的交易合在同一個帳戶裡跑（同一個幣同時只抱一張，跟線上一樣），
  * 列出每單風險 % × 最多同時幾張 × 同方向最多幾張 的最後倍數、最大回撤、每月成長。
  */
+// 「策略@週期:出場」可以指定週期（例如 EMA_20_50@6h:1R 保本＋追蹤）；週期要包含在 --intervals 裡才會抓資料
 const COMBO = ONLY.filter((x) => x.includes(':')).map((x) => {
-  const [name, exitName] = x.split(':');
+  const [head, exitName] = x.split(':');
+  const [name, iv] = head.split('@');
   if (!STRATEGIES[name] && !ZOO[name]) throw new Error(`沒有這個策略：${name}`);
   if (!EXITS_ALL[exitName]) throw new Error(`沒有這個出場：${exitName}`);
-  return { name, exitName };
+  return { name, exitName, interval: iv || INTERVALS[0] };
 });
 
 function runCombo(candlesBy, mid, netR) {
-  const interval = INTERVALS[0];
   const DAY = 86_400_000;
-  const per = COMBO.map(({ name, exitName }) => {
+  const per = COMBO.map(({ name, exitName, interval }) => {
     const fn = STRATEGIES[name] ?? ZOO[name];
     STRATEGIES[name] = fn;
     const { tpR, cfg } = EXITS_ALL[exitName];
@@ -200,24 +201,32 @@ function runCombo(candlesBy, mid, netR) {
     });
     const s = withTargets(sigs, tpR);
     // 上限算「所有還開著的單」（跟線上最多同時幾張一樣），所以不帶保本時間
-    const tag = (t) => ({ ...t, r: netR(t), beTime: null, label: `${name}／${exitName}` });
+    const label = `${name}${interval === INTERVALS[0] ? '' : `@${interval}`}／${exitName}`;
+    const tag = (t) => ({ ...t, r: netR(t), beTime: null, label });
     const coarse = runSet(s, candlesBy, cfg).map(tag);
     const fine = SUB ? runSet(s, candlesBy, { ...cfg, subBars: true }).map(tag) : [];
-    return { label: `${name}／${exitName}`, coarse, fine };
+    return { label, coarse, fine };
   });
   const groups = per.length > 1 ? [...per.map((p) => [p]), per] : [per];
   const list = (k, d) => opt(k, d).split(',').map((v) => (v === 'inf' ? Infinity : Number(v)));
   const RISKS = list('risks', '1,1.5,2,2.5,3,4');
   const CAPS = list('caps', '3,5,8,10,12,inf');
   const DIRS = list('dirs', 'inf,3,4,5,6');
+  const [sRisk, sCap, sDir] = list('single', '3,5,3');
   const json = [];
+  // 原週期用時間切前後半（不同週期的 K 棒涵蓋的天數不一樣），只取每一組都有資料的那段
+  const cStart = Math.max(...per.map((p) => Math.min(...p.coarse.map((t) => t.filledTime))));
+  const cEnd = Math.max(...per.flatMap((p) => p.coarse.map((t) => t.closedTime)));
+  const cMid = (cStart + cEnd) / 2;
   for (const g of groups) {
     const all = (k) => g.flatMap((p) => p[k]);
+    const coarseAll = all('coarse').filter((t) => t.filledTime >= cStart);
     const periods = [
-      ['原週期 前半', all('coarse').filter((t) => t.half === 0)],
-      ['原週期 後半', all('coarse').filter((t) => t.half === 1)],
+      ['原週期 前半', coarseAll.filter((t) => t.filledTime < cMid)],
+      ['原週期 後半', coarseAll.filter((t) => t.filledTime >= cMid)],
       ['5M 前半', all('fine').filter((t) => t.filledTime < mid)],
       ['5M 後半', all('fine').filter((t) => t.filledTime >= mid)],
+      ['原週期 全段', coarseAll],
     ].map(([n, xs]) => {
       const sorted = [...xs].sort((a, b) => a.filledTime - b.filledTime);
       const days = sorted.length ? (Math.max(...sorted.map((t) => t.closedTime)) - sorted[0].filledTime) / DAY : 0;
@@ -226,7 +235,7 @@ function runCombo(candlesBy, mid, netR) {
     const rows = [];
     for (const risk of RISKS) for (const cap of CAPS) for (const dir of DIRS) {
       if (dir !== Infinity && dir >= cap) continue;
-      if (groups.length > 1 && g !== groups.at(-1) && !(risk === 3 && cap === 5 && dir === 3)) continue; // 單一策略只印目前設定當對照
+      if (groups.length > 1 && g !== groups.at(-1) && !(risk === sRisk && cap === sCap && dir === sDir)) continue; // 單一策略只印一種設定當對照
       const res = periods.map((p) => {
         const x = simulatePortfolio(p.xs, { riskPct: risk, maxAtRisk: cap, maxSameDirAtRisk: dir, oneBySymbol: true });
         const monthly = p.days > 0 ? (x.multiple ** (30 / p.days) - 1) * 100 : 0;
@@ -239,14 +248,16 @@ function runCombo(candlesBy, mid, netR) {
         `${risk}%`, cap === Infinity ? '不限' : String(cap), dir === Infinity ? '不限' : String(dir),
         ...res.map((x) => `${x.multiple.toFixed(2)}x／${x.maxDdPct.toFixed(0)}%`),
         `${Math.max(...res.map((x) => x.maxDdPct)).toFixed(0)}%`,
-        `${Math.min(...res.map((x) => x.monthly)).toFixed(1)}%`,
-        `${(res.reduce((a, x) => a + x.monthly, 0) / res.length).toFixed(1)}%`,
+        `${Math.min(...res.slice(0, 4).map((x) => x.monthly)).toFixed(1)}%`,
+        `${res[4].monthly.toFixed(1)}%`,
+        // 照全段的每月成長，300U 滾到 3000U（10 倍）要幾個月
+        res[4].monthly > 0 ? (Math.log(10) / Math.log(1 + res[4].monthly / 100)).toFixed(0) : '-',
       ]);
     }
     const names = g.map((p) => p.label).join(' ＋ ');
-    log(`\n■ 組合：${names}（${interval}；筆數 ${periods.map((p) => `${p.n} ${p.xs.length}`).join('、')}；天數 ${periods.map((p) => p.days.toFixed(0)).join('／')}）`);
+    log(`\n■ 組合：${names}（${INTERVALS.join('/')}；${SYMBOLS.length} 檔；筆數 ${periods.map((p) => `${p.n} ${p.xs.length}`).join('、')}；天數 ${periods.map((p) => p.days.toFixed(0)).join('／')}）`);
     log('  每格＝最後倍數／最大回撤；每月＝換算成每 30 天的複利成長；同一個幣同時只抱一張');
-    printTable(log, ['每單風險', '最多同時', '同方向最多', '原週期 前半', '原週期 後半', '5M 前半', '5M 後半', '最大回撤', '每月（最差段）', '每月（平均）'], rows);
+    printTable(log, ['每單風險', '最多同時', '同方向最多', '原週期 前半', '原週期 後半', '5M 前半', '5M 後半', '原週期 全段', '最大回撤', '每月（最差段）', '每月（全段）', '滾 10 倍（月）'], rows);
   }
   log('\nCOMBO_JSON ' + JSON.stringify(json));
 }
