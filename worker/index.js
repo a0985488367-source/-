@@ -316,11 +316,41 @@ async function btcAboveEma(interval, period) {
   return null;
 }
 
+/*
+ * KV 的 list 是最終一致的：剛寫入／刪除的 key 可能要等幾十秒才會出現在 list 裡。同一次執行裡
+ * 連續下單時，後面的單會看不到前面剛開的部位——張數上限、「同一個幣只抱一張」都會失效
+ * （2026-09-27 16:06 同一輪開了 3 張，突破／MACD 單變成 5 張，超過上限 3 張）。
+ * 所以剛開／剛平的部位另外記在記憶體（跟著這個 KV 物件，2 分鐘內有效），查部位時一起算進去。
+ */
+const RECENT_MS = 120_000;
+const recentWrites = new WeakMap();
+function recentFor(kv) {
+  if (!recentWrites.has(kv)) recentWrites.set(kv, new Map());
+  const m = recentWrites.get(kv);
+  const now = Date.now();
+  for (const [k, v] of m) if (now - v.at > RECENT_MS) m.delete(k);
+  return m;
+}
+async function putOpenPos(env, key, pos) {
+  await env.SMC_KV.put(key, JSON.stringify(pos));
+  recentFor(env.SMC_KV).set(key, { pos, at: Date.now() });
+}
+async function deleteOpenPos(env, key) {
+  await env.SMC_KV.delete(key);
+  recentFor(env.SMC_KV).set(key, { pos: null, at: Date.now() });
+}
+
 async function trackedPositions(env) {
   if (!env.SMC_KV) return [];
   const { keys } = await env.SMC_KV.list({ prefix: 'open-pos:' });
-  const raws = await Promise.all(keys.map((k) => env.SMC_KV.get(k.name)));
-  return raws.filter(Boolean).map((raw) => JSON.parse(raw));
+  const recent = recentFor(env.SMC_KV);
+  const names = new Set(keys.map((k) => k.name));
+  for (const [k, v] of recent) { if (v.pos) names.add(k); else names.delete(k); }
+  const raws = await Promise.all([...names].map(async (n) => {
+    const r = recent.get(n);
+    return r?.pos ? r.pos : JSON.parse((await env.SMC_KV.get(n)) ?? 'null');
+  }));
+  return raws.filter(Boolean);
 }
 
 /** 所有部位停損打到時還會虧的金額加總；停損已經在成本價另一側的算 0 */
@@ -1257,12 +1287,12 @@ async function autoTradeOrder(env, hit) {
     // 部位，第二筆訂單是加碼到同一個部位，不是開一個新的；代價是進場價會
     // 變成「最後一次加碼的價格」而不是均價，這裡先接受這個簡化，不做加權平均。
     if (env.SMC_KV) {
-      await env.SMC_KV.put(`open-pos:${r.symbol}:${r.dir}`, JSON.stringify({
+      await putOpenPos(env, `open-pos:${r.symbol}:${r.dir}`, {
         symbol: r.symbol, dir: r.dir, entry: r.entry, stop: r.stop, initialStop: r.stop,
         targets: r.targets, ladder: legOrders, tickSize,
         maxFavorableR: 0, beMoved: false, trailing: false,
         qty, riskAmount, leverage, grade: r.grade, score: r.score, openedAt: Date.now(),
-      }));
+      });
     }
 
     return { orderId: trade.orderId, qty, riskAmount, leverage, ladder: legOrders };
@@ -1308,7 +1338,7 @@ async function checkClosedPositions(env) {
       // 加碼部位，但留著容易讓人誤會這幣種還在追蹤中。
       await executorCall(env, 'POST', '/cancel-all', { body: { symbol: pos.symbol } }).catch(() => {});
     }
-    await env.SMC_KV.delete(key);
+    await deleteOpenPos(env, key);
     closed++;
   }
   return { checked: tracked.keys.length, closed };
@@ -1335,7 +1365,10 @@ async function updateTrailingStops(env) {
   if (!tracked.keys.length) return { checked: 0, moved: 0, legsRepaired: 0 };
 
   const positions = [];
+  const recent = recentFor(env.SMC_KV);
   for (const { name: key } of tracked.keys) {
+    // 剛平倉刪掉的部位 list 可能還看得到，不能再寫回去（會「復活」）
+    if (recent.has(key) && !recent.get(key).pos) continue;
     const raw = await env.SMC_KV.get(key);
     if (raw) positions.push({ key, pos: JSON.parse(raw) });
   }
@@ -1363,7 +1396,7 @@ async function updateTrailingStops(env) {
         pos.ladder[i] = { name: leg.name, price: leg.price, fraction: leg.fraction, qty: leg.qty, error: legOrder.error };
       }
     }
-    if (changed) await env.SMC_KV.put(key, JSON.stringify(pos));
+    if (changed) await putOpenPos(env, key, pos);
   }
 
   const prices = await getPrices(positions.map(({ pos }) => pos.symbol));
@@ -1403,7 +1436,7 @@ async function updateTrailingStops(env) {
       if (!result.error) { pos.stop = nextStop; moved++; }
       // 搬不動就算了，下次執行再試，不影響其他部位
     }
-    await env.SMC_KV.put(key, JSON.stringify(pos));
+    await putOpenPos(env, key, pos);
   }
   return { checked: positions.length, moved, legsRepaired };
 }
@@ -1679,13 +1712,13 @@ async function breakoutOrder(env, sig, interval, barOpen) {
     if (trade.error) return { error: trade.error };
     const ladder = (trade.ladder || []).map((leg) => ({ name: leg.name, price: leg.price, fraction: 1, qty: leg.qty, ...(leg.orderId ? { orderId: leg.orderId } : { error: leg.error }) }));
 
-    await env.SMC_KV.put(`open-pos:${sig.symbol}:${sig.dir}`, JSON.stringify({
+    await putOpenPos(env, `open-pos:${sig.symbol}:${sig.dir}`, {
       symbol: sig.symbol, dir: sig.dir, entry, stop, initialStop: stop,
       targets: isEma ? [] : [{ name: 'TP1', price: tp, rr: tpR }], ladder, tickSize,
       maxFavorableR: 0, beMoved: false, trailing: false,
       strategy: sig.strategy ?? 'breakout', management: isEma ? emaCrossManagement(env) : 'fixed', interval, bar: barOpen,
       qty, riskAmount, leverage, openedAt: Date.now(),
-    }));
+    });
     return { orderId: trade.orderId, qty, riskAmount, leverage, entry, stop, tp, ladder };
   } catch (e) {
     return { error: e.message };

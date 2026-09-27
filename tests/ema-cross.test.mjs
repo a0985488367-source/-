@@ -83,7 +83,7 @@ function makeKv(init = {}) {
 function klinesFor(symbol) {
   const lastClosed = Math.floor(Date.now() / H4) * H4 - H4;
   const start = lastClosed - 299 * H4;
-  if (symbol !== 'EMAUSDT') return series(301, (i) => 100 + i * 0.001, start);
+  if (!symbol.startsWith('EMA')) return series(301, (i) => 100 + i * 0.001, start);
   const all = series(700, wave);
   let end = 299;
   while (!emaCrossSignal(all.slice(end - 299, end + 1))) end++;
@@ -281,4 +281,18 @@ test('Worker MACD 零軸：訊號下單不掛止盈、部位用保本＋追蹤�
   const pos = JSON.parse(await env.SMC_KV.get(`open-pos:MACDUSDT:${out.breakout.orders[0].dir}`));
   assert.equal(pos.strategy, 'macd');
   assert.equal(pos.management.breakevenAtR, 1);
+});
+
+test('Worker：KV 的 list 延遲（最終一致）時，同一輪連續下單也不會超過張數上限、同一個幣不會重複開', async () => {
+  const executor = { calls: [] };
+  stub({ executor });
+  // list 只看得到一開始就有的 key（模擬剛寫入的 key 要等一陣子才列得出來）
+  const kv = makeKv({ 'auto-trade:enabled': 'true' });
+  const snapshot = [...kv.store.keys()];
+  kv.list = async ({ prefix = '' } = {}) => ({ keys: snapshot.filter((k) => k.startsWith(prefix)).map((name) => ({ name })) });
+  const env = { ...makeEnv({}, { BREAKOUT_SYMBOLS: 'EMA1USDT,EMA2USDT,EMA3USDT', BREAKOUT_MAX_OPEN: '2' }), SMC_KV: kv };
+  const out = await runWorker(env);
+  const placed = out.breakout.orders.filter((o) => o.orderId);
+  assert.equal(placed.length, 2, JSON.stringify(out.breakout.orders));
+  assert.equal(out.breakout.orders.find((o) => !o.orderId)?.skipped, 'max-open');
 });
