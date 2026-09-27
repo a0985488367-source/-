@@ -19,7 +19,8 @@
   "tracking": {
     "enabled": true,
     "entryWindowBars": 24,
-    "maxHoldBars": 200
+    "maxHoldBars": 200,
+    "fillBarPath": true
   },
 
   "market": {

@@ -11,8 +11,12 @@ import { COLORS } from './outcome-embed.mjs';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** 目前自動下單規則上線的時間；之前的紀錄是舊評分／舊過濾，不能拿來判斷新規則 */
-export const RULES_SINCE = Date.parse('2026-09-25T03:00:00Z');
+/**
+ * 從這個時間之後平倉的紀錄才拿來判斷目前的規則：
+ *   之前的紀錄是舊評分／舊過濾，而且模擬盤把「限價單成交那根 K 棒成交前的高低點」也算成獲利（高估），
+ *   2026-09-27 起模擬盤改用 fillBarPath（見 src/smc/manage.js）
+ */
+export const RULES_SINCE = Date.parse('2026-09-27T03:00:00Z');
 
 export const GO_LIVE = {
   minTrades: 200,

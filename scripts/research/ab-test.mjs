@@ -24,6 +24,9 @@ const WARMUP = Number(opt('warmup', 320));
 const MIN_SCORE = Number(opt('min-score', 55));
 const COOLDOWN = Number(opt('cooldown', 12));
 const OUT = opt('out', 'data/research/ab-test.json');
+// 精準驗證：另外抓最近 SUB_DAYS 天的細 K 棒（例如 5m），*_5M 變體進場後改用細 K 棒逐根跑
+const SUB = opt('sub', '');
+const SUB_DAYS = Number(opt('sub-days', 150));
 const ONLY = opt('only', '').split(',').filter(Boolean);
 const LIVE_MIN_SCORE = Number(opt('live-min-score', 65));
 // 一進一出的成本（占倉位價值）：吃單手續費 0.11%；流動性差的幣可以另外加滑價
@@ -82,6 +85,13 @@ const VARIANTS = {
   TPS075:          { tpScale: 0.75 },
   HALF1:           { scalpR: 1, scalpFraction: 0.5 },
   HALF15:          { scalpR: 1.5, scalpFraction: 0.5 },
+  // ── 精準驗證：進場後用 5 分鐘 K 棒逐根跑（需要 --sub=5m）──
+  NOW_5M:          { subBars: true },
+  NOW_5M_P:        { subBars: true, fillBarPath: true },
+  BE075_5M:        { subBars: true, fillBarPath: true, breakevenAtR: 0.75 },
+  BE_OFF_5M:       { subBars: true, fillBarPath: true, breakevenAtR: 0 },
+  TR15_5M:         { subBars: true, fillBarPath: true, trailFromR: 1.5, trailGapR: 0.8 },
+  TR_OFF_5M:       { subBars: true, fillBarPath: true, trailFromR: 0 },
   // ── 停損拉近（保本／追蹤停損照舊）──
   SLK07:           { tightStopKeepSize: 0.7 },   // 倉位不變，停損拉到 7 成 → 打到虧 0.7R
   SLK05:           { tightStopKeepSize: 0.5 },   // 倉位不變，停損拉到一半 → 打到虧 0.5R
@@ -174,6 +184,14 @@ const GROUPS = [
     [`線上 台灣${a}-${b}點 前半`, (t) => liveNow(t) && t.filledTime && twHour(t.filledTime) >= a && twHour(t.filledTime) < b && t.half === 0],
     [`線上 台灣${a}-${b}點 後半`, (t) => liveNow(t) && t.filledTime && twHour(t.filledTime) >= a && twHour(t.filledTime) < b && t.half === 1],
   ]),
+  // 精準驗證區間（有細 K 棒的最近 SUB_DAYS 天）：同一批訊號拿來比「原週期算法」和「細 K 棒逐根跑」
+  ...(SUB ? [
+    ['細K區間 線上', (t) => liveNow(t) && t.inSub],
+    ['細K區間 線上 前半', (t) => liveNow(t) && t.inSub && t.subHalf === 0],
+    ['細K區間 線上 後半', (t) => liveNow(t) && t.inSub && t.subHalf === 1],
+    ...['30m', '1h', '4h'].map((tf) => [`細K區間 線上 ${tf}`, (t) => liveNow(t) && t.inSub && t.interval === tf]),
+    ['細K區間 全部', (t) => t.inSub],
+  ] : []),
 ];
 
 const log = (...a) => console.log(...a);
@@ -271,6 +289,26 @@ function btcChangeBeforeFill(c, t) {
         log(`  ${symbol} ${interval}: ${c.length} 根 K 棒 → ${s.length} 個訊號`);
       } catch (e) { log(`  ${symbol} ${interval}: 取得資料失敗（${e.message}）`); }
     }
+  }
+  if (SUB) {
+    let subStart = Infinity, subEnd = -Infinity;
+    for (const symbol of SYMBOLS) {
+      try {
+        const c = await fetchKlines(symbol, SUB, Math.ceil((SUB_DAYS * 1440) / ({ '1m': 1, '5m': 5, '15m': 15 }[SUB] ?? 5)));
+        candlesBy.set(`${symbol}|sub`, c);
+        subStart = Math.min(subStart, c[0].time);
+        subEnd = Math.max(subEnd, c[c.length - 1].time);
+        log(`  ${symbol} ${SUB}（精準驗證用）: ${c.length} 根`);
+      } catch (e) { log(`  ${symbol} ${SUB}: 取得資料失敗（${e.message}）`); }
+    }
+    const mid = (subStart + subEnd) / 2;
+    for (const sig of signals) {
+      const sub = candlesBy.get(`${sig.symbol}|sub`);
+      const next = candlesBy.get(`${sig.symbol}|${sig.interval}`)[sig.index + 1];
+      sig.inSub = Boolean(sub?.length && next && next.time >= sub[0].time);
+      sig.subHalf = next && next.time < mid ? 0 : 1;
+    }
+    log(`  精準驗證區間內的訊號：${signals.filter((x) => x.inSub).length} 個`);
   }
   // 每個訊號標上當下 BTC 同週期的趨勢（只看訊號那根之前已收盤的 K 棒，沒有未來函數）
   const btcBy = new Map();

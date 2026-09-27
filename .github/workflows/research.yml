@@ -33,6 +33,12 @@ on:
       limit:
         description: '每個幣／週期抓幾根 K 棒（超過 1000 會自動分段往前抓；愈多愈穩但跑愈久）'
         default: '1000'
+      sub:
+        description: '精準驗證：另外抓細 K 棒（例如 5m），*_5M 規則進場後改用細 K 棒逐根跑；留空＝不抓'
+        default: ''
+      sub_days:
+        description: '精準驗證抓最近幾天的細 K 棒'
+        default: '150'
       commit:
         description: '是否把結果存回倉庫'
         default: 'true'
@@ -60,6 +66,8 @@ jobs:
           BTC_EMA: ${{ inputs.btc_ema }}
           FEE: ${{ inputs.fee }}
           LIMIT: ${{ inputs.limit }}
+          SUB: ${{ inputs.sub }}
+          SUB_DAYS: ${{ inputs.sub_days }}
         run: |
           set -o pipefail
           if [ "$STUDY" = confluence ]; then SCRIPT=confluence-study; DEF_INT=30m,1h,4h; else SCRIPT=ab-test; DEF_INT=15m,1h; fi
@@ -71,6 +79,8 @@ jobs:
             --btc-ema="${BTC_EMA:-200}" \
             --fee="${FEE:-0.0011}" \
             --limit="${LIMIT:-1000}" \
+            --sub="$SUB" \
+            --sub-days="${SUB_DAYS:-150}" \
             | tee ab-output.txt
 
       - name: 寫進步驟摘要

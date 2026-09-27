@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { simulatePortfolio, pagedKlines, researchTargets, applyStopResearch } from '../scripts/research/lib.mjs';
+import { simulatePortfolio, pagedKlines, researchTargets, applyStopResearch, runSignals } from '../scripts/research/lib.mjs';
 
 const t = (over) => ({ symbol: 'A', filledTime: 0, closedTime: 10, r: 1, beTime: null, ...over });
 
@@ -126,4 +126,21 @@ test('fillBarPath：收黑的成交根不算成交前的高點，收紅的算', 
   assert.equal(stepTrade(green, { time: 1, open: 101, high: 104, low: 99.5, close: 103.5 }, { fillBarPath: true }), true, '收紅：先跌到成交再漲到止盈');
   const short = { ...mk(), dir: 'short', entry: 100, stop: 102, targets: [{ name: 'TP1', price: 97, rr: 1.5, fraction: 0 }] };
   assert.equal(stepTrade(short, { time: 1, open: 96, high: 100.5, low: 96, close: 99.8 }, { fillBarPath: true }), false, '空單收紅：低點在成交前');
+});
+
+test('runSignals subBars：成交那根裡先漲後跌，用 5 分鐘 K 棒就不會誤算成先賺', () => {
+  const H = 3_600_000, M5 = 300_000;
+  const k = (time, o, h, l, c) => ({ time, open: o, high: h, low: l, close: c });
+  // 1h：第 0 根出訊號；第 1 根從 104 跌到 99.5（碰到 100 成交）；第 2 根跌破停損 98
+  const tf = [k(0, 104, 104.5, 103.5, 104), k(H, 104, 104, 99.5, 99.8), k(2 * H, 99.8, 99.9, 97.5, 97.6)];
+  const sub = [];
+  for (let i = 0; i < 12; i++) { const p = Math.max(99.5, 104 - i * 0.9); sub.push(k(H + i * M5, p + 0.1, p + 0.1, p - 0.1, p)); }
+  for (let i = 0; i < 12; i++) { const p = 99.8 - i * 0.2; sub.push(k(2 * H + i * M5, p, p + 0.05, p - 0.05, p)); }
+  const candlesBy = new Map([['X|1h', tf], ['X|sub', sub]]);
+  const sig = { symbol: 'X', interval: '1h', index: 0, time: 0, dir: 'long', entry: 100, stop: 98, entryType: 'limit', targets: [{ name: 'TP1', price: 106, rr: 3 }] };
+  const [coarse] = runSignals([sig], candlesBy, {});
+  assert.ok(coarse.r > 0, '原週期算法：把成交前的 104 當成已經賺到，追蹤停損鎖住獲利');
+  const [fine] = runSignals([sig], candlesBy, { subBars: true });
+  assert.equal(fine.exitReason, 'stop');
+  assert.ok(Math.abs(fine.r + 1) < 1e-9, '5 分鐘逐根跑：成交後一路跌到停損');
 });
