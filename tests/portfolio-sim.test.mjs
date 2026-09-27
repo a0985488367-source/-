@@ -115,3 +115,15 @@ test('fillBarConservative：成交那根只看停損，不因成交前的高點�
   assert.equal(strict.status, 'active');
   assert.equal(strict.maxFavorableR ?? 0, 0);
 });
+
+test('fillBarPath：收黑的成交根不算成交前的高點，收紅的算', async () => {
+  const { stepTrade } = await import('../src/smc/manage.js');
+  const mk = () => ({ dir: 'long', entry: 100, stop: 98, status: 'pending', targets: [{ name: 'TP1', price: 103, rr: 1.5, fraction: 0 }], hitTargets: [], events: [], remaining: 1, realizedR: 0 });
+  const red = mk();
+  assert.equal(stepTrade(red, { time: 1, open: 104, high: 104, low: 99.5, close: 100.2 }, { fillBarPath: true }), false, '收黑：高點在成交前');
+  assert.ok(Math.abs(red.maxFavorableR - 0.1) < 1e-9, '只算到收盤價');
+  const green = mk();
+  assert.equal(stepTrade(green, { time: 1, open: 101, high: 104, low: 99.5, close: 103.5 }, { fillBarPath: true }), true, '收紅：先跌到成交再漲到止盈');
+  const short = { ...mk(), dir: 'short', entry: 100, stop: 102, targets: [{ name: 'TP1', price: 97, rr: 1.5, fraction: 0 }] };
+  assert.equal(stepTrade(short, { time: 1, open: 96, high: 100.5, low: 96, close: 99.8 }, { fillBarPath: true }), false, '空單收紅：低點在成交前');
+});
