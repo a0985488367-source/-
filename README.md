@@ -547,14 +547,31 @@ Worker）」卡片，填一次 Worker 網址跟 token（只存這台裝置，不
 - 判斷：每根 4h K 棒收盤後，收盤突破近 55 根高點（跌破低點）且在 EMA200 同一側、而且是剛突破的第一根
   （`src/strategies/breakout.js`，回測 `scripts/research/alt-strategies.mjs` 共用同一份）
 - 進場：市價；停損 2 ATR；止盈固定 1R 一次全出，之後停損不動（不保本、不追蹤）
-- 風險：每單帳戶總額 `BREAKOUT_RISK_PCT`（3%），突破單最多同時 `BREAKOUT_MAX_OPEN`（5）張；
-  同一個幣已經有部位就不開，SMC 也不會在有突破單或反方向部位的幣上下單（Bybit 單向持倉會互相平倉）
+- 風險：每單帳戶總額 `BREAKOUT_RISK_PCT`（3%），突破單＋EMA 交叉單加起來最多同時 `BREAKOUT_MAX_OPEN`（5）張、
+  同方向最多 `BREAKOUT_MAX_SAME_DIR`（3）張；同一個幣已經有部位就不開，SMC 也不會在有突破單／EMA 交叉單
+  或反方向部位的幣上下單（Bybit 單向持倉會互相平倉）
+
+#### 4 小時 EMA20／50 均線交叉（跟突破一起跑）
+
+2026-09 把 26 種常見策略（均線交叉、MACD、超級趨勢、一目均衡、布林／肯特納通道、RSI、KD 等，
+`scripts/research/strategy-zoo.mjs`）用同一套精準回測跑過：1 小時線全部被手續費吃光，抄底摸頭類全部不行，
+4 小時 EMA20／50 交叉最好——三組 12 格全部為正、扣手續費每筆平均約 +0.3R、勝率約 60%。
+組合風險模擬（突破＋EMA 交叉同一個帳戶）後選了每單 3%、最多 5 張、同方向最多 3 張。
+
+- 判斷：跟突破單用同一批幣和 K 棒；EMA20 剛上穿（下穿）EMA50、收盤在 EMA200 之上（之下）
+  （`src/strategies/ema-cross.js`，回測共用同一份）
+- 進場：市價；停損 2 ATR；不設止盈，賺 1R 停損移到成本（+0.05R），1.5R 之後追蹤停損、距離最高獲利 1.5R
+- 同一個幣同一根 K 棒兩種都有訊號時先下突破單
 
 | 變數 | 預設 | 說明 |
 |---|---|---|
 | `BREAKOUT_ENABLED` | false（wrangler.toml 開啟） | 開關，也要 KV 的自動下單開關是開的 |
 | `BREAKOUT_RISK_PCT` | 3 | 每單冒帳戶總額的 %（回測 5% 會爆倉） |
-| `BREAKOUT_MAX_OPEN` | 5 | 突破單最多同時幾張 |
+| `BREAKOUT_MAX_OPEN` | 5 | 突破單＋EMA 交叉單加起來最多同時幾張 |
+| `BREAKOUT_MAX_SAME_DIR` | 3 | 其中同方向最多幾張（幣價常一起漲跌，虧損會疊在一起） |
+| `EMA_CROSS_ENABLED` | false（wrangler.toml 開啟） | EMA 交叉開關 |
+| `EMA_CROSS_FAST`／`EMA_CROSS_SLOW`／`EMA_CROSS_STOP_ATR` | 20／50／2 | 快慢均線、停損幾倍 ATR |
+| `EMA_CROSS_BE_R`／`EMA_CROSS_TRAIL_FROM_R`／`EMA_CROSS_TRAIL_GAP_R` | 1／1.5／1.5 | 幾 R 保本、幾 R 開始追蹤、追蹤距離 |
 | `BREAKOUT_TP_R` | 1 | 固定止盈 R |
 | `BREAKOUT_LOOKBACK`／`BREAKOUT_STOP_ATR` | 55／2 | 突破幾根、停損幾倍 ATR |
 | `BREAKOUT_SYMBOLS` | 空＝內建 44 檔 | 逗號分隔的幣種清單 |
