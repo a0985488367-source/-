@@ -15,6 +15,7 @@
 import { opt as optFrom, klines, runSignals, r2, pct, printTable, simulatePortfolio } from './lib.mjs';
 import { ema, atr, rsi } from '../../src/core/indicators.js';
 import { breakoutSignal } from '../../src/strategies/breakout.js';
+import { prepare, ZOO } from './strategy-zoo.mjs';
 
 const ARGS = process.argv.slice(2);
 const opt = (n, d) => optFrom(ARGS, n, d);
@@ -51,6 +52,13 @@ const STRATEGIES = {
   },
 };
 
+// 策略庫（strategy-zoo.mjs）的常見策略一起測；--strategies=A,B 只測這幾個
+Object.assign(STRATEGIES, ZOO);
+// 工作流程的「variants」欄位會變成 --only：裡面是出場名稱的當出場篩選，其他的當策略篩選
+const ONLY = opt('only', '').split(',').map((x) => x.trim()).filter(Boolean);
+const ONLY_STRATS = [...opt('strategies', '').split(',').filter(Boolean), ...ONLY.filter((x) => x in STRATEGIES)];
+if (ONLY_STRATS.length) for (const k of Object.keys(STRATEGIES)) if (!ONLY_STRATS.includes(k)) delete STRATEGIES[k];
+
 /** 唐奇安突破：跟線上自動下單共用 src/strategies/breakout.js 的判斷 */
 function donchian(x, i, n) {
   const s = breakoutSignal(x.c, { lookback: n }, i, { ema: x.e200, atr: x.a });
@@ -68,19 +76,18 @@ const EXITS = {
   '1R 保本＋追蹤': { tpR: 20, cfg: { breakevenAtR: 1, trailFromR: 1.5, trailGapR: 1.5 } },
   '目前 SMC 保本＋追蹤': { tpR: 20, cfg: {} },
 };
+// --exits=固定 1R,固定 2R 只測這幾種出場
+const ONLY_EXITS = [...opt('exits', '').split(',').filter(Boolean), ...ONLY.filter((x) => x in EXITS)];
+if (ONLY_EXITS.length) for (const k of Object.keys(EXITS)) if (!ONLY_EXITS.includes(k)) delete EXITS[k];
 // 這些組合另外印詳細統計（勝率、連虧、多空、帳戶模擬）
 const DETAIL = opt('detail', 'DONCH20,DONCH55').split(',').filter(Boolean);
 const DETAIL_TF = opt('detail-tf', '4h');
 
+const prepared = new Map();
 function buildSignals(symbol, interval, c, name) {
-  const x = {
-    c,
-    e20: ema(c.map((k) => k.close), 20),
-    e50: ema(c.map((k) => k.close), 50),
-    e200: ema(c.map((k) => k.close), 200),
-    a: atr(c, 14),
-    r2v: rsi(c, 2),
-  };
+  const key = `${symbol}|${interval}`;
+  if (!prepared.has(key)) prepared.set(key, prepare(c));
+  const x = prepared.get(key);
   const out = [];
   for (let i = WARMUP; i < c.length - 1; i++) {
     const s = STRATEGIES[name](x, i);
@@ -182,6 +189,7 @@ const withTargets = (sigs, tpR) => sigs.map((s) => ({
   const weeks = SUB_DAYS / 7;
 
   const details = [];
+  const summary = [];
   for (const interval of INTERVALS) {
     const rows = [];
     for (const name of Object.keys(STRATEGIES)) {
@@ -202,10 +210,20 @@ const withTargets = (sigs, tpR) => sigs.map((s) => ({
           (fine.length / weeks).toFixed(1),
         ]);
         if (interval === DETAIL_TF && DETAIL.includes(name)) details.push([name, exitName, coarse, fine]);
+        const avg = (xs) => (xs.length ? xs.reduce((a, t) => a + netR(t), 0) / xs.length : NaN);
+        const four = [avg(coarse.filter((t) => t.half === 0)), avg(coarse.filter((t) => t.half === 1)), avg(fineHalf(0)), avg(fineHalf(1))];
+        summary.push({ interval, name, exitName, four, min: Math.min(...four), win: fine.length ? fine.filter((t) => netR(t) > 0).length / fine.length : NaN, perWeek: fine.length / weeks, n: coarse.length });
       }
     }
     log(`\n■ ${interval}（扣手續費每筆 R，括號是筆數；5M＝最近 ${SUB_DAYS} 天用 5 分鐘 K 棒逐根跑）`);
     printTable(log, ['策略', '出場', '原週期 前半', '原週期 後半', '5M 前半', '5M 後半', '5M 勝率', '5M 每週幾張'], rows);
   }
   printDetails(details, mid, netR);
+
+  // 四格（原週期前後半、5M 前後半）都賺的組合，照最差那一格排序
+  const robust = summary.filter((r) => r.four.every((v) => v > 0)).sort((a, b) => b.min - a.min);
+  log(`\n■ 四格都賺的組合（共 ${robust.length} 個／${summary.length} 個，照最差那格排序；每筆 R 已扣手續費）`);
+  printTable(log, ['週期', '策略', '出場', '原週期 前半', '原週期 後半', '5M 前半', '5M 後半', '最差', '5M 勝率', '5M 每週幾張'],
+    robust.map((r) => [r.interval, r.name, r.exitName, ...r.four.map(r2), r2(r.min), pct(r.win * 100), r.perWeek.toFixed(1)]));
+  log('\nSUMMARY_JSON ' + JSON.stringify(summary.map((r) => ({ i: r.interval, s: r.name, e: r.exitName, f: r.four.map((v) => Math.round(v * 1000) / 1000), w: Math.round(r.win * 1000) / 1000, pw: Math.round(r.perWeek * 10) / 10 }))));
 })();
