@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { simulatePortfolio, pagedKlines, researchTargets } from '../scripts/research/lib.mjs';
+import { simulatePortfolio, pagedKlines, researchTargets, applyStopResearch } from '../scripts/research/lib.mjs';
 
 const t = (over) => ({ symbol: 'A', filledTime: 0, closedTime: 10, r: 1, beTime: null, ...over });
 
@@ -91,4 +91,15 @@ test('疊單縮小風險、單日虧損停手、skip 過濾', () => {
   assert.equal(daily.taken, 3, '同一天虧超過 15% 後 C 不開，隔天 D 照開');
 
   assert.equal(simulatePortfolio([t({}), t({ symbol: 'B', dir: 'long' })], { skip: (x) => x.dir === 'long' }).taken, 1);
+});
+
+test('applyStopResearch：倉位不變只拉近停損／倉位照新停損重算', () => {
+  const keep = applyStopResearch({ entry: 100, stop: 90, stopPct: 0.1 }, { tightStopKeepSize: 0.5 });
+  assert.deepEqual([keep.stop, keep.initialStop, keep.stopPct], [95, 90, 0.1], 'R 仍以原停損算，打到虧 0.5R');
+  const resize = applyStopResearch({ entry: 100, stop: 110, stopPct: 0.1 }, { tightStopResize: 0.7 });
+  assert.equal(resize.stop, 107);
+  assert.equal(resize.initialStop, 107);
+  assert.ok(Math.abs(resize.stopPct - 0.07) < 1e-12, '倉位變大，手續費換算成 R 也跟著變大');
+  const same = { entry: 100, stop: 90 };
+  assert.equal(applyStopResearch(same, {}).stop, 90);
 });
