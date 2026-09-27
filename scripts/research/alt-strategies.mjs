@@ -12,7 +12,7 @@
  * 用法：node scripts/research/alt-strategies.mjs --symbols=BTCUSDT,ETHUSDT --intervals=1h,4h --limit=5000 --sub=5m --sub-days=150
  */
 
-import { opt as optFrom, klines, runSignals, r2, printTable } from './lib.mjs';
+import { opt as optFrom, klines, runSignals, r2, pct, printTable, simulatePortfolio } from './lib.mjs';
 import { ema, atr, rsi } from '../../src/core/indicators.js';
 
 const ARGS = process.argv.slice(2);
@@ -64,10 +64,17 @@ function donchian(x, i, n) {
 /** 出場規則（stepTrade 的設定＋止盈 R） */
 const EXITS = {
   '固定 1R': { tpR: 1, cfg: { breakevenAtR: 0, trailFromR: 0 } },
+  '固定 1.5R': { tpR: 1.5, cfg: { breakevenAtR: 0, trailFromR: 0 } },
   '固定 2R': { tpR: 2, cfg: { breakevenAtR: 0, trailFromR: 0 } },
   '1.5R 後追蹤 1.5R': { tpR: 20, cfg: { breakevenAtR: 0, trailFromR: 1.5, trailGapR: 1.5 } },
+  // 想拉高勝率：先落袋一部分／提早保本，剩下的照樣追蹤
+  '1R 先出一半＋追蹤': { tpR: 20, cfg: { scalpR: 1, scalpFraction: 0.5, breakevenAtR: 1, trailFromR: 1.5, trailGapR: 1.5 } },
+  '1R 保本＋追蹤': { tpR: 20, cfg: { breakevenAtR: 1, trailFromR: 1.5, trailGapR: 1.5 } },
   '目前 SMC 保本＋追蹤': { tpR: 20, cfg: {} },
 };
+// 這些組合另外印詳細統計（勝率、連虧、多空、帳戶模擬）
+const DETAIL = opt('detail', 'DONCH20,DONCH55').split(',').filter(Boolean);
+const DETAIL_TF = opt('detail-tf', '4h');
 
 function buildSignals(symbol, interval, c, name) {
   const x = {
@@ -92,6 +99,43 @@ function buildSignals(symbol, interval, c, name) {
     });
   }
   return out;
+}
+
+/** 詳細統計：勝率、平均賺賠、最長連虧、多空分開、帳戶模擬（每單 2／3／5%，同時持倉、複利） */
+function printDetails(details, mid, netR) {
+  if (!details.length) return;
+  const rows = [];
+  for (const [name, exitName, coarse, fine] of details) {
+    const periods = [
+      ['原週期 前半', coarse.filter((t) => t.half === 0)],
+      ['原週期 後半', coarse.filter((t) => t.half === 1)],
+      ['5M 前半', fine.filter((t) => t.filledTime < mid)],
+      ['5M 後半', fine.filter((t) => t.filledTime >= mid)],
+    ];
+    for (const [period, list] of periods) {
+      if (!list.length) continue;
+      const sorted = [...list].sort((a, b) => a.closedTime - b.closedTime);
+      const rs = sorted.map(netR);
+      const wins = rs.filter((r) => r > 0);
+      const losses = rs.filter((r) => r <= 0);
+      let streak = 0, worst = 0;
+      for (const r of rs) { if (r <= 0) { streak++; worst = Math.max(worst, streak); } else streak = 0; }
+      const avg = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
+      const sim = sorted.map((t) => ({ ...t, r: netR(t), beTime: t.events.find((e) => e.type === 'breakeven')?.time ?? null }));
+      const acct = (risk) => {
+        const x = simulatePortfolio(sim, { riskPct: risk });
+        return `${x.multiple.toFixed(2)}x／${x.maxDdPct.toFixed(0)}%`;
+      };
+      rows.push([
+        name, exitName, period, String(list.length), pct((wins.length / rs.length) * 100),
+        r2(avg(wins)), r2(avg(losses)), r2(avg(rs)), String(worst),
+        r2(avg(sorted.filter((t) => t.dir === 'long').map(netR))), r2(avg(sorted.filter((t) => t.dir === 'short').map(netR))),
+        acct(2), acct(3), acct(5),
+      ]);
+    }
+  }
+  log(`\n■ 詳細統計（${DETAIL_TF}；每筆 R 已扣手續費；帳戶＝最後倍數／最大回撤，同時持倉、複利）`);
+  printTable(log, ['策略', '出場', '期間', '筆數', '勝率', '平均賺', '平均虧', '每筆', '最長連虧', '多單', '空單', '帳戶 2%', '帳戶 3%', '帳戶 5%'], rows);
 }
 
 const withTargets = (sigs, tpR) => sigs.map((s) => ({
@@ -123,6 +167,7 @@ const withTargets = (sigs, tpR) => sigs.map((s) => ({
   const cell = (xs) => (xs.length ? `${r2(xs.reduce((a, t) => a + netR(t), 0) / xs.length)}（${xs.length}）` : '-');
   const weeks = SUB_DAYS / 7;
 
+  const details = [];
   for (const interval of INTERVALS) {
     const rows = [];
     for (const name of Object.keys(STRATEGIES)) {
@@ -139,11 +184,14 @@ const withTargets = (sigs, tpR) => sigs.map((s) => ({
           name, exitName,
           cell(coarse.filter((t) => t.half === 0)), cell(coarse.filter((t) => t.half === 1)),
           cell(fineHalf(0)), cell(fineHalf(1)),
+          fine.length ? pct((fine.filter((t) => netR(t) > 0).length / fine.length) * 100) : '-',
           (fine.length / weeks).toFixed(1),
         ]);
+        if (interval === DETAIL_TF && DETAIL.includes(name)) details.push([name, exitName, coarse, fine]);
       }
     }
     log(`\n■ ${interval}（扣手續費每筆 R，括號是筆數；5M＝最近 ${SUB_DAYS} 天用 5 分鐘 K 棒逐根跑）`);
-    printTable(log, ['策略', '出場', '原週期 前半', '原週期 後半', '5M 前半', '5M 後半', '5M 每週幾張'], rows);
+    printTable(log, ['策略', '出場', '原週期 前半', '原週期 後半', '5M 前半', '5M 後半', '5M 勝率', '5M 每週幾張'], rows);
   }
+  printDetails(details, mid, netR);
 })();
