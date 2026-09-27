@@ -48,8 +48,9 @@ export const DEFAULT_MANAGEMENT = {
   zoneCloseExit: false,  // 收盤價穿過進場區另一側就出場（需要 t.zone = { top, bottom }）
   // 回測用：限價單成交的那根 K 棒只檢查停損，不算獲利（那根的高／低點可能發生在成交之前）
   fillBarConservative: false,
-  // 回測用：成交那根 K 棒照常見的 OHLC 路徑假設（收紅：開→低→高→收；收黑：開→高→低→收），
-  // 只把「成交之後」才走到的價格算進獲利
+  // 成交那根 K 棒照常見的 OHLC 路徑假設（收紅：開→低→高→收；收黑：開→高→低→收），
+  // 只把「成交之後」才走到的價格算進獲利。模擬盤（signals.config.json tracking）已開啟；
+  // 回測預設關閉以便跟舊結果比較
   fillBarPath: false,
 };
 
