@@ -32,8 +32,13 @@ const MAKER = Number(opt('maker-fee', 0.0002));
 const TAKER = Number(opt('taker-fee', 0.00055));
 // --entries=market,L0:1,L0.25:2 進場方式：market＝下一根開盤市價；
 //   L<幾倍 ATR>:<等幾根>＝在訊號收盤價往有利方向退幾倍 ATR 掛限價單，等這麼多根沒成交就放棄
+//   R<等幾根>[:<停損幾倍 ATR>]＝突破回踩：在被突破的那條線掛限價單（只適用有 level 的突破策略）
 const ENTRIES = opt('entries', 'market').split(',').filter(Boolean).map((e) => {
   if (e === 'market') return { name: 'market' };
+  if (e.startsWith('R')) {
+    const [bars, stopAtr] = e.slice(1).split(':').map(Number);
+    return { name: e, retest: true, bars: bars || 3, stopAtr: stopAtr || null };
+  }
   const [off, bars] = e.slice(1).split(':').map(Number);
   return { name: e, offsetAtr: off, bars: bars || 1 };
 });
@@ -74,7 +79,7 @@ if (ONLY_STRATS.length) for (const k of Object.keys(STRATEGIES)) if (!ONLY_STRAT
 /** 唐奇安突破：跟線上自動下單共用 src/strategies/breakout.js 的判斷 */
 function donchian(x, i, n) {
   const s = breakoutSignal(x.c, { lookback: n }, i, { ema: x.e200, atr: x.a });
-  return s ? { dir: s.dir, stopAtr: 2 } : null;
+  return s ? { dir: s.dir, stopAtr: 2, level: s.level } : null;
 }
 
 /** 出場規則（stepTrade 的設定＋止盈 R） */
@@ -107,8 +112,9 @@ function buildSignals(symbol, interval, c, name, en = ENTRIES[0] ?? { name: 'mar
     if (!s || !(x.a[i] > 0)) continue;
     const market = en.name === 'market';
     const long = s.dir === 'long';
-    const entry = market ? c[i + 1].open : c[i].close + (long ? -1 : 1) * en.offsetAtr * x.a[i];
-    const risk = x.a[i] * s.stopAtr;
+    if (en.retest && !(s.level > 0)) continue; // 沒有突破線的策略不能測回踩
+    const entry = market ? c[i + 1].open : en.retest ? s.level : c[i].close + (long ? -1 : 1) * en.offsetAtr * x.a[i];
+    const risk = x.a[i] * (en.retest && en.stopAtr ? en.stopAtr : s.stopAtr);
     const stop = long ? entry - risk : entry + risk;
     out.push({
       symbol, interval, index: i, time: c[i].time, dir: s.dir, entry, stop, entryType: market ? 'market' : 'limit',
