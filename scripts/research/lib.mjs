@@ -1,5 +1,5 @@
 import { PROVIDERS } from '../../src/data/providers.js';
-import { buildLadder, stepTrade } from '../../src/smc/manage.js';
+import { buildLadder, stepTrade, DEFAULT_MANAGEMENT } from '../../src/smc/manage.js';
 
 export const opt = (args, n, d) => (args.find((a) => a.startsWith(`--${n}=`)) || `--${n}=${d}`).slice(n.length + 3);
 
@@ -63,11 +63,38 @@ export function applyStopResearch(t, cfg = {}) {
   return t;
 }
 
-/** 讓每個訊號照管理規則往後逐根跑到結束；還沒結束的不計入 */
+const TF_MINUTES = { '1m': 1, '5m': 5, '15m': 15, '30m': 30, '1h': 60, '2h': 120, '4h': 240, '1d': 1440 };
+
+/** 第一根 time >= t 的索引（沒有就 -1） */
+function firstAtOrAfter(candles, t) {
+  let lo = 0, hi = candles.length - 1, ans = -1;
+  while (lo <= hi) { const m = (lo + hi) >> 1; if (candles[m].time >= t) { ans = m; hi = m - 1; } else lo = m + 1; }
+  return ans;
+}
+
+/**
+ * 讓每個訊號照管理規則往後逐根跑到結束；還沒結束的不計入。
+ * cfg.subBars：訊號照原週期產生，進場之後改用細 K 棒（candlesBy 的 `${symbol}|sub`，cfg.subMinutes 分鐘）
+ * 一根一根跑 —— 這樣限價單成交那根裡面「先漲還是先跌」就不用猜；等待／持有的根數照比例換算。
+ * 細 K 棒沒涵蓋到的訊號直接略過。
+ */
 export function runSignals(signals, candlesBy, cfg) {
   const closed = [];
   for (const sig of signals) {
-    const candles = candlesBy.get(`${sig.symbol}|${sig.interval}`);
+    let candles = candlesBy.get(`${sig.symbol}|${sig.interval}`);
+    let start = sig.index + 1;
+    let stepCfg = cfg;
+    if (cfg.subBars) {
+      const sub = candlesBy.get(`${sig.symbol}|sub`);
+      const next = candles[sig.index + 1];
+      if (!sub?.length || !next || next.time < sub[0].time) continue;
+      start = firstAtOrAfter(sub, next.time);
+      if (start < 0) continue;
+      candles = sub;
+      const k = TF_MINUTES[sig.interval] / (cfg.subMinutes ?? 5);
+      const o = { ...DEFAULT_MANAGEMENT, ...cfg };
+      stepCfg = { ...cfg, entryWindowBars: o.entryWindowBars * k, maxHoldBars: o.maxHoldBars * k, stallBars: o.stallBars * k };
+    }
     const t = {
       ...sig,
       targets: buildLadder(sig.entry, sig.stop, researchTargets(sig, cfg), cfg),
@@ -76,8 +103,8 @@ export function runSignals(signals, candlesBy, cfg) {
       barsSinceOpen: 0, barsSinceFill: 0, maxFavorableR: 0, maxAdverseR: 0,
     };
     applyStopResearch(t, cfg);
-    for (let j = sig.index + 1; j < candles.length; j++) {
-      if (stepTrade(t, candles[j], cfg)) break;
+    for (let j = start; j < candles.length; j++) {
+      if (stepTrade(t, candles[j], stepCfg)) break;
     }
     if (t.status === 'pending' || t.status === 'active') continue;
     closed.push(t);
