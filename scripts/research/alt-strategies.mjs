@@ -82,6 +82,48 @@ function donchian(x, i, n) {
   return s ? { dir: s.dir, stopAtr: 2, level: s.level } : null;
 }
 
+/*
+ * 假突破過濾（2026-09）：都是在突破那根收盤當下就看得到的條件，符合才進場。
+ *   F1 突破幅度：收盤超過突破線至少 0.25 ATR
+ *   F2 收在高點附近：做多收在整根 K 棒上面 1/4（做空下面 1/4）
+ *   F3 成交量放大：突破那根的量 ≥ 前 20 根平均的 1.5 倍
+ *   F4 趨勢強度：ADX(14) > 20
+ *   F5 大盤同方向：做多時 BTC 收在 EMA200 之上（做空相反）
+ *   F6 大週期同方向：收在「日線 EMA50」同一側（用本週期換算長度的 EMA 近似）
+ *   F7 不追太遠：收盤離 EMA20 不超過 3 ATR
+ *   F8 下一根確認：突破後下一根收盤還站在突破線外面才進場（再下一根開盤進）
+ */
+const BTC_TREND = new Map(); // 週期 → Map(K 棒時間 → 1 在 EMA200 之上／-1 之下)
+const TF_MIN = { '1h': 60, '2h': 120, '4h': 240, '6h': 360, '12h': 720, '1d': 1440 };
+const withFilter = (test) => (x, i) => {
+  const s = donchian(x, i, 55);
+  return s && test(x, i, s, s.dir === 'long' ? 1 : -1) ? s : null;
+};
+Object.assign(STRATEGIES, {
+  DONCH55_F1: withFilter((x, i, s, d) => (x.close[i] - s.level) * d >= 0.25 * x.a[i]),
+  DONCH55_F2: withFilter((x, i, s, d) => {
+    const k = x.c[i];
+    const range = k.high - k.low;
+    if (!(range > 0)) return false;
+    const pos = (k.close - k.low) / range;
+    return d > 0 ? pos >= 0.75 : pos <= 0.25;
+  }),
+  DONCH55_F3: withFilter((x, i) => x.volS[i - 1] > 0 && x.vol[i] >= 1.5 * x.volS[i - 1]),
+  DONCH55_F4: withFilter((x, i) => x.adx[i] > 20),
+  DONCH55_F5: withFilter((x, i, s, d) => (BTC_TREND.get(x.interval)?.get(x.c[i].time) ?? 0) === d),
+  DONCH55_F6: withFilter((x, i, s, d) => {
+    if (!x.htf) x.htf = ema(x.close, Math.round((50 * 1440) / (TF_MIN[x.interval] ?? 240)));
+    return x.htf[i] != null && (x.close[i] - x.htf[i]) * d > 0;
+  }),
+  DONCH55_F7: withFilter((x, i) => x.e20[i] != null && Math.abs(x.close[i] - x.e20[i]) <= 3 * x.a[i]),
+  DONCH55_F8: (x, i) => {
+    const s = donchian(x, i - 1, 55);
+    if (!s) return null;
+    const d = s.dir === 'long' ? 1 : -1;
+    return (x.close[i] - s.level) * d > 0 ? s : null;
+  },
+});
+
 /** 出場規則（stepTrade 的設定＋止盈 R） */
 const EXITS = {
   '固定 1R': { tpR: 1, cfg: { breakevenAtR: 0, trailFromR: 0 } },
@@ -104,7 +146,7 @@ const DETAIL_TF = opt('detail-tf', '4h');
 const prepared = new Map();
 function buildSignals(symbol, interval, c, name, en = ENTRIES[0] ?? { name: 'market' }) {
   const key = `${symbol}|${interval}`;
-  if (!prepared.has(key)) prepared.set(key, prepare(c));
+  if (!prepared.has(key)) prepared.set(key, Object.assign(prepare(c), { interval }));
   const x = prepared.get(key);
   const out = [];
   for (let i = WARMUP; i < c.length - 1; i++) {
@@ -305,6 +347,15 @@ const withTargets = (sigs, tpR) => sigs.map((s) => ({
       } catch (e) { log(`  ${symbol} ${SUB}: 取得資料失敗（${e.message}）`); }
     }
     log(`  ${symbol} 資料完成`);
+  }
+  // F5 要用 BTC 的趨勢：BTC 不在幣種清單裡就另外抓
+  if (Object.keys(STRATEGIES).some((k) => k.endsWith('_F5'))) {
+    for (const iv of INTERVALS) {
+      const b = candlesBy.get(`BTCUSDT|${iv}`) ?? await klines('BTCUSDT', iv, LIMIT).catch(() => null);
+      if (!b) { log(`  BTC ${iv} 抓不到，F5 不會有訊號`); continue; }
+      const e = ema(b.map((k) => k.close), 200);
+      BTC_TREND.set(iv, new Map(b.map((k, j) => [k.time, e[j] == null ? 0 : k.close > e[j] ? 1 : -1])));
+    }
   }
   const mid = (subStart + subEnd) / 2;
   const netR = (t) => t.r - feeOf(t) / t.stopPct;
