@@ -125,6 +125,7 @@ const makeEnv = (kv = {}, over = {}) => ({
   BREAKOUT_SYMBOLS: 'ABCUSDT,XYZUSDT',
   BREAKOUT_MAX_DELAY_MIN: '100000',
   WORKER_SCAN_PROVIDERS: 'bybit',
+  BREAKOUT_PROVIDERS: 'bybit-linear',
   ...over,
 });
 

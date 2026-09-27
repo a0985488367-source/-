@@ -561,7 +561,8 @@ Worker）」卡片，填一次 Worker 網址跟 token（只存這台裝置，不
 | `BREAKOUT_LEVERAGE` | 5 | 槓桿（保證金超過 `AUTO_TRADE_MAX_MARGIN_PCT` 會自動拉高） |
 | `BREAKOUT_MAX_DELAY_MIN` | 30 | K 棒收盤超過這麼久才看到就不進場 |
 | `BREAKOUT_BATCH_SIZE`／`BREAKOUT_CONCURRENCY` | 15／2 | 每次 tick（2 分鐘）判斷幾檔、同時幾個請求；Cloudflare 共用 IP 打太多會被交易所限流（HTTP 429） |
-| `BREAKOUT_MAX_TRIES` | 3 | 被限流的幣下一次 tick 重試，同一根 K 棒最多試幾次 |
+| `BREAKOUT_MAX_TRIES` | 6 | 被限流的幣下一次 tick 重試，同一根 K 棒最多試幾次 |
+| `BREAKOUT_PROVIDERS` | okx,bybit-linear,bybit,binance | K 棒資料源順序（bybit-linear＝Bybit 合約）；Cloudflare 共用 IP 打 Bybit 常被限流，OKX 比較穩 |
 
 ### 每日晨報
 
