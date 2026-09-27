@@ -103,3 +103,15 @@ test('applyStopResearch：倉位不變只拉近停損／倉位照新停損重算
   const same = { entry: 100, stop: 90 };
   assert.equal(applyStopResearch(same, {}).stop, 90);
 });
+
+test('fillBarConservative：成交那根只看停損，不因成交前的高點提早保本或止盈', async () => {
+  const { stepTrade } = await import('../src/smc/manage.js');
+  const mk = () => ({ dir: 'long', entry: 100, stop: 98, status: 'pending', targets: [{ name: 'TP1', price: 103, rr: 1.5, fraction: 0 }], hitTargets: [], events: [], remaining: 1, realizedR: 0 });
+  const bar = { time: 1, open: 104, high: 104, low: 99.5, close: 100 };
+  const loose = mk();
+  assert.equal(stepTrade(loose, bar, {}), true, '預設：成交那根的高點算成打到止盈');
+  const strict = mk();
+  assert.equal(stepTrade(strict, bar, { fillBarConservative: true }), false);
+  assert.equal(strict.status, 'active');
+  assert.equal(strict.maxFavorableR ?? 0, 0);
+});
