@@ -95,6 +95,14 @@ const VARIANTS = {
   SLR07_S:         { fillBarConservative: true, tightStopResize: 0.7 },
   SLR05_S:         { fillBarConservative: true, tightStopResize: 0.5 },
   CUT075_S:        { fillBarConservative: true, scratchR: 0.75 },
+  // ── 成交那根照 OHLC 路徑假設（比較接近實際）──
+  NOW_P:           { fillBarPath: true },
+  SLK07_P:         { fillBarPath: true, tightStopKeepSize: 0.7 },
+  SLR07_P:         { fillBarPath: true, tightStopResize: 0.7 },
+  SLR05_P:         { fillBarPath: true, tightStopResize: 0.5 },
+  BE_OFF_P:        { fillBarPath: true, breakevenAtR: 0 },
+  BE1_P:           { fillBarPath: true, breakevenAtR: 1 },
+  TR_OFF_P:        { fillBarPath: true, trailFromR: 0 },
 };
 
 const live = (t) => t.score >= LIVE_MIN_SCORE && t.tp1R >= 1.5;
