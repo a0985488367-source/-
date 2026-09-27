@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       study:
-        description: '要跑哪個研究：ab-test（部位管理規則）、confluence（斐波那契／成交量分布匯流）或 alt（別種做法：突破、回檔、RSI2）'
+        description: '要跑哪個研究：ab-test（部位管理規則）、confluence（斐波那契／成交量分布匯流）、alt（別種做法：突破、回檔、RSI2）或 fakeout（假突破 MSS 反手／延續後 OTE 回調進場）'
         type: choice
-        options: [ab-test, confluence, alt]
+        options: [ab-test, confluence, alt, fakeout]
         default: ab-test
       symbols:
         description: '要測的幣種（逗號分隔）'
@@ -74,7 +74,7 @@ jobs:
           EXTRA: ${{ inputs.extra }}
         run: |
           set -o pipefail
-          if [ "$STUDY" = confluence ]; then SCRIPT=confluence-study; DEF_INT=30m,1h,4h; elif [ "$STUDY" = alt ]; then SCRIPT=alt-strategies; DEF_INT=1h,4h; else SCRIPT=ab-test; DEF_INT=15m,1h; fi
+          if [ "$STUDY" = confluence ]; then SCRIPT=confluence-study; DEF_INT=30m,1h,4h; elif [ "$STUDY" = alt ]; then SCRIPT=alt-strategies; DEF_INT=1h,4h; elif [ "$STUDY" = fakeout ]; then SCRIPT=fakeout-ote; DEF_INT=15m,1h,4h,6h; else SCRIPT=ab-test; DEF_INT=15m,1h; fi
           node "scripts/research/$SCRIPT.mjs" \
             --symbols="$SYMBOLS" \
             --intervals="${INTERVALS:-$DEF_INT}" \
