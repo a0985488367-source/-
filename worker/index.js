@@ -252,6 +252,15 @@ const ALT_STRATEGIES = ['breakout', 'ema', 'macd'];
 const STRATEGY_LABEL = { breakout: '突破單', ema: 'EMA 交叉單', macd: 'MACD 零軸單' };
 const STRATEGY_NAME = { breakout: '突破', ema: 'EMA 交叉', macd: 'MACD 零軸' };
 const SIGNAL_PREFIX = { breakout: 'bo', ema: 'ema', macd: 'macd' };
+/**
+ * 下單用的 signal_id（也是 Bybit 的 orderLinkId，最長 36 字；止盈單還會再加「:leg:0」）。
+ * 例：macd:PENDLE:s:6h:anrc（K 棒開盤時間用「第幾個小時」的 36 進位表示）
+ */
+function altSignalId(sig, interval, barOpen) {
+  const base = sig.symbol.replace(/USDT$/, '');
+  return `${SIGNAL_PREFIX[sig.strategy] ?? 'bo'}:${base}:${sig.dir === 'long' ? 'l' : 's'}:${interval}:${Math.floor(barOpen / 3_600_000).toString(36)}`;
+}
+
 /** 要判斷的週期：BREAKOUT_INTERVALS（逗號分隔）優先，沒設就用 BREAKOUT_INTERVAL */
 const breakoutIntervals = (env) => {
   const list = csv(cfg(env, 'BREAKOUT_INTERVALS'));
@@ -1658,7 +1667,7 @@ async function breakoutOrder(env, sig, interval, barOpen) {
 
     const trade = await executorCall(env, 'POST', '/trade', {
       body: {
-        signal_id: `${SIGNAL_PREFIX[sig.strategy] ?? 'bo'}:${sig.symbol}:${sig.dir}:${interval}:${barOpen}`,
+        signal_id: altSignalId(sig, interval, barOpen),
         symbol: sig.symbol,
         side: long ? 'Buy' : 'Sell',
         qty: String(qty),

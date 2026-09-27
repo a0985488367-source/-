@@ -152,7 +152,8 @@ test('Worker 突破：4h 收盤突破 → 市價進場、停損 2 ATR、止盈 1
   assert.equal(trade.ladder.length, 1);
   assert.equal(trade.ladder[0].qty, trade.qty, '止盈一次全部出場');
   assert.ok(Math.abs(Number(trade.qty) * (entry - stop) - 30) < 1, '風險約 1000 × 3% = 30');
-  assert.match(trade.signal_id, /^bo:ABCUSDT:long:4h:\d+$/);
+  assert.match(trade.signal_id, /^bo:ABC:l:4h:[0-9a-z]+$/);
+  assert.ok(`${trade.signal_id}:leg:0`.length <= 36, 'Bybit orderLinkId 最長 36 字（止盈單還要加 :leg:0）');
   assert.ok(klineCategories.length && klineCategories.every((c) => c === 'linear'), '判斷用合約 K 棒');
 
   const pos = JSON.parse(await env.SMC_KV.get('open-pos:ABCUSDT:long'));
