@@ -563,18 +563,27 @@ Worker）」卡片，填一次 Worker 網址跟 token（只存這台裝置，不
 - 進場：市價；停損 2 ATR；不設止盈，賺 1R 停損移到成本（+0.05R），1.5R 之後追蹤停損、距離最高獲利 1.5R
 - 同一個幣同一根 K 棒兩種都有訊號時先下突破單
 
+#### MACD 零軸、6 小時週期、74 檔（2026-09）
+
+再加 MACD 穿零軸（`src/strategies/macd-zero.js`，出場跟 EMA 交叉一樣），三個策略都在 4h 和 6h 判斷
+（`BREAKOUT_INTERVALS`），幣種擴到 74 檔（另外兩組沒參與挑選的幣也驗證過）。組合模擬（74 檔同一個帳戶、約 800 天）：
+每單 3%＋同時最多 3 張 → 最大回撤約 39%、平均每月約 +19%；原本（44 檔、4h 突破＋EMA、5 張＋同向 3 張）回撤 67%、每月約 +14%。
+OKX 的 6H K 棒預設用香港時間切，程式改用 `6Hutc` 跟其他交易所對齊。
+
 | 變數 | 預設 | 說明 |
 |---|---|---|
 | `BREAKOUT_ENABLED` | false（wrangler.toml 開啟） | 開關，也要 KV 的自動下單開關是開的 |
 | `BREAKOUT_RISK_PCT` | 3 | 每單冒帳戶總額的 %（回測 5% 會爆倉） |
-| `BREAKOUT_MAX_OPEN` | 5 | 突破單＋EMA 交叉單加起來最多同時幾張 |
-| `BREAKOUT_MAX_SAME_DIR` | 3 | 其中同方向最多幾張（幣價常一起漲跌，虧損會疊在一起） |
+| `BREAKOUT_MAX_OPEN` | 5（wrangler.toml 設 3） | 突破／EMA 交叉／MACD 零軸加起來最多同時幾張 |
+| `BREAKOUT_MAX_SAME_DIR` | 3（wrangler.toml 設 0＝不限） | 其中同方向最多幾張 |
+| `BREAKOUT_INTERVALS` | 空（wrangler.toml 設 4h,6h） | 逗號分隔的週期；空＝只用 `BREAKOUT_INTERVAL` |
+| `MACD_ZERO_ENABLED`／`MACD_ZERO_STOP_ATR` | false（wrangler.toml 開啟）／2 | MACD 零軸開關、停損幾倍 ATR；保本／追蹤跟 EMA 交叉共用 |
 | `EMA_CROSS_ENABLED` | false（wrangler.toml 開啟） | EMA 交叉開關 |
 | `EMA_CROSS_FAST`／`EMA_CROSS_SLOW`／`EMA_CROSS_STOP_ATR` | 20／50／2 | 快慢均線、停損幾倍 ATR |
 | `EMA_CROSS_BE_R`／`EMA_CROSS_TRAIL_FROM_R`／`EMA_CROSS_TRAIL_GAP_R` | 1／1.5／1.5 | 幾 R 保本、幾 R 開始追蹤、追蹤距離 |
 | `BREAKOUT_TP_R` | 1 | 固定止盈 R |
 | `BREAKOUT_LOOKBACK`／`BREAKOUT_STOP_ATR` | 55／2 | 突破幾根、停損幾倍 ATR |
-| `BREAKOUT_SYMBOLS` | 空＝內建 44 檔 | 逗號分隔的幣種清單 |
+| `BREAKOUT_SYMBOLS` | 空＝內建 74 檔 | 逗號分隔的幣種清單 |
 | `BREAKOUT_LEVERAGE` | 5 | 槓桿（保證金超過 `AUTO_TRADE_MAX_MARGIN_PCT` 會自動拉高） |
 | `BREAKOUT_MAX_DELAY_MIN` | 30 | K 棒收盤超過這麼久才看到就不進場 |
 | `BREAKOUT_BATCH_SIZE`／`BREAKOUT_CONCURRENCY` | 15／2 | 每次 tick（2 分鐘）判斷幾檔、同時幾個請求；Cloudflare 共用 IP 打太多會被交易所限流（HTTP 429） |

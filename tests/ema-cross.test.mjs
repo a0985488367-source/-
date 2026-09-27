@@ -214,3 +214,71 @@ test('Worker EMA 交叉：停損照部位自己的參數搬（1R 才保本、1.5
   await runWorker(env);
   assert.equal(JSON.parse(await env.SMC_KV.get('open-pos:EMAUSDT:long')).stop, 110);
 });
+
+/* ------------------------------------------------------------ MACD 零軸、多週期 */
+
+import { macdZeroSignal } from '../src/strategies/macd-zero.js';
+
+test('macdZeroSignal 跟回測策略庫的 MACD_ZERO 判斷完全一致', () => {
+  let seed = 11;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647) - 0.5;
+  let p = 100;
+  const c = Array.from({ length: 3000 }, (_, i) => {
+    const o = p;
+    p = Math.max(1, p * (1 + rnd() * 0.03));
+    return { time: i * H4, open: o, high: Math.max(o, p) * (1 + Math.abs(rnd()) * 0.01), low: Math.min(o, p) * (1 - Math.abs(rnd()) * 0.01), close: p, volume: 1 };
+  });
+  const x = prepare(c);
+  let n = 0;
+  for (let i = 210; i < c.length; i++) {
+    const zoo = ZOO.MACD_ZERO(x, i);
+    const s = macdZeroSignal(c, {}, i);
+    assert.equal(s?.dir ?? null, zoo?.dir ?? null, `第 ${i} 根`);
+    if (s) { n++; assert.ok(Math.abs(s.stopDistance - x.a[i] * zoo.stopAtr) < 1e-9); }
+  }
+  assert.ok(n > 10, `隨機資料要有足夠的訊號（${n}）`);
+});
+
+test('Worker：BREAKOUT_INTERVALS=4h,6h 兩個週期都判斷，每次 tick 的請求額度共用', async () => {
+  const executor = { calls: [] };
+  stub({ executor });
+  // 只開 MACD（EMAUSDT 的 K 棒沒有 MACD 訊號也沒關係，這裡只看流程）
+  const env = makeEnv({}, { BREAKOUT_ENABLED: 'false', EMA_CROSS_ENABLED: 'false', MACD_ZERO_ENABLED: 'true', BREAKOUT_INTERVALS: '4h,6h', BREAKOUT_BATCH_SIZE: '3' });
+  const out = await runWorker(env);
+  assert.deepEqual(Object.keys(out.breakout.intervals), ['4h', '6h']);
+  // 4h 用掉 2 檔的額度，6h 只剩 1 檔
+  const h6 = out.breakout.intervals['6h'];
+  assert.ok(h6.waiting === 'batch-budget' || h6.remaining === 1 || h6.skipped, JSON.stringify(h6));
+  const again = await runWorker(env);
+  assert.equal(again.breakout.intervals['4h'].skipped, 'already-checked');
+});
+
+test('Worker MACD 零軸：訊號下單不掛止盈、部位用保本＋追蹤參數、signal_id 用 macd 開頭', async () => {
+  // 找一段最後一根剛好 MACD 穿零軸（而且沒有 EMA 交叉、沒有突破）的 K 棒
+  const all = series(900, (i) => 100 + 0.05 * i + 3 * Math.sin(i / 15));
+  let end = 299;
+  const pick = (w) => macdZeroSignal(w) && !emaCrossSignal(w) && !breakoutSignal(w);
+  while (end < 899 && !pick(all.slice(end - 299, end + 1))) end++;
+  assert.ok(end < 899, '測試資料要找得到 MACD 訊號');
+  const lastClosed = Math.floor(Date.now() / H4) * H4 - H4;
+  const w = all.slice(end - 299, end + 2).map((k, i) => ({ ...k, time: lastClosed - 299 * H4 + i * H4 }));
+  const executor = { calls: [] };
+  stub({ executor });
+  const orig = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes('api.bybit.com/v5/market/kline') && new URL(String(url)).searchParams.get('symbol') === 'MACDUSDT') {
+      const list = [...w].reverse().map((k) => [String(k.time), String(k.open), String(k.high), String(k.low), String(k.close), '1', '1']);
+      return new Response(JSON.stringify({ retCode: 0, result: { list } }), { status: 200 });
+    }
+    return orig(url, init);
+  };
+  const env = makeEnv({}, { BREAKOUT_SYMBOLS: 'MACDUSDT', MACD_ZERO_ENABLED: 'true' });
+  const out = await runWorker(env);
+  assert.equal(out.breakout.orders[0]?.strategy, 'macd', JSON.stringify(out.breakout));
+  const trade = executor.calls.find((c) => c.url.endsWith('/trade')).body;
+  assert.deepEqual(trade.ladder, []);
+  assert.match(trade.signal_id, /^macd:MACDUSDT:/);
+  const pos = JSON.parse(await env.SMC_KV.get(`open-pos:MACDUSDT:${out.breakout.orders[0].dir}`));
+  assert.equal(pos.strategy, 'macd');
+  assert.equal(pos.management.breakevenAtR, 1);
+});

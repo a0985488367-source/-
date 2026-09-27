@@ -186,6 +186,7 @@ import { PROVIDERS } from '../src/data/providers.js';
 import { ema } from '../src/core/indicators.js';
 import { breakoutSignal } from '../src/strategies/breakout.js';
 import { emaCrossSignal } from '../src/strategies/ema-cross.js';
+import { macdZeroSignal } from '../src/strategies/macd-zero.js';
 
 const DEFAULTS = {
   MARKET_URL: 'https://raw.githubusercontent.com/a0985488367-source/-/main/data/market.json',
@@ -216,7 +217,8 @@ const DEFAULTS = {
   // 4 小時突破策略（見 src/strategies/breakout.js、runBreakout()）；預設關閉
   BREAKOUT_ENABLED: 'false',
   BREAKOUT_INTERVAL: '4h',
-  BREAKOUT_SYMBOLS: '',          // 留空＝BREAKOUT_DEFAULT_SYMBOLS（回測用的 45 檔扣掉 Bybit 沒有的）
+  BREAKOUT_INTERVALS: '',        // 逗號分隔的多個週期（例如 4h,6h）；留空＝只用 BREAKOUT_INTERVAL
+  BREAKOUT_SYMBOLS: '',          // 留空＝BREAKOUT_DEFAULT_SYMBOLS（回測驗證過的 74 檔）
   BREAKOUT_RISK_PCT: '3',        // 每單冒帳戶總額的 %
   BREAKOUT_MAX_OPEN: '5',        // 突破單＋EMA 交叉單加起來最多同時幾張
   BREAKOUT_MAX_SAME_DIR: '3',    // 其中同方向（都做多或都做空）最多幾張；幣價常一起漲跌，虧損會疊在一起
@@ -237,16 +239,26 @@ const DEFAULTS = {
   EMA_CROSS_FAST: '20',
   EMA_CROSS_SLOW: '50',
   EMA_CROSS_STOP_ATR: '2',
-  EMA_CROSS_BE_R: '1',           // 賺到幾 R 停損移到成本
-  EMA_CROSS_TRAIL_FROM_R: '1.5', // 賺到幾 R 開始追蹤停損
-  EMA_CROSS_TRAIL_GAP_R: '1.5',  // 追蹤停損跟最高獲利的距離（R）
+  EMA_CROSS_BE_R: '1',           // 賺到幾 R 停損移到成本（EMA 交叉、MACD 零軸共用）
+  EMA_CROSS_TRAIL_FROM_R: '1.5', // 賺到幾 R 開始追蹤停損（同上）
+  EMA_CROSS_TRAIL_GAP_R: '1.5',  // 追蹤停損跟最高獲利的距離（R）（同上）
+  // MACD 穿零軸（見 src/strategies/macd-zero.js）；出場跟 EMA 交叉一樣（保本＋追蹤）；預設關閉
+  MACD_ZERO_ENABLED: 'false',
+  MACD_ZERO_STOP_ATR: '2',
 };
 
 /** 突破單、EMA 交叉單這類「另外的策略」（不是 SMC） */
-const ALT_STRATEGIES = ['breakout', 'ema'];
-const STRATEGY_LABEL = { breakout: '突破單', ema: 'EMA 交叉單' };
+const ALT_STRATEGIES = ['breakout', 'ema', 'macd'];
+const STRATEGY_LABEL = { breakout: '突破單', ema: 'EMA 交叉單', macd: 'MACD 零軸單' };
+const STRATEGY_NAME = { breakout: '突破', ema: 'EMA 交叉', macd: 'MACD 零軸' };
+const SIGNAL_PREFIX = { breakout: 'bo', ema: 'ema', macd: 'macd' };
+/** 要判斷的週期：BREAKOUT_INTERVALS（逗號分隔）優先，沒設就用 BREAKOUT_INTERVAL */
+const breakoutIntervals = (env) => {
+  const list = csv(cfg(env, 'BREAKOUT_INTERVALS'));
+  return list.length ? list : [cfg(env, 'BREAKOUT_INTERVAL')];
+};
 
-/** 回測驗證過的三組幣（2026-09），PEPE 在 Bybit 合約是 1000PEPEUSDT，先拿掉 */
+/** 回測驗證過的五組幣（2026-09），PEPE 在 Bybit 合約是 1000PEPEUSDT，先拿掉 */
 const BREAKOUT_DEFAULT_SYMBOLS = [
   'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'DOGEUSDT', 'ADAUSDT', 'AVAXUSDT', 'LINKUSDT', 'LTCUSDT',
   'DOTUSDT', 'NEARUSDT', 'APTUSDT', 'ARBUSDT', 'OPUSDT',
@@ -254,8 +266,13 @@ const BREAKOUT_DEFAULT_SYMBOLS = [
   'ETCUSDT', 'BCHUSDT', 'HBARUSDT', 'ICPUSDT',
   'FETUSDT', 'RENDERUSDT', 'STXUSDT', 'IMXUSDT', 'GRTUSDT', 'ALGOUSDT', 'SANDUSDT', 'MANAUSDT', 'AXSUSDT', 'CRVUSDT',
   'LDOUSDT', 'DYDXUSDT', 'JUPUSDT', 'ENAUSDT', 'ORDIUSDT',
+  // 2026-09 另外兩組沒參與挑選策略的幣（樣本外驗證也成立）
+  'XLMUSDT', 'VETUSDT', 'EGLDUSDT', 'THETAUSDT', 'XTZUSDT', 'NEOUSDT', 'KAVAUSDT', 'ZECUSDT', 'DASHUSDT', 'COMPUSDT',
+  'SNXUSDT', 'IOTAUSDT', 'YFIUSDT', 'SUSHIUSDT', '1INCHUSDT',
+  'GALAUSDT', 'CHZUSDT', 'ENSUSDT', 'APEUSDT', 'BLURUSDT', 'PENDLEUSDT', 'GMXUSDT', 'RUNEUSDT', 'KSMUSDT', 'ROSEUSDT',
+  'CFXUSDT', 'ARUSDT', 'MINAUSDT', 'ONEUSDT', 'ZILUSDT',
 ];
-const INTERVAL_MS = { '1h': 3_600_000, '2h': 7_200_000, '4h': 14_400_000, '1d': 86_400_000 };
+const INTERVAL_MS = { '1h': 3_600_000, '2h': 7_200_000, '4h': 14_400_000, '6h': 21_600_000, '1d': 86_400_000 };
 
 const cfg = (env, key) => env[key] ?? DEFAULTS[key];
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -448,6 +465,7 @@ async function handleFetch(request, env) {
         breakout: {
           enabled: cfg(env, 'BREAKOUT_ENABLED') === 'true',
           interval: cfg(env, 'BREAKOUT_INTERVAL'),
+          intervals: breakoutIntervals(env),
           riskPct: Number(cfg(env, 'BREAKOUT_RISK_PCT')),
           maxOpen: Number(cfg(env, 'BREAKOUT_MAX_OPEN')),
           maxSameDir: Number(cfg(env, 'BREAKOUT_MAX_SAME_DIR')),
@@ -458,6 +476,12 @@ async function handleFetch(request, env) {
           directions: csv(cfg(env, 'BREAKOUT_DIRECTIONS')),
           symbols: breakoutSymbols(env).length,
           lastCheckedBar: env.SMC_KV ? await env.SMC_KV.get(`breakout:done:${cfg(env, 'BREAKOUT_INTERVAL')}`).then((v) => (v ? new Date(Number(v)).toISOString() : null)) : null,
+          lastCheckedBars: env.SMC_KV ? Object.fromEntries(await Promise.all(breakoutIntervals(env).map(async (iv) => [iv, await env.SMC_KV.get(`breakout:done:${iv}`).then((v) => (v ? new Date(Number(v)).toISOString() : null))]))) : null,
+        },
+        macdZero: {
+          enabled: cfg(env, 'MACD_ZERO_ENABLED') === 'true',
+          stopAtr: Number(cfg(env, 'MACD_ZERO_STOP_ATR')),
+          management: emaCrossManagement(env),
         },
         emaCross: {
           enabled: cfg(env, 'EMA_CROSS_ENABLED') === 'true',
@@ -1394,8 +1418,8 @@ function buildCloseEmbed(pos, exitPrice) {
         { name: '當初風險', value: `${fmt(pos.riskAmount)} USDT`, inline: true },
         pos.strategy === 'breakout'
           ? { name: '策略', value: `${pos.interval ?? '4h'} 突破（止盈 ${pos.targets?.[0]?.rr ?? 1}R）`, inline: true }
-          : pos.strategy === 'ema'
-            ? { name: '策略', value: `${pos.interval ?? '4h'} EMA 交叉（保本＋追蹤）`, inline: true }
+          : pos.strategy === 'ema' || pos.strategy === 'macd'
+            ? { name: '策略', value: `${pos.interval ?? '4h'} ${STRATEGY_NAME[pos.strategy]}（保本＋追蹤）`, inline: true }
             : { name: '等級', value: `${pos.grade}（${pos.score} 分）`, inline: true },
       ],
       footer: { text: '僅供研究，非投資建議' },
@@ -1424,7 +1448,7 @@ async function mapLimit(items, limit, fn) {
   return out;
 }
 
-const BYBIT_LINEAR_TF = { '1h': '60', '2h': '120', '4h': '240', '1d': 'D' };
+const BYBIT_LINEAR_TF = { '1h': '60', '2h': '120', '4h': '240', '6h': '360', '1d': 'D' };
 
 /** Bybit 合約（linear）K 棒：下單的是合約，判斷也看合約；有些幣在 Bybit 只有合約沒有現貨 */
 async function fetchBybitLinearKlines(symbol, interval, limit) {
@@ -1472,11 +1496,32 @@ function emaCrossManagement(env) {
  * SMC 還是突破單）就不開，突破單最多同時 BREAKOUT_MAX_OPEN 張。
  */
 async function runBreakout(env, { dry = false } = {}) {
-  const useBreakout = cfg(env, 'BREAKOUT_ENABLED') === 'true';
-  const useEma = cfg(env, 'EMA_CROSS_ENABLED') === 'true';
-  if (!useBreakout && !useEma) return { enabled: false };
+  const use = {
+    breakout: cfg(env, 'BREAKOUT_ENABLED') === 'true',
+    ema: cfg(env, 'EMA_CROSS_ENABLED') === 'true',
+    macd: cfg(env, 'MACD_ZERO_ENABLED') === 'true',
+  };
+  if (!use.breakout && !use.ema && !use.macd) return { enabled: false };
   if (!env.SMC_KV) return { skipped: 'no-kv' };
-  const interval = cfg(env, 'BREAKOUT_INTERVAL');
+  const intervals = breakoutIntervals(env);
+  // 每次 tick 的請求額度由所有週期共用（4h、6h 在 UTC 0／12 點會同時收盤）
+  let budget = Number(cfg(env, 'BREAKOUT_BATCH_SIZE'));
+  const results = {};
+  for (const interval of intervals) {
+    const r = await runBreakoutInterval(env, interval, { dry, use, budget });
+    budget -= r.used ?? 0;
+    delete r.used;
+    results[interval] = r;
+  }
+  if (intervals.length === 1) return results[intervals[0]];
+  return {
+    intervals: results,
+    signals: Object.values(results).reduce((a, r) => a + (r.signals ?? 0), 0),
+    orders: Object.values(results).flatMap((r) => r.orders ?? []),
+  };
+}
+
+async function runBreakoutInterval(env, interval, { dry, use, budget }) {
   const ms = INTERVAL_MS[interval];
   if (!ms) return { error: `不支援的週期 ${interval}` };
 
@@ -1494,24 +1539,28 @@ async function runBreakout(env, { dry = false } = {}) {
 
   const opts = { lookback: Number(cfg(env, 'BREAKOUT_LOOKBACK')), stopAtr: Number(cfg(env, 'BREAKOUT_STOP_ATR')) };
   const emaOpts = { fast: Number(cfg(env, 'EMA_CROSS_FAST')), slow: Number(cfg(env, 'EMA_CROSS_SLOW')), stopAtr: Number(cfg(env, 'EMA_CROSS_STOP_ATR')) };
+  const macdOpts = { stopAtr: Number(cfg(env, 'MACD_ZERO_STOP_ATR')) };
   const dirs = csv(cfg(env, 'BREAKOUT_DIRECTIONS'));
   // Cloudflare 的對外 IP 是共用的，一次打太多會被交易所限流（HTTP 429）：
   // 每次 tick 只判斷一批，被限流／還沒更新的幣留到下一次 tick 重試（每個幣最多 BREAKOUT_MAX_TRIES 次）
   const pendingKey = `breakout:pending:${interval}`;
   const saved = JSON.parse((await env.SMC_KV.get(pendingKey)) ?? 'null');
   const state = saved?.bar === barOpen ? saved : { bar: barOpen, pending: breakoutSymbols(env), tries: {} };
-  const batchSize = Number(cfg(env, 'BREAKOUT_BATCH_SIZE'));
   const maxTries = Number(cfg(env, 'BREAKOUT_MAX_TRIES'));
-  const batch = state.pending.slice(0, batchSize);
+  const batch = state.pending.slice(0, Math.max(0, budget));
+  if (!batch.length) return { bar, waiting: 'batch-budget', remaining: state.pending.length, used: 0 };
   const scanned = await mapLimit(batch, Number(cfg(env, 'BREAKOUT_CONCURRENCY')), async (symbol) => {
     const candles = await fetchKlinesAny(env, symbol, interval, 300);
     const closed = candles.filter((c) => c.time + ms <= now);
     if (closed.at(-1)?.time !== barOpen) return { symbol, error: 'K 棒還沒更新到剛收盤那根' };
+    // 同一個幣同一根有好幾種訊號時照這個順序下單（第一張成交後，後面的會因為已有部位被略過）
     const found = [];
-    const bo = useBreakout && breakoutSignal(closed, opts);
+    const bo = use.breakout && breakoutSignal(closed, opts);
     if (bo) found.push({ symbol, strategy: 'breakout', ...bo });
-    const ec = useEma && emaCrossSignal(closed, emaOpts);
+    const ec = use.ema && emaCrossSignal(closed, emaOpts);
     if (ec) found.push({ symbol, strategy: 'ema', ...ec });
+    const mz = use.macd && macdZeroSignal(closed, macdOpts);
+    if (mz) found.push({ symbol, strategy: 'macd', ...mz });
     return { symbol, found };
   });
 
@@ -1552,6 +1601,7 @@ async function runBreakout(env, { dry = false } = {}) {
     ...(state.gaveUp.length ? { gaveUp: state.gaveUp.slice(0, 20) } : {}),
     signals: signals.length,
     orders,
+    used: batch.length,
   };
 }
 
@@ -1566,7 +1616,8 @@ async function breakoutOrder(env, sig, interval, barOpen) {
   const maxSameDir = Number(cfg(env, 'BREAKOUT_MAX_SAME_DIR'));
   const sameDir = alt.filter((p) => p.dir === sig.dir).length;
   if (maxSameDir > 0 && sameDir >= maxSameDir) return { skipped: 'max-same-dir', sameDir, maxSameDir };
-  const isEma = sig.strategy === 'ema';
+  // EMA 交叉、MACD 零軸：不設止盈，靠保本＋追蹤停損出場
+  const isEma = sig.strategy === 'ema' || sig.strategy === 'macd';
 
   try {
     const [wallet, instrument, prices] = await Promise.all([
@@ -1607,7 +1658,7 @@ async function breakoutOrder(env, sig, interval, barOpen) {
 
     const trade = await executorCall(env, 'POST', '/trade', {
       body: {
-        signal_id: `${isEma ? 'ema' : 'bo'}:${sig.symbol}:${sig.dir}:${interval}:${barOpen}`,
+        signal_id: `${SIGNAL_PREFIX[sig.strategy] ?? 'bo'}:${sig.symbol}:${sig.dir}:${interval}:${barOpen}`,
         symbol: sig.symbol,
         side: long ? 'Buy' : 'Sell',
         qty: String(qty),
@@ -1623,7 +1674,7 @@ async function breakoutOrder(env, sig, interval, barOpen) {
       symbol: sig.symbol, dir: sig.dir, entry, stop, initialStop: stop,
       targets: isEma ? [] : [{ name: 'TP1', price: tp, rr: tpR }], ladder, tickSize,
       maxFavorableR: 0, beMoved: false, trailing: false,
-      strategy: isEma ? 'ema' : 'breakout', management: isEma ? emaCrossManagement(env) : 'fixed', interval, bar: barOpen,
+      strategy: sig.strategy ?? 'breakout', management: isEma ? emaCrossManagement(env) : 'fixed', interval, bar: barOpen,
       qty, riskAmount, leverage, openedAt: Date.now(),
     }));
     return { orderId: trade.orderId, qty, riskAmount, leverage, entry, stop, tp, ladder };
@@ -1636,8 +1687,11 @@ function buildBreakoutEmbed(sig, res, interval) {
   const base = sig.symbol.replace(/USDT$/, '');
   const long = sig.dir === 'long';
   const ok = !!res.orderId;
-  const isEma = sig.strategy === 'ema';
-  const name = isEma ? 'EMA 交叉' : '突破';
+  const isEma = sig.strategy === 'ema' || sig.strategy === 'macd';
+  const name = STRATEGY_NAME[sig.strategy] ?? '突破';
+  const why = sig.strategy === 'macd'
+    ? `MACD ${long ? '由負轉正' : '由正轉負'}、收在 EMA200 ${long ? '之上' : '之下'}`
+    : `EMA20 ${long ? '上穿' : '下穿'} EMA50、收在 EMA200 ${long ? '之上' : '之下'}`;
   return {
     username: 'SMC 即時守門員',
     embeds: [{
@@ -1646,7 +1700,7 @@ function buildBreakoutEmbed(sig, res, interval) {
       description: !ok
         ? `有${name}訊號，但下單失敗：${res.error}`
         : isEma
-          ? `EMA20 ${long ? '上穿' : '下穿'} EMA50、收在 EMA200 ${long ? '之上' : '之下'}，市價進場；停損 2 ATR，賺 1R 移到成本、1.5R 後追蹤停損，不設止盈。`
+          ? `${why}，市價進場；停損 2 ATR，賺 1R 移到成本、1.5R 後追蹤停損，不設止盈。`
           : `收盤${long ? '突破' : '跌破'}近 55 根${long ? '高' : '低'}點，市價進場；停損 2 ATR、止盈 1R，之後不移動停損。`,
       fields: ok ? [
         { name: '進場約', value: fmt(res.entry), inline: true },
