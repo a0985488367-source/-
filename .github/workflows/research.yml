@@ -39,6 +39,9 @@ on:
       sub_days:
         description: '精準驗證抓最近幾天的細 K 棒'
         default: '150'
+      extra:
+        description: '額外參數（空白分隔，例如 --fee-model=split --entries=market,L0:1）；留空＝不加'
+        default: ''
       commit:
         description: '是否把結果存回倉庫'
         default: 'true'
@@ -68,6 +71,7 @@ jobs:
           LIMIT: ${{ inputs.limit }}
           SUB: ${{ inputs.sub }}
           SUB_DAYS: ${{ inputs.sub_days }}
+          EXTRA: ${{ inputs.extra }}
         run: |
           set -o pipefail
           if [ "$STUDY" = confluence ]; then SCRIPT=confluence-study; DEF_INT=30m,1h,4h; elif [ "$STUDY" = alt ]; then SCRIPT=alt-strategies; DEF_INT=1h,4h; else SCRIPT=ab-test; DEF_INT=15m,1h; fi
@@ -81,6 +85,7 @@ jobs:
             --limit="${LIMIT:-1000}" \
             --sub="$SUB" \
             --sub-days="${SUB_DAYS:-150}" \
+            $EXTRA \
             | tee ab-output.txt
 
       - name: 寫進步驟摘要

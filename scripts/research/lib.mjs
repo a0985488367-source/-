@@ -63,7 +63,7 @@ export function applyStopResearch(t, cfg = {}) {
   return t;
 }
 
-const TF_MINUTES = { '1m': 1, '5m': 5, '15m': 15, '30m': 30, '1h': 60, '2h': 120, '4h': 240, '1d': 1440 };
+const TF_MINUTES = { '1m': 1, '5m': 5, '15m': 15, '30m': 30, '1h': 60, '2h': 120, '4h': 240, '6h': 360, '12h': 720, '1d': 1440 };
 
 /** 第一根 time >= t 的索引（沒有就 -1） */
 function firstAtOrAfter(candles, t) {
