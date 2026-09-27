@@ -2,7 +2,7 @@ import { logger } from './logger.js';
 import { verifyRequest } from './hmac.js';
 import {
   handleTrade, handleAddExitLeg, handleSetStop, handleCancelAll, handleClose,
-  handlePosition, handleBalance, handleInstrument, handleHealth, handleEmergencyStop,
+  handlePosition, handleBalance, handleInstrument, handleHealth, handleEmergencyStop, handleHistory,
 } from './routes.js';
 
 const MAX_BODY_BYTES = 64 * 1024; // 交易指令的 payload 很小，64KB 綽綽有餘，順便擋掉異常大的請求
@@ -52,6 +52,10 @@ async function router(req, res) {
   if (key === 'GET /balance') {
     if (!(await checkAuth(req, res, ''))) return;
     return handleBalance(req, res);
+  }
+  if (key === 'GET /history') {
+    if (!(await checkAuth(req, res, ''))) return;
+    return handleHistory(req, res, Object.fromEntries(url.searchParams));
   }
   if (key === 'GET /instrument') {
     if (!(await checkAuth(req, res, ''))) return;

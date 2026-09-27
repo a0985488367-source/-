@@ -65,6 +65,15 @@ function stubBybitFetch(bybit) {
       if (u.includes('/v5/order/cancel-all')) return j(0, 'OK', {});
       if (u.includes('/v5/position/list')) return j(0, 'OK', { list: bybit.positions ?? [] });
       if (u.includes('/v5/market/time')) return j(0, 'OK', { timeSecond: '1' });
+      if (u.includes('/v5/execution/list')) {
+        const cursor = new URL(u).searchParams.get('cursor');
+        if (bybit.execError) return j(10001, bybit.execError, {});
+        // 第一週第一頁有下一頁，其他都是空的
+        if (!cursor && !bybit.execServed) { bybit.execServed = true; return j(0, 'OK', { list: [{ symbol: 'BTCUSDT', side: 'Buy', orderLinkId: 'bo:BTC:l:4h:abc', execPrice: '100', execQty: '1', execFee: '0.05', execTime: '1', execType: 'Trade' }], nextPageCursor: 'p2' }); }
+        if (cursor === 'p2') return j(0, 'OK', { list: [{ symbol: 'BTCUSDT', side: 'Sell', orderLinkId: '', execPrice: '110', execQty: '1', execFee: '0.05', execTime: '2', execType: 'Trade', closedSize: '1' }], nextPageCursor: '' });
+        return j(0, 'OK', { list: [], nextPageCursor: '' });
+      }
+      if (u.includes('/v5/position/closed-pnl')) return j(10016, 'service unavailable', {});
       if (u.includes('/v5/order/create')) {
         return bybit.orderError ? j(bybit.orderError.code, bybit.orderError.msg, {}) : j(0, 'OK', bybit.orderResult ?? { orderId: 'order-123' });
       }
@@ -253,5 +262,35 @@ test('POST /emergency-stop：手動觸發後，狀態會反映在 GET /health', 
     await call(baseUrl, 'POST', '/emergency-stop', { tripped: false });
     const health2 = await fetch(baseUrl + '/health').then((r) => r.json());
     assert.equal(health2.emergencyStop, false);
+  } finally { await close(); }
+});
+
+test('GET /history：一週一週往前查、每週翻頁；已平倉損益失敗不影響成交明細', async () => {
+  const bybit = { calls: [] };
+  stubBybitFetch(bybit);
+  const { baseUrl, close } = await startServer();
+  try {
+    const res = await call(baseUrl, 'GET', '/history?days=20');
+    assert.equal(res.status, 200);
+    assert.equal(res.body.days, 20);
+    assert.equal(res.body.executions.length, 2);
+    assert.equal(res.body.executions[0].orderLinkId, 'bo:BTC:l:4h:abc');
+    assert.equal(res.body.executions[1].closedSize, 1);
+    assert.ok(res.body.errors.closedPnl, '已平倉損益查詢失敗要回報錯誤');
+    const weeks = bybit.calls.filter((c) => c.url.includes('/v5/execution/list') && !c.url.includes('cursor='));
+    assert.equal(weeks.length, 3, '20 天 = 3 段（7＋7＋6 天）');
+    for (const w of weeks) {
+      const q = new URL(w.url).searchParams;
+      assert.ok(Number(q.get('endTime')) - Number(q.get('startTime')) < 7 * 86_400_000);
+    }
+  } finally { await close(); }
+});
+
+test('GET /history：沒有簽章 → 401', async () => {
+  stubBybitFetch({ calls: [] });
+  const { baseUrl, close } = await startServer();
+  try {
+    const res = await fetch(`${baseUrl}/history`);
+    assert.equal(res.status, 401);
   } finally { await close(); }
 });
