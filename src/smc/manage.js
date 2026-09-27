@@ -46,6 +46,8 @@ export const DEFAULT_MANAGEMENT = {
   stallBars: 0,          // 成交後這麼多根都沒碰到 stallMinR 就收盤出場。0 = 不使用
   stallMinR: 0.3,
   zoneCloseExit: false,  // 收盤價穿過進場區另一側就出場（需要 t.zone = { top, bottom }）
+  // 回測用：限價單成交的那根 K 棒只檢查停損，不算獲利（那根的高／低點可能發生在成交之前）
+  fillBarConservative: false,
 };
 
 /**
@@ -140,6 +142,16 @@ export function stepTrade(t, c, cfg = {}) {
       t.filledTime = c.time;
       t.barsSinceFill = 0;
       t.events.push({ type: 'filled', time: c.time, price: t.entry });
+      if (o.fillBarConservative) {
+        t.barsSinceFill = 1;
+        t.maxAdverseR = Math.min(finite(t.maxAdverseR), finite((long ? c.low - t.entry : t.entry - c.high) / risk));
+        if (long ? c.low <= t.stop : c.high >= t.stop) {
+          close(t, t.stop, risk, 'stop', 'stop', c.time);
+          t.events.push({ type: 'stop', time: c.time, price: t.stop, reason: 'stop' });
+          return true;
+        }
+        return false;
+      }
     } else {
       // 等太久都沒被碰到 → 作廢。
       // （不需要另外判斷「跌破停損」：停損必在進場價的另一側，

@@ -89,6 +89,12 @@ const VARIANTS = {
   SLR05:           { tightStopResize: 0.5 },     // 一樣虧 1R，停損一半、倉位放大一倍
   CUT05:           { scratchR: 0.5 },            // 停損不動，逆行到 0.5R 就先出場
   CUT075:          { scratchR: 0.75 },           // 停損不動，逆行到 0.75R 就先出場
+  // ── 同上，但成交那根 K 棒只算停損、不算獲利（檢查回測有沒有高估）──
+  NOW_S:           { fillBarConservative: true },
+  SLK07_S:         { fillBarConservative: true, tightStopKeepSize: 0.7 },
+  SLR07_S:         { fillBarConservative: true, tightStopResize: 0.7 },
+  SLR05_S:         { fillBarConservative: true, tightStopResize: 0.5 },
+  CUT075_S:        { fillBarConservative: true, scratchR: 0.75 },
 };
 
 const live = (t) => t.score >= LIVE_MIN_SCORE && t.tp1R >= 1.5;
