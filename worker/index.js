@@ -226,7 +226,9 @@ const DEFAULTS = {
   BREAKOUT_MAX_DELAY_MIN: '30',  // K 棒收盤超過這麼久才看到就不進場（進場價跟回測差太多）
   BREAKOUT_BATCH_SIZE: '15',     // 每次 tick（2 分鐘）最多判斷幾檔，避免被交易所限流
   BREAKOUT_CONCURRENCY: '2',     // 同時發出的 K 棒請求數
-  BREAKOUT_MAX_TRIES: '3',       // 同一根 K 棒每個幣最多試幾次（被限流就下一次 tick 再試）
+  BREAKOUT_MAX_TRIES: '6',       // 同一根 K 棒每個幣最多試幾次（被限流就下一次 tick 再試）
+  // K 棒資料源順序：Cloudflare 的共用 IP 打 Bybit／Binance 常被限流（HTTP 429），OKX 比較穩
+  BREAKOUT_PROVIDERS: 'okx,bybit-linear,bybit,binance',
 };
 
 /** 回測驗證過的三組幣（2026-09），PEPE 在 Bybit 合約是 1000PEPEUSDT，先拿掉 */
@@ -1408,16 +1410,19 @@ async function fetchBybitLinearKlines(symbol, interval, limit) {
     .sort((a, b) => a.time - b.time);
 }
 
+/** 照 BREAKOUT_PROVIDERS 的順序抓 K 棒；bybit-linear＝Bybit 合約。全部失敗就把每一家的錯誤一起丟出來 */
 async function fetchKlinesAny(env, symbol, interval, limit) {
-  let err;
-  if (BYBIT_LINEAR_TF[interval]) {
-    try { return await fetchBybitLinearKlines(symbol, interval, limit); } catch (e) { err = e; }
+  const errors = [];
+  for (const id of csv(cfg(env, 'BREAKOUT_PROVIDERS'))) {
+    try {
+      if (id === 'bybit-linear') {
+        if (BYBIT_LINEAR_TF[interval]) return await fetchBybitLinearKlines(symbol, interval, limit);
+        continue;
+      }
+      if (PROVIDERS[id]) return await PROVIDERS[id].fetchKlines(symbol, interval, { limit });
+    } catch (e) { errors.push(`${id} ${e.message}`); }
   }
-  for (const id of csv(cfg(env, 'WORKER_SCAN_PROVIDERS') ?? 'bybit,binance,okx')) {
-    if (!PROVIDERS[id]) continue;
-    try { return await PROVIDERS[id].fetchKlines(symbol, interval, { limit }); } catch (e) { err = e; }
-  }
-  throw err ?? new Error('沒有可用的資料源');
+  throw new Error(errors.join('；') || '沒有可用的資料源');
 }
 
 /**
@@ -1496,6 +1501,7 @@ async function runBreakout(env, { dry = false } = {}) {
     bar,
     checked: batch.length - retry.length - failed.length,
     retryLater: retry.length,
+    ...(retry.length ? { sampleError: `${retry[0]}：${scanned[batch.indexOf(retry[0])]?.error}` } : {}),
     remaining: state.pending.length,
     ...(state.gaveUp.length ? { gaveUp: state.gaveUp.slice(0, 20) } : {}),
     signals: signals.length,
