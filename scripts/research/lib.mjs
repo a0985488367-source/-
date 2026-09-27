@@ -43,6 +43,26 @@ export function researchTargets(sig, cfg = {}) {
   return sig.targets;
 }
 
+/**
+ * 研究用：把停損拉近（線上不用）
+ *   tightStopKeepSize  倉位照原本停損算，停損拉到原距離的這個倍數 → 打到只虧這麼多 R（R 仍以原停損為準）
+ *   tightStopResize    停損拉到原距離的這個倍數，倉位照新停損重新算 → 打到一樣虧 1R，但倉位變大、手續費佔比變高
+ */
+export function applyStopResearch(t, cfg = {}) {
+  const k = cfg.tightStopKeepSize || cfg.tightStopResize;
+  if (!(k > 0 && k < 1)) return t;
+  const newStop = t.entry - (t.entry - t.stop) * k;
+  if (cfg.tightStopKeepSize) {
+    t.initialStop = t.stop;
+    t.stop = newStop;
+  } else {
+    t.stop = newStop;
+    t.initialStop = newStop;
+    if (Number.isFinite(t.stopPct)) t.stopPct *= k;
+  }
+  return t;
+}
+
 /** 讓每個訊號照管理規則往後逐根跑到結束；還沒結束的不計入 */
 export function runSignals(signals, candlesBy, cfg) {
   const closed = [];
@@ -55,6 +75,7 @@ export function runSignals(signals, candlesBy, cfg) {
       hitTargets: [], events: [], remaining: 1, realizedR: 0,
       barsSinceOpen: 0, barsSinceFill: 0, maxFavorableR: 0, maxAdverseR: 0,
     };
+    applyStopResearch(t, cfg);
     for (let j = sig.index + 1; j < candles.length; j++) {
       if (stepTrade(t, candles[j], cfg)) break;
     }

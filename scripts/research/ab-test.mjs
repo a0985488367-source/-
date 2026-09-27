@@ -82,6 +82,13 @@ const VARIANTS = {
   TPS075:          { tpScale: 0.75 },
   HALF1:           { scalpR: 1, scalpFraction: 0.5 },
   HALF15:          { scalpR: 1.5, scalpFraction: 0.5 },
+  // ── 停損拉近（保本／追蹤停損照舊）──
+  SLK07:           { tightStopKeepSize: 0.7 },   // 倉位不變，停損拉到 7 成 → 打到虧 0.7R
+  SLK05:           { tightStopKeepSize: 0.5 },   // 倉位不變，停損拉到一半 → 打到虧 0.5R
+  SLR07:           { tightStopResize: 0.7 },     // 一樣虧 1R，停損 7 成、倉位放大
+  SLR05:           { tightStopResize: 0.5 },     // 一樣虧 1R，停損一半、倉位放大一倍
+  CUT05:           { scratchR: 0.5 },            // 停損不動，逆行到 0.5R 就先出場
+  CUT075:          { scratchR: 0.75 },           // 停損不動，逆行到 0.75R 就先出場
 };
 
 const live = (t) => t.score >= LIVE_MIN_SCORE && t.tp1R >= 1.5;
