@@ -1391,8 +1391,25 @@ async function mapLimit(items, limit, fn) {
   return out;
 }
 
+const BYBIT_LINEAR_TF = { '1h': '60', '2h': '120', '4h': '240', '1d': 'D' };
+
+/** Bybit 合約（linear）K 棒：下單的是合約，判斷也看合約；有些幣在 Bybit 只有合約沒有現貨 */
+async function fetchBybitLinearKlines(symbol, interval, limit) {
+  const q = new URLSearchParams({ category: 'linear', symbol, interval: BYBIT_LINEAR_TF[interval], limit: String(Math.min(1000, limit)) });
+  const res = await fetch(`https://api.bybit.com/v5/market/kline?${q}`);
+  if (!res.ok) throw new Error(`bybit linear HTTP ${res.status}`);
+  const data = await res.json();
+  if (data.retCode !== 0 || !Array.isArray(data.result?.list) || !data.result.list.length) throw new Error(data.retMsg || 'bybit linear 沒有資料');
+  return data.result.list
+    .map((r) => ({ time: +r[0], open: +r[1], high: +r[2], low: +r[3], close: +r[4], volume: +r[5] }))
+    .sort((a, b) => a.time - b.time);
+}
+
 async function fetchKlinesAny(env, symbol, interval, limit) {
   let err;
+  if (BYBIT_LINEAR_TF[interval]) {
+    try { return await fetchBybitLinearKlines(symbol, interval, limit); } catch (e) { err = e; }
+  }
   for (const id of csv(cfg(env, 'WORKER_SCAN_PROVIDERS') ?? 'bybit,binance,okx')) {
     if (!PROVIDERS[id]) continue;
     try { return await PROVIDERS[id].fetchKlines(symbol, interval, { limit }); } catch (e) { err = e; }
@@ -1436,7 +1453,8 @@ async function runBreakout(env, { dry = false } = {}) {
     const sig = breakoutSignal(closed, opts);
     return sig ? { symbol, ...sig } : { symbol };
   });
-  const fetchErrors = scanned.filter((x) => x?.error).length;
+  const failed = scanned.map((x, i) => (x?.error ? `${symbols[i]}：${x.error}` : null)).filter(Boolean);
+  const fetchErrors = failed.length;
   const signals = scanned.filter((x) => x?.dir && dirs.includes(x.dir));
   // 先記「這根判斷過了」再下單：中途出錯也不會在下一次 tick 重複進場（Executor 另有 signal_id 冪等）
   if (!dry) await env.SMC_KV.put(doneKey, String(barOpen), { expirationTtl: 7 * 86400 });
@@ -1448,7 +1466,7 @@ async function runBreakout(env, { dry = false } = {}) {
     orders.push({ symbol: sig.symbol, dir: sig.dir, ...res });
     if (res.orderId || res.error) await postDiscord(env, buildBreakoutEmbed(sig, res, interval)).catch(() => {});
   }
-  return { bar, checked: symbols.length, fetchErrors, signals: signals.length, orders };
+  return { bar, checked: symbols.length, fetchErrors, ...(failed.length ? { failed: failed.slice(0, 20) } : {}), signals: signals.length, orders };
 }
 
 async function breakoutOrder(env, sig, interval, barOpen) {

@@ -83,6 +83,7 @@ function klinesFor(symbol) {
   return c;
 }
 
+const klineCategories = [];
 function stub({ discord, executor, lastPrice = 105 }) {
   globalThis.fetch = async (url, init = {}) => {
     const u = String(url);
@@ -90,6 +91,7 @@ function stub({ discord, executor, lastPrice = 105 }) {
     if (u.startsWith(MARKET_URL)) return j({ generatedAt: new Date().toISOString(), rows: [] });
     if (u.includes('api.bybit.com/v5/market/kline')) {
       const symbol = new URL(u).searchParams.get('symbol');
+      klineCategories.push(new URL(u).searchParams.get('category'));
       const list = klinesFor(symbol).reverse().map((k) => [String(k.time), String(k.open), String(k.high), String(k.low), String(k.close), '1', '1']);
       return j({ retCode: 0, result: { list } });
     }
@@ -148,6 +150,7 @@ test('Worker 突破：4h 收盤突破 → 市價進場、停損 2 ATR、止盈 1
   assert.equal(trade.ladder[0].qty, trade.qty, '止盈一次全部出場');
   assert.ok(Math.abs(Number(trade.qty) * (entry - stop) - 30) < 1, '風險約 1000 × 3% = 30');
   assert.match(trade.signal_id, /^bo:ABCUSDT:long:4h:\d+$/);
+  assert.ok(klineCategories.length && klineCategories.every((c) => c === 'linear'), '判斷用合約 K 棒');
 
   const pos = JSON.parse(await env.SMC_KV.get('open-pos:ABCUSDT:long'));
   assert.equal(pos.strategy, 'breakout');
