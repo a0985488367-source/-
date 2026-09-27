@@ -80,7 +80,7 @@ const EXITS = {
 const ONLY_EXITS = [...opt('exits', '').split(',').filter(Boolean), ...ONLY.filter((x) => x in EXITS)];
 if (ONLY_EXITS.length) for (const k of Object.keys(EXITS)) if (!ONLY_EXITS.includes(k)) delete EXITS[k];
 // 這些組合另外印詳細統計（勝率、連虧、多空、帳戶模擬）
-const DETAIL = opt('detail', 'DONCH20,DONCH55').split(',').filter(Boolean);
+const DETAIL = opt('detail', 'DONCH55,EMA_20_50,MACD_ZERO,ICHIMOKU,SUPERTREND').split(',').filter(Boolean);
 const DETAIL_TF = opt('detail-tf', '4h');
 
 const prepared = new Map();
