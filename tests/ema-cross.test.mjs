@@ -80,16 +80,16 @@ function makeKv(init = {}) {
 }
 
 /** EMAUSDT 最後一根收盤剛好 EMA 交叉（沒有突破）；其他幣沒有訊號 */
-function klinesFor(symbol) {
-  const lastClosed = Math.floor(Date.now() / H4) * H4 - H4;
-  const start = lastClosed - 299 * H4;
-  if (!symbol.startsWith('EMA')) return series(301, (i) => 100 + i * 0.001, start);
+function klinesFor(symbol, step = H4) {
+  const lastClosed = Math.floor(Date.now() / step) * step - step;
+  const start = lastClosed - 299 * step;
+  if (!symbol.startsWith('EMA')) return series(301, (i) => 100 + i * 0.001, start).map((k, i) => ({ ...k, time: start + i * step }));
   const all = series(700, wave);
   let end = 299;
   while (!emaCrossSignal(all.slice(end - 299, end + 1))) end++;
   const w = all.slice(end - 299, end + 2); // 300 根收盤＋1 根還沒收盤
   assert.equal(breakoutSignal(w.slice(0, 300)), null);
-  return w.map((k, i) => ({ ...k, time: start + i * H4 }));
+  return w.map((k, i) => ({ ...k, time: start + i * step }));
 }
 
 function stub({ discord = [], executor, prices = {} }) {
@@ -98,8 +98,9 @@ function stub({ discord = [], executor, prices = {} }) {
     const j = (o) => new Response(JSON.stringify(o), { status: 200 });
     if (u.startsWith(MARKET_URL)) return j({ generatedAt: new Date().toISOString(), rows: [] });
     if (u.includes('api.bybit.com/v5/market/kline')) {
-      const symbol = new URL(u).searchParams.get('symbol');
-      const list = klinesFor(symbol).reverse().map((k) => [String(k.time), String(k.open), String(k.high), String(k.low), String(k.close), '1', '1']);
+      const q = new URL(u).searchParams;
+      // K 棒時間照請求的週期排（Bybit interval 是分鐘數），6h 的收盤時間才會對得上
+      const list = klinesFor(q.get('symbol'), Number(q.get('interval')) * 60_000 || H4).reverse().map((k) => [String(k.time), String(k.open), String(k.high), String(k.low), String(k.close), '1', '1']);
       return j({ retCode: 0, result: { list } });
     }
     if (u.includes('api.bybit.com/v5/market/tickers')) {

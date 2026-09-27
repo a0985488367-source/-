@@ -1,0 +1,26 @@
+# 把突破／EMA 交叉／MACD 零軸開的單全部市價平倉（SMC 的單不動）
+name: 平掉突破／EMA／MACD 的單
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry:
+        description: '試跑（true＝只列出會平哪些，不下單）'
+        default: 'true'
+
+jobs:
+  close:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: 平倉
+        env:
+          WORKER_URL: ${{ vars.WORKER_URL || 'https://smc-signals.crypto-radar-guardian-24x7.workers.dev' }}
+          EXECUTOR_URL: ${{ secrets.EXECUTOR_URL }}
+          EXECUTOR_HMAC_SECRET: ${{ secrets.EXECUTOR_HMAC_SECRET }}
+          DRY: ${{ inputs.dry }}
+        run: node scripts/close-alt-positions.mjs

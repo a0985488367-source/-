@@ -572,13 +572,13 @@ OKX 的 6H K 棒預設用香港時間切，程式改用 `6Hutc` 跟其他交易�
 
 | 變數 | 預設 | 說明 |
 |---|---|---|
-| `BREAKOUT_ENABLED` | false（wrangler.toml 開啟） | 開關，也要 KV 的自動下單開關是開的 |
+| `BREAKOUT_ENABLED` | false（2026-09-28 起關閉） | 開關，也要 KV 的自動下單開關是開的 |
 | `BREAKOUT_RISK_PCT` | 3 | 每單冒帳戶總額的 %（回測 5% 會爆倉） |
 | `BREAKOUT_MAX_OPEN` | 5（wrangler.toml 設 3） | 突破／EMA 交叉／MACD 零軸加起來最多同時幾張 |
 | `BREAKOUT_MAX_SAME_DIR` | 3（wrangler.toml 設 0＝不限） | 其中同方向最多幾張 |
 | `BREAKOUT_INTERVALS` | 空（wrangler.toml 設 4h,6h） | 逗號分隔的週期；空＝只用 `BREAKOUT_INTERVAL` |
-| `MACD_ZERO_ENABLED`／`MACD_ZERO_STOP_ATR` | false（wrangler.toml 開啟）／2 | MACD 零軸開關、停損幾倍 ATR；保本／追蹤跟 EMA 交叉共用 |
-| `EMA_CROSS_ENABLED` | false（wrangler.toml 開啟） | EMA 交叉開關 |
+| `MACD_ZERO_ENABLED`／`MACD_ZERO_STOP_ATR` | false（2026-09-28 起關閉）／2 | MACD 零軸開關、停損幾倍 ATR；保本／追蹤跟 EMA 交叉共用 |
+| `EMA_CROSS_ENABLED` | false（2026-09-28 起關閉） | EMA 交叉開關 |
 | `EMA_CROSS_FAST`／`EMA_CROSS_SLOW`／`EMA_CROSS_STOP_ATR` | 20／50／2 | 快慢均線、停損幾倍 ATR |
 | `EMA_CROSS_BE_R`／`EMA_CROSS_TRAIL_FROM_R`／`EMA_CROSS_TRAIL_GAP_R` | 1／1.5／1.5 | 幾 R 保本、幾 R 開始追蹤、追蹤距離 |
 | `BREAKOUT_TP_R` | 1 | 固定止盈 R |

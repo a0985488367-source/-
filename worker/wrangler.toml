@@ -69,15 +69,16 @@ AUTO_TRADE_BTC_TREND_EMA = "200"
 # 收盤突破近 55 根高／低點且在 EMA200 同一側就市價進場；停損 2 ATR、止盈固定 1R，之後不動。
 # 回測（2026-09，三組各 15 幣、5 分鐘精準版）扣手續費每筆約 +0.04～+0.11R、勝率約 55%。
 # 同一個幣已經有部位就不開。幣種清單留空＝程式內建的 44 檔
-BREAKOUT_ENABLED = "true"
+# 2026-09-28 使用者決定：突破／EMA 交叉／MACD 零軸全部關掉（上線當天 6 張同時浮虧），只留 SMC
+BREAKOUT_ENABLED = "false"
 BREAKOUT_RISK_PCT = "3"
 BREAKOUT_TP_R = "1"
 # 4 小時 EMA20／50 均線交叉（見 src/strategies/ema-cross.js）：跟突破單用同一批幣和 K 棒，
 # EMA20 穿過 EMA50、收在 EMA200 同一側就市價進場；停損 2 ATR，賺 1R 移到成本、1.5R 後追蹤，不設止盈。
 # 回測（2026-09，三組各 15 幣、5 分鐘精準版）12 格全賺，扣手續費每筆平均約 +0.3R、勝率約 60%。
-EMA_CROSS_ENABLED = "true"
+EMA_CROSS_ENABLED = "false"
 # MACD 穿零軸（見 src/strategies/macd-zero.js）：出場跟 EMA 交叉一樣（保本＋追蹤）
-MACD_ZERO_ENABLED = "true"
+MACD_ZERO_ENABLED = "false"
 # 三個策略在 4h 和 6h 都判斷；幣種留空＝內建 74 檔（五組回測驗證過的幣）
 BREAKOUT_INTERVALS = "4h,6h"
 # 突破／EMA 交叉／MACD 零軸加起來同時最多 3 張，不限方向（2026-09 組合模擬：74 檔、約 800 天，
