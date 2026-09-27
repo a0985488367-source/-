@@ -76,6 +76,7 @@ const EXITS = {
   '1R 保本＋追蹤': { tpR: 20, cfg: { breakevenAtR: 1, trailFromR: 1.5, trailGapR: 1.5 } },
   '目前 SMC 保本＋追蹤': { tpR: 20, cfg: {} },
 };
+const EXITS_ALL = { ...EXITS };
 // --exits=固定 1R,固定 2R 只測這幾種出場
 const ONLY_EXITS = [...opt('exits', '').split(',').filter(Boolean), ...ONLY.filter((x) => x in EXITS)];
 if (ONLY_EXITS.length) for (const k of Object.keys(EXITS)) if (!ONLY_EXITS.includes(k)) delete EXITS[k];
@@ -159,6 +160,76 @@ function printDetails(details, mid, netR) {
   printTable(log, ['策略', '出場', '期間', '筆數', '勝率', '平均賺', '平均虧', '每筆', '最長連虧', '多單', '空單', '帳戶 1%', '帳戶 2%', '帳戶 3%', '2%＋未保本最多5張'], rows);
 }
 
+/**
+ * 組合風險模擬：--only（工作流程的 variants 欄位）放「策略:出場」，例如
+ *   DONCH55:固定 1R,EMA_20_50:1R 保本＋追蹤
+ * 會把這幾組的交易合在同一個帳戶裡跑（同一個幣同時只抱一張，跟線上一樣），
+ * 列出每單風險 % × 最多同時幾張 × 同方向最多幾張 的最後倍數、最大回撤、每月成長。
+ */
+const COMBO = ONLY.filter((x) => x.includes(':')).map((x) => {
+  const [name, exitName] = x.split(':');
+  if (!STRATEGIES[name] && !ZOO[name]) throw new Error(`沒有這個策略：${name}`);
+  if (!EXITS_ALL[exitName]) throw new Error(`沒有這個出場：${exitName}`);
+  return { name, exitName };
+});
+
+function runCombo(candlesBy, mid, netR) {
+  const interval = INTERVALS[0];
+  const DAY = 86_400_000;
+  const per = COMBO.map(({ name, exitName }) => {
+    const fn = STRATEGIES[name] ?? ZOO[name];
+    STRATEGIES[name] = fn;
+    const { tpR, cfg } = EXITS_ALL[exitName];
+    const sigs = SYMBOLS.flatMap((sym) => {
+      const c = candlesBy.get(`${sym}|${interval}`);
+      return c ? buildSignals(sym, interval, c, name) : [];
+    });
+    const s = withTargets(sigs, tpR);
+    // 上限算「所有還開著的單」（跟線上最多同時幾張一樣），所以不帶保本時間
+    const tag = (t) => ({ ...t, r: netR(t), beTime: null, label: `${name}／${exitName}` });
+    const coarse = onePerSymbol(runSignals(s, candlesBy, cfg)).map(tag);
+    const fine = SUB ? onePerSymbol(runSignals(s, candlesBy, { ...cfg, subBars: true })).map(tag) : [];
+    return { label: `${name}／${exitName}`, coarse, fine };
+  });
+  const groups = per.length > 1 ? [...per.map((p) => [p]), per] : [per];
+  const RISKS = [1, 2, 3, 4, 5];
+  const CAPS = [3, 5, 8, Infinity];
+  const DIRS = [Infinity, 3];
+  for (const g of groups) {
+    const all = (k) => g.flatMap((p) => p[k]);
+    const periods = [
+      ['原週期 前半', all('coarse').filter((t) => t.half === 0)],
+      ['原週期 後半', all('coarse').filter((t) => t.half === 1)],
+      ['5M 前半', all('fine').filter((t) => t.filledTime < mid)],
+      ['5M 後半', all('fine').filter((t) => t.filledTime >= mid)],
+    ].map(([n, xs]) => {
+      const sorted = [...xs].sort((a, b) => a.filledTime - b.filledTime);
+      const days = sorted.length ? (Math.max(...sorted.map((t) => t.closedTime)) - sorted[0].filledTime) / DAY : 0;
+      return { n, xs: sorted, days };
+    });
+    const rows = [];
+    for (const risk of RISKS) for (const cap of CAPS) for (const dir of DIRS) {
+      if (dir !== Infinity && dir >= cap) continue;
+      const res = periods.map((p) => {
+        const x = simulatePortfolio(p.xs, { riskPct: risk, maxAtRisk: cap, maxSameDirAtRisk: dir, oneBySymbol: true });
+        const monthly = p.days > 0 ? (x.multiple ** (30 / p.days) - 1) * 100 : 0;
+        return { ...x, monthly };
+      });
+      rows.push([
+        `${risk}%`, cap === Infinity ? '不限' : String(cap), dir === Infinity ? '不限' : String(dir),
+        ...res.map((x) => `${x.multiple.toFixed(2)}x／${x.maxDdPct.toFixed(0)}%`),
+        `${Math.max(...res.map((x) => x.maxDdPct)).toFixed(0)}%`,
+        `${Math.min(...res.map((x) => x.monthly)).toFixed(1)}%`,
+        `${(res.reduce((a, x) => a + x.monthly, 0) / res.length).toFixed(1)}%`,
+      ]);
+    }
+    const names = g.map((p) => p.label).join(' ＋ ');
+    log(`\n■ 組合：${names}（${interval}；筆數 ${periods.map((p) => `${p.n} ${p.xs.length}`).join('、')}；天數 ${periods.map((p) => p.days.toFixed(0)).join('／')}）`);
+    log('  每格＝最後倍數／最大回撤；每月＝換算成每 30 天的複利成長；同一個幣同時只抱一張');
+    printTable(log, ['每單風險', '最多同時', '同方向最多', '原週期 前半', '原週期 後半', '5M 前半', '5M 後半', '最大回撤', '每月（最差段）', '每月（平均）'], rows);
+  }
+}
+
 const withTargets = (sigs, tpR) => sigs.map((s) => ({
   ...s,
   targets: [{ name: 'TP1', price: s.dir === 'long' ? s.entry + (s.entry - s.stop) * tpR : s.entry - (s.stop - s.entry) * tpR, rr: tpR }],
@@ -187,6 +258,8 @@ const withTargets = (sigs, tpR) => sigs.map((s) => ({
   const netR = (t) => t.r - FEE / t.stopPct;
   const cell = (xs) => (xs.length ? `${r2(xs.reduce((a, t) => a + netR(t), 0) / xs.length)}（${xs.length}）` : '-');
   const weeks = SUB_DAYS / 7;
+
+  if (COMBO.length) { runCombo(candlesBy, mid, netR); return; }
 
   const details = [];
   const summary = [];
