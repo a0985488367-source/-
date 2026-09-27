@@ -49,5 +49,6 @@ export function breakoutSignal(candles, opts = {}, i = candles.length - 1, pre =
   if (c > hi && c > e && !(prev > hiPrev)) dir = 'long';
   else if (c < lo && c < e && !(prev < loPrev)) dir = 'short';
   if (!dir) return null;
-  return { dir, stopDistance: a * o.stopAtr, atr: a, close: c, time: candles[i].time };
+  // level：被突破的那條線（做多＝前 n 根最高點、做空＝最低點），回測「突破回踩」進場用
+  return { dir, stopDistance: a * o.stopAtr, atr: a, close: c, time: candles[i].time, level: dir === 'long' ? hi : lo };
 }
