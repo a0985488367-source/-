@@ -76,9 +76,16 @@ BREAKOUT_TP_R = "1"
 # EMA20 穿過 EMA50、收在 EMA200 同一側就市價進場；停損 2 ATR，賺 1R 移到成本、1.5R 後追蹤，不設止盈。
 # 回測（2026-09，三組各 15 幣、5 分鐘精準版）12 格全賺，扣手續費每筆平均約 +0.3R、勝率約 60%。
 EMA_CROSS_ENABLED = "true"
-# 突破單＋EMA 交叉單加起來最多同時 5 張，其中同方向最多 3 張（組合風險模擬，2026-09）
-BREAKOUT_MAX_OPEN = "5"
-BREAKOUT_MAX_SAME_DIR = "3"
+# MACD 穿零軸（見 src/strategies/macd-zero.js）：出場跟 EMA 交叉一樣（保本＋追蹤）
+MACD_ZERO_ENABLED = "true"
+# 三個策略在 4h 和 6h 都判斷；幣種留空＝內建 74 檔（五組回測驗證過的幣）
+BREAKOUT_INTERVALS = "4h,6h"
+# 突破／EMA 交叉／MACD 零軸加起來同時最多 3 張，不限方向（2026-09 組合模擬：74 檔、約 800 天，
+# 每單 3%＋最多 3 張 → 最大回撤約 39%、平均每月約 +19%；原本 5 張＋同向 3 張回撤 67%）
+BREAKOUT_MAX_OPEN = "3"
+BREAKOUT_MAX_SAME_DIR = "0"
+# 74 檔 × 兩個週期，每次 tick 多判斷幾檔（UTC 0／12 點 4h 跟 6h 同時收盤）
+BREAKOUT_BATCH_SIZE = "20"
 # Worker 自己即時掃描（需要 Workers Paid；開啟前留意對外部交易所 API 的
 # 請求量會增加，見 index.js 開頭的說明）。採分批架構：候選池 120 檔，
 # 每 10 分鐘只真的重新掃描其中 20 檔，結果累積進 KV，繞完一輪（120/20=6
