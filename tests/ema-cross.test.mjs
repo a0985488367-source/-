@@ -153,7 +153,7 @@ test('Worker EMA 交叉：市價進場、停損 2 ATR、不掛止盈、每單 3%
   const trade = executor.calls.find((c) => c.url.endsWith('/trade')).body;
   assert.equal(trade.side, 'Buy');
   assert.deepEqual(trade.ladder, [], 'EMA 交叉單不設止盈');
-  assert.match(trade.signal_id, /^ema:EMAUSDT:long:4h:\d+$/);
+  assert.match(trade.signal_id, /^ema:EMA:l:4h:[0-9a-z]+$/);
   const entry = order.entry;
   const stop = Number(trade.stop_loss);
   assert.ok(Math.abs(Number(trade.qty) * (entry - stop) - 30) < 1, '風險約 1000 × 3% = 30');
@@ -277,7 +277,7 @@ test('Worker MACD 零軸：訊號下單不掛止盈、部位用保本＋追蹤�
   assert.equal(out.breakout.orders[0]?.strategy, 'macd', JSON.stringify(out.breakout));
   const trade = executor.calls.find((c) => c.url.endsWith('/trade')).body;
   assert.deepEqual(trade.ladder, []);
-  assert.match(trade.signal_id, /^macd:MACDUSDT:/);
+  assert.match(trade.signal_id, /^macd:MACD:[ls]:4h:[0-9a-z]+$/);
   const pos = JSON.parse(await env.SMC_KV.get(`open-pos:MACDUSDT:${out.breakout.orders[0].dir}`));
   assert.equal(pos.strategy, 'macd');
   assert.equal(pos.management.breakevenAtR, 1);
