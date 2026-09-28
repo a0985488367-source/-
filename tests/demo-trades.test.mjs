@@ -9,6 +9,7 @@ test('strategyOf：依 signal_id 前綴分策略', () => {
   assert.equal(strategyOf('bo:TRXUSDT:short:4h:1790467200000'), 'breakout');
   assert.equal(strategyOf('ema:ETH:l:4h:x'), 'ema');
   assert.equal(strategyOf('macd:SOL:l:6h:x'), 'macd');
+  assert.equal(strategyOf('fo:ATOM:s:4h:x'), 'fakeout');
   assert.equal(strategyOf('BTCUSDT:long:1h:85681.83'), 'smc');
   assert.equal(strategyOf(''), 'manual');
 });

@@ -79,6 +79,12 @@ BREAKOUT_TP_R = "1"
 EMA_CROSS_ENABLED = "false"
 # MACD 穿零軸（見 src/strategies/macd-zero.js）：出場跟 EMA 交叉一樣（保本＋追蹤）
 MACD_ZERO_ENABLED = "false"
+# 假突破反手（見 src/strategies/fakeout.js，2026-09-28 使用者決定上線）：結構高／低點被收盤突破後，
+# 20 根內沒延續、反而收盤跌破最近的小波段點又回到突破線內（MSS）→ 反手市價進場；
+# 停損在假突破極值外 0.1 ATR、止盈 1R（BREAKOUT_TP_R）。用 BREAKOUT_INTERVALS、每單 BREAKOUT_RISK_PCT、
+# 跟其他策略共用 BREAKOUT_MAX_OPEN。回測（74 檔、5 分鐘精準版）4h 20 格 13 格賺、6h 16 格賺，
+# 每單約 +0.02（長期）～+0.16R（近 150 天）
+FAKEOUT_ENABLED = "true"
 # 三個策略在 4h 和 6h 都判斷；幣種留空＝內建 74 檔（五組回測驗證過的幣）
 BREAKOUT_INTERVALS = "4h,6h"
 # 突破／EMA 交叉／MACD 零軸加起來同時最多 3 張，不限方向（2026-09 組合模擬：74 檔、約 800 天，

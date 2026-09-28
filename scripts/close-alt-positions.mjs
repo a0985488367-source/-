@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 把突破／EMA 交叉／MACD 零軸開的單全部市價平倉（SMC 的單不動）。
+ * 把突破／EMA 交叉／MACD 零軸／假突破反手開的單全部市價平倉（SMC 的單不動）。
  *
  * 做法：跟 Worker 拿追蹤中的部位（/auto-trade/status?detail=1），挑出 strategy 是
  * breakout／ema／macd 的，再對照 Executor 的實際持倉，有持倉的才叫 Executor POST /close。
@@ -18,7 +18,7 @@ const WORKER = String(process.env.WORKER_URL || '').replace(/\/$/, '');
 const EXEC = String(process.env.EXECUTOR_URL || '').replace(/\/$/, '');
 const SECRET = process.env.EXECUTOR_HMAC_SECRET || '';
 const DRY = process.env.DRY === '1' || process.env.DRY === 'true';
-const ALT = new Set(['breakout', 'ema', 'macd']);
+const ALT = new Set(['breakout', 'ema', 'macd', 'fakeout']);
 const lines = [];
 const log = (s = '') => { console.log(s); lines.push(s); };
 

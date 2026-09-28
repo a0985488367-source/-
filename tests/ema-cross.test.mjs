@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { emaCrossSignal } from '../src/strategies/ema-cross.js';
 import { breakoutSignal } from '../src/strategies/breakout.js';
+import { fakeoutSignal } from '../src/strategies/fakeout.js';
 import { prepare, ZOO } from '../scripts/research/strategy-zoo.mjs';
 import worker from '../worker/index.js';
 
@@ -296,4 +297,46 @@ test('Worker：KV 的 list 延遲（最終一致）時，同一輪連續下單�
   const placed = out.breakout.orders.filter((o) => o.orderId);
   assert.equal(placed.length, 2, JSON.stringify(out.breakout.orders));
   assert.equal(out.breakout.orders.find((o) => !o.orderId)?.skipped, 'max-open');
+});
+
+test('Worker 假突破反手：停損用假突破極值外的固定價格、止盈 1R、signal_id 用 fo 開頭、部位不移動停損', async () => {
+  // 隨機走勢裡找一段最後一根剛好出現假突破 MSS 的 K 棒
+  let s = 3;
+  const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647) - 0.5;
+  let p = 100;
+  const all = Array.from({ length: 1500 }, () => {
+    const o = p;
+    p = Math.max(1, p * (1 + rnd() * 0.03));
+    return { time: 0, open: o, high: Math.max(o, p) * (1 + Math.abs(rnd()) * 0.01), low: Math.min(o, p) * (1 - Math.abs(rnd()) * 0.01), close: p, volume: 1 };
+  });
+  let end = 299;
+  while (end < 1499 && !fakeoutSignal(all.slice(end - 299, end + 1))) end++;
+  assert.ok(end < 1499, '測試資料要找得到假突破');
+  const sig = fakeoutSignal(all.slice(end - 299, end + 1));
+  const lastClosed = Math.floor(Date.now() / H4) * H4 - H4;
+  const w = all.slice(end - 299, end + 2).map((k, i) => ({ ...k, time: lastClosed - 299 * H4 + i * H4 }));
+  const executor = { calls: [] };
+  stub({ executor });
+  const orig = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes('api.bybit.com/v5/market/kline') && new URL(String(url)).searchParams.get('symbol') === 'FAKEUSDT') {
+      const list = [...w].reverse().map((k) => [String(k.time), String(k.open), String(k.high), String(k.low), String(k.close), '1', '1']);
+      return new Response(JSON.stringify({ retCode: 0, result: { list } }), { status: 200 });
+    }
+    return orig(url, init);
+  };
+  const env = makeEnv({}, { BREAKOUT_SYMBOLS: 'FAKEUSDT', BREAKOUT_ENABLED: 'false', EMA_CROSS_ENABLED: 'false', FAKEOUT_ENABLED: 'true' });
+  const out = await runWorker(env);
+  const order = out.breakout.orders[0];
+  assert.equal(order?.strategy, 'fakeout', JSON.stringify(out.breakout));
+  assert.equal(order.dir, sig.dir);
+  const trade = executor.calls.find((c) => c.url.endsWith('/trade')).body;
+  assert.match(trade.signal_id, /^fo:FAKE:[ls]:4h:[0-9a-z]+$/);
+  assert.ok(Math.abs(Number(trade.stop_loss) - sig.stopPrice) <= 0.01);
+  const risk = Math.abs(sig.close - sig.stopPrice);
+  assert.equal(trade.ladder.length, 1);
+  assert.ok(Math.abs(Number(trade.ladder[0].price) - (sig.close + (sig.dir === 'long' ? risk : -risk))) <= 0.01);
+  const pos = JSON.parse(await env.SMC_KV.get(`open-pos:FAKEUSDT:${sig.dir}`));
+  assert.equal(pos.strategy, 'fakeout');
+  assert.equal(pos.management, 'fixed');
 });
