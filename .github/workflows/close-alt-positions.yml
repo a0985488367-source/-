@@ -1,4 +1,4 @@
-# 把突破／EMA 交叉／MACD 零軸開的單全部市價平倉（SMC 的單不動）
+# 把突破／EMA 交叉／MACD 零軸開的單全部市價平倉（scope=system 時連 SMC 一起平；手動單不動）
 name: 平掉突破／EMA／MACD 的單
 
 on:
@@ -7,6 +7,11 @@ on:
       dry:
         description: '試跑（true＝只列出會平哪些，不下單）'
         default: 'true'
+      scope:
+        description: '要平哪些：alt＝突破／EMA／MACD 等策略的單；system＝系統開的所有單（含 SMC）。手動單一律不動'
+        type: choice
+        options: [alt, system]
+        default: alt
 
 jobs:
   close:
@@ -23,4 +28,5 @@ jobs:
           EXECUTOR_URL: ${{ secrets.EXECUTOR_URL }}
           EXECUTOR_HMAC_SECRET: ${{ secrets.EXECUTOR_HMAC_SECRET }}
           DRY: ${{ inputs.dry }}
+          SCOPE: ${{ inputs.scope }}
         run: node scripts/close-alt-positions.mjs

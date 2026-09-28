@@ -43,9 +43,9 @@ MAX_MARKET_AGE_MIN = "240"
 ALERT_TTL_SEC = "21600"
 NEAR_PCT = "0.08"
 # 自動下單（選用，預設關閉，開關另外看 KV 的 auto-trade:enabled）
-# SMC 進場區自動下單：2026-09-28 晚上使用者決定一切重來，真錢帳戶只跑 SMC 自動下單、每單 5%
-# （精準版回測每筆約 0R，使用者知道；下面的順勢策略組合全部關掉）
-SMC_AUTO_TRADE_ENABLED = "true"
+# SMC 進場區自動下單：2026-09-28 晚上改成只跑 SMC、每單 5%，一晚 3 筆全虧（−43U）；
+# 同一晚的條件組合回測（smc-mix，約 1000 組）也找不到穩定優勢 → 2026-09-29 使用者決定先關掉，只推播
+SMC_AUTO_TRADE_ENABLED = "false"
 AUTO_TRADE_RISK_PCT = "5"
 # 槓桿照評分線性插值：評分等於 MIN_SCORE 給 MIN 倍，100 分給 MAX 倍
 AUTO_TRADE_LEVERAGE_MIN = "3"
