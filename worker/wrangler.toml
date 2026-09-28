@@ -43,7 +43,7 @@ MAX_MARKET_AGE_MIN = "240"
 ALERT_TTL_SEC = "21600"
 NEAR_PCT = "0.08"
 # 自動下單（選用，預設關閉，開關另外看 KV 的 auto-trade:enabled）
-# SMC 進場區自動下單：2026-09-28 使用者要求先停止自動下單（等全策略回測結果再決定），SMC 只推播不下單
+# SMC 進場區自動下單：2026-09-28 關掉（精準版回測每筆約 0R），SMC 只推播不下單；改跑下面的順勢策略組合
 SMC_AUTO_TRADE_ENABLED = "false"
 AUTO_TRADE_RISK_PCT = "3"
 # 槓桿照評分線性插值：評分等於 MIN_SCORE 給 MIN 倍，100 分給 MAX 倍
@@ -67,31 +67,38 @@ AUTO_TRADE_MIN_SIZE_PCT = "50"
 AUTO_TRADE_MIN_TP1_RR = "1.5"
 # BTC 同週期收在這條 EMA 之上（漲勢）就不下空單；0＝不限制
 AUTO_TRADE_BTC_TREND_EMA = "200"
-# 4 小時突破策略（跟 SMC 一起跑，見 src/strategies/breakout.js）：每根 4h K 棒收盤後，
-# 收盤突破近 55 根高／低點且在 EMA200 同一側就市價進場；停損 2 ATR、止盈固定 1R，之後不動。
-# 回測（2026-09，三組各 15 幣、5 分鐘精準版）扣手續費每筆約 +0.04～+0.11R、勝率約 55%。
-# 同一個幣已經有部位就不開。幣種清單留空＝程式內建的 44 檔
-# 2026-09-28 使用者決定：突破／EMA 交叉／MACD 零軸全部關掉（上線當天 6 張同時浮虧），只留 SMC
-BREAKOUT_ENABLED = "false"
+# ── 順勢策略組合（2026-09-28 使用者決定上線：6 策略、每單 3%、最多同時 5 張）──
+# 全策略回測（27 種策略 × 7 種出場 × 30m／1h／2h／4h／6h，74 檔、5 分鐘精準版）只有 4h／6h 的順勢策略
+# 四段都賺；挑出下面 6 個合在同一個帳戶跑（組合模擬，每單 3%、最多 5 張）：
+#   原週期前半 8.4 倍／後半 13.5 倍、5 分鐘精準版前段 1.58 倍（122 天）、最近 75 天 1.89 倍，
+#   每月約 +12～29%，最大回撤 63%（每單 3%、最多 3 張是回撤 31%、每月 +10～20%）
+# 每個策略只在 <前綴>_TF 的週期判斷；同一個幣已經有部位就不開。幣種清單留空＝內建 74 檔
+#   唐奇安 55 突破（src/strategies/breakout.js）6h：停損 2 ATR、止盈 1R（BREAKOUT_TP_R），之後不動
+BREAKOUT_ENABLED = "true"
+BREAKOUT_TF = "6h"
 BREAKOUT_RISK_PCT = "3"
 BREAKOUT_TP_R = "1"
-# 4 小時 EMA20／50 均線交叉（見 src/strategies/ema-cross.js）：跟突破單用同一批幣和 K 棒，
-# EMA20 穿過 EMA50、收在 EMA200 同一側就市價進場；停損 2 ATR，賺 1R 移到成本、1.5R 後追蹤，不設止盈。
-# 回測（2026-09，三組各 15 幣、5 分鐘精準版）12 格全賺，扣手續費每筆平均約 +0.3R、勝率約 60%。
-EMA_CROSS_ENABLED = "false"
-# MACD 穿零軸（見 src/strategies/macd-zero.js）：出場跟 EMA 交叉一樣（保本＋追蹤）
-MACD_ZERO_ENABLED = "false"
-# 假突破反手（見 src/strategies/fakeout.js，2026-09-28 使用者決定上線）：結構高／低點被收盤突破後，
-# 20 根內沒延續、反而收盤跌破最近的小波段點又回到突破線內（MSS）→ 反手市價進場；
-# 停損在假突破極值外 0.1 ATR、止盈 1R（BREAKOUT_TP_R）。用 BREAKOUT_INTERVALS、每單 BREAKOUT_RISK_PCT、
-# 跟其他策略共用 BREAKOUT_MAX_OPEN。回測（74 檔、5 分鐘精準版）4h 20 格 13 格賺、6h 16 格賺，
-# 每單約 +0.02（長期）～+0.16R（近 150 天）。2026-09-28 使用者決定關掉，改回 SMC 自動下單
+#   EMA20／50 交叉（src/strategies/ema-cross.js）6h：停損 2 ATR，賺 1R 移到成本、1.5R 後追蹤，不設止盈
+EMA_CROSS_ENABLED = "true"
+EMA_CROSS_TF = "6h"
+#   MACD 穿零軸（src/strategies/macd-zero.js）6h：出場跟 EMA 交叉一樣（保本＋追蹤）
+MACD_ZERO_ENABLED = "true"
+MACD_ZERO_TF = "6h"
+#   放量突破（src/strategies/trend-extra.js）6h：量 > 均量 2 倍＋突破近 20 根高低點；停損 2 ATR、止盈 2R
+VOL_BREAK_ENABLED = "true"
+VOL_BREAK_TF = "6h"
+VOL_BREAK_TP_R = "2"
+#   超級趨勢翻多／翻空（src/strategies/trend-extra.js）4h：停損 2 ATR、保本＋追蹤
+SUPERTREND_ENABLED = "true"
+SUPERTREND_TF = "4h"
+#   黃金／死亡交叉 SMA50／200（src/strategies/trend-extra.js）6h：停損 3 ATR、保本＋追蹤
+GOLDEN_CROSS_ENABLED = "true"
+GOLDEN_CROSS_TF = "6h"
+# 假突破反手（src/strategies/fakeout.js）：組合模擬最近 75 天虧，2026-09-28 關掉
 FAKEOUT_ENABLED = "false"
-# 三個策略在 4h 和 6h 都判斷；幣種留空＝內建 74 檔（五組回測驗證過的幣）
 BREAKOUT_INTERVALS = "4h,6h"
-# 突破／EMA 交叉／MACD 零軸加起來同時最多 3 張，不限方向（2026-09 組合模擬：74 檔、約 800 天，
-# 每單 3%＋最多 3 張 → 最大回撤約 39%、平均每月約 +19%；原本 5 張＋同向 3 張回撤 67%）
-BREAKOUT_MAX_OPEN = "3"
+# 上面所有策略加起來同時最多 5 張，不限方向（使用者選的；3 張回撤小一半但慢一些）
+BREAKOUT_MAX_OPEN = "5"
 BREAKOUT_MAX_SAME_DIR = "0"
 # 74 檔 × 兩個週期，每次 tick 多判斷幾檔（UTC 0／12 點 4h 跟 6h 同時收盤）
 BREAKOUT_BATCH_SIZE = "20"

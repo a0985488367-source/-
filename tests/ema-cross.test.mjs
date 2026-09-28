@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { emaCrossSignal } from '../src/strategies/ema-cross.js';
 import { breakoutSignal } from '../src/strategies/breakout.js';
 import { fakeoutSignal } from '../src/strategies/fakeout.js';
+import { trendExtraSignal } from '../src/strategies/trend-extra.js';
 import { prepare, ZOO } from '../scripts/research/strategy-zoo.mjs';
 import worker from '../worker/index.js';
 
@@ -339,6 +340,99 @@ test('Worker 假突破反手：停損用假突破極值外的固定價格、止�
   const pos = JSON.parse(await env.SMC_KV.get(`open-pos:FAKEUSDT:${sig.dir}`));
   assert.equal(pos.strategy, 'fakeout');
   assert.equal(pos.management, 'fixed');
+});
+
+/** 隨機走勢（量偶爾放大）裡找一段 300 根、最後一根剛好出現 strategy 訊號的 K 棒，時間對齊到剛收盤那根 */
+function windowWith(strategy, step = H4, seed = 5) {
+  let s = seed;
+  const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647) - 0.5;
+  let p = 100;
+  const all = Array.from({ length: 4000 }, (_, i) => {
+    const o = p;
+    p = Math.max(1, p * (1 + rnd() * 0.03));
+    return { time: 0, open: o, high: Math.max(o, p) * (1 + Math.abs(rnd()) * 0.01), low: Math.min(o, p) * (1 - Math.abs(rnd()) * 0.01), close: p, volume: 100 * (1 + Math.abs(rnd()) * (i % 13 === 0 ? 8 : 1)) };
+  });
+  let end = 299;
+  while (end < 3999 && !trendExtraSignal(strategy, all.slice(end - 299, end + 1))) end++;
+  assert.ok(end < 3999, `測試資料要找得到 ${strategy} 訊號`);
+  const sig = trendExtraSignal(strategy, all.slice(end - 299, end + 1));
+  const lastClosed = Math.floor(Date.now() / step) * step - step;
+  const w = all.slice(end - 299, end + 2).map((k, i) => ({ ...k, time: lastClosed - 299 * step + i * step }));
+  return { sig, w };
+}
+
+/** 只有 symbol 這一檔回傳指定的 K 棒，其他照 stub */
+function serveKlines(symbol, w) {
+  const orig = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes('api.bybit.com/v5/market/kline') && new URL(String(url)).searchParams.get('symbol') === symbol) {
+      const list = [...w].reverse().map((k) => [String(k.time), String(k.open), String(k.high), String(k.low), String(k.close), String(k.volume), '1']);
+      return new Response(JSON.stringify({ retCode: 0, result: { list } }), { status: 200 });
+    }
+    return orig(url, init);
+  };
+}
+
+const onlyStrategy = (s, over = {}) => ({
+  BREAKOUT_ENABLED: 'false', EMA_CROSS_ENABLED: 'false', MACD_ZERO_ENABLED: 'false', FAKEOUT_ENABLED: 'false',
+  VOL_BREAK_ENABLED: 'false', SUPERTREND_ENABLED: 'false', GOLDEN_CROSS_ENABLED: 'false', [`${s}_ENABLED`]: 'true', ...over,
+});
+
+test('Worker 放量突破：止盈 2R（VOL_BREAK_TP_R）、停損 2 ATR、signal_id 用 vb 開頭、停損不移動', async () => {
+  const { sig, w } = windowWith('vol');
+  const executor = { calls: [] };
+  stub({ executor });
+  serveKlines('VOLUSDT', w);
+  const env = makeEnv({}, onlyStrategy('VOL_BREAK', { BREAKOUT_SYMBOLS: 'VOLUSDT' }));
+  const out = await runWorker(env);
+  const order = out.breakout.orders[0];
+  assert.equal(order?.strategy, 'vol', JSON.stringify(out.breakout));
+  assert.equal(order.dir, sig.dir);
+  const trade = executor.calls.find((c) => c.url.endsWith('/trade')).body;
+  assert.match(trade.signal_id, /^vb:VOL:[ls]:4h:[0-9a-z]+$/);
+  const d = sig.dir === 'long' ? 1 : -1;
+  assert.ok(Math.abs(Number(trade.stop_loss) - (sig.close - d * sig.stopDistance)) <= 0.01);
+  assert.ok(Math.abs(Number(trade.ladder[0].price) - (sig.close + d * 2 * sig.stopDistance)) <= 0.01, '止盈 2R');
+  const pos = JSON.parse(await env.SMC_KV.get(`open-pos:VOLUSDT:${sig.dir}`));
+  assert.equal(pos.strategy, 'vol');
+  assert.equal(pos.management, 'fixed');
+  assert.equal(pos.targets[0].rr, 2);
+});
+
+for (const [key, prefix, stopAtr] of [['st', 'SUPERTREND', 2], ['gc', 'GOLDEN_CROSS', 3]]) {
+  test(`Worker ${prefix}：停損 ${stopAtr} ATR、不掛止盈、部位存保本／追蹤參數`, async () => {
+    const { sig, w } = windowWith(key);
+    const executor = { calls: [] };
+    stub({ executor });
+    serveKlines('TRDUSDT', w);
+    const env = makeEnv({}, onlyStrategy(prefix, { BREAKOUT_SYMBOLS: 'TRDUSDT' }));
+    const out = await runWorker(env);
+    const order = out.breakout.orders[0];
+    assert.equal(order?.strategy, key, JSON.stringify(out.breakout));
+    const trade = executor.calls.find((c) => c.url.endsWith('/trade')).body;
+    assert.deepEqual(trade.ladder, []);
+    assert.match(trade.signal_id, new RegExp(`^${key}:TRD:[ls]:4h:`));
+    assert.ok(Math.abs(sig.stopDistance - stopAtr * sig.atr) < 1e-9);
+    const pos = JSON.parse(await env.SMC_KV.get(`open-pos:TRDUSDT:${sig.dir}`));
+    assert.equal(pos.management.breakevenAtR, 1);
+    assert.equal(pos.management.trailFromR, 1.5);
+  });
+}
+
+test('Worker：每個策略只在自己的週期判斷（<前綴>_TF），沒有策略要跑的週期不抓 K 棒', async () => {
+  const executor = { calls: [] };
+  stub({ executor });
+  const intervalsAsked = [];
+  const orig = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes('api.bybit.com/v5/market/kline')) intervalsAsked.push(new URL(String(url)).searchParams.get('interval'));
+    return orig(url, init);
+  };
+  const env = makeEnv({}, onlyStrategy('EMA_CROSS', { BREAKOUT_INTERVALS: '4h,6h', EMA_CROSS_TF: '6h' }));
+  const out = await runWorker(env);
+  assert.ok(intervalsAsked.length > 0 && intervalsAsked.every((iv) => iv === '360'), `只抓 6h：${intervalsAsked}`);
+  const trade = executor.calls.find((c) => c.url.endsWith('/trade'))?.body;
+  assert.match(trade?.signal_id ?? '', /^ema:EMA:l:6h:/, JSON.stringify(out.breakout));
 });
 
 test('Worker：Executor 換成真錢帳戶後，Demo 開的舊部位紀錄靜靜刪掉；真錢部位平倉照常通知並標「真錢」', async () => {

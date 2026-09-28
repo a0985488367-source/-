@@ -18,7 +18,7 @@ const WORKER = String(process.env.WORKER_URL || '').replace(/\/$/, '');
 const EXEC = String(process.env.EXECUTOR_URL || '').replace(/\/$/, '');
 const SECRET = process.env.EXECUTOR_HMAC_SECRET || '';
 const DRY = process.env.DRY === '1' || process.env.DRY === 'true';
-const ALT = new Set(['breakout', 'ema', 'macd', 'fakeout']);
+const ALT = new Set(['breakout', 'ema', 'macd', 'fakeout', 'vol', 'st', 'gc']);
 const lines = [];
 const log = (s = '') => { console.log(s); lines.push(s); };
 
