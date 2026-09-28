@@ -43,8 +43,8 @@ MAX_MARKET_AGE_MIN = "240"
 ALERT_TTL_SEC = "21600"
 NEAR_PCT = "0.08"
 # 自動下單（選用，預設關閉，開關另外看 KV 的 auto-trade:enabled）
-# SMC 進場區自動下單：2026-09-28 使用者決定真錢帳戶改回最早的 SMC 自動下單（假突破反手關掉），每單風險 3%
-SMC_AUTO_TRADE_ENABLED = "true"
+# SMC 進場區自動下單：2026-09-28 使用者要求先停止自動下單（等全策略回測結果再決定），SMC 只推播不下單
+SMC_AUTO_TRADE_ENABLED = "false"
 AUTO_TRADE_RISK_PCT = "3"
 # 槓桿照評分線性插值：評分等於 MIN_SCORE 給 MIN 倍，100 分給 MAX 倍
 AUTO_TRADE_LEVERAGE_MIN = "3"
