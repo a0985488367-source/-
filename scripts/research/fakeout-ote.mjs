@@ -25,7 +25,7 @@
  */
 
 import { opt as optFrom, klines, runSignals, r2, pct, printTable } from './lib.mjs';
-import { fakeoutEvents } from '../../src/strategies/fakeout.js';
+import { fakeoutEvents, htfLevels } from '../../src/strategies/fakeout.js';
 import { prepare } from './strategy-zoo.mjs';
 
 const ARGS = process.argv.slice(2);
@@ -46,7 +46,10 @@ const FILL_BARS = Number(opt('fill-bars', 10));
 const BUF = Number(opt('buf', 0.1));
 const MIN_RISK_ATR = Number(opt('min-risk-atr', 0.3));
 const FIBS = opt('fibs', '0.618,0.705,0.79').split(',').map(Number);
+// HTF＝大週期（--htf，預設 4h）的結構高低點當關卡、本週期的 MSS 反手；大週期要包含在 --intervals 裡才抓得到資料，
+// 本週期就是大週期的那一組不跑 HTF（跟 SW 一樣）
 const MODES = opt('modes', 'D55,SW').split(',');
+const HTF = opt('htf', '4h');
 const WARMUP = 210;
 const log = (...a) => console.log(...a);
 
@@ -57,7 +60,7 @@ const EXITS = ['T0', 'T-0.27', '1R', '2R'];
  *   setup 名稱 = `${mode}_CONT_OTE${f}`／`${mode}_MSS_MKT`／`${mode}_MSS_OTE${f}`，exit 另外帶
  * 突破／延續／MSS 的判斷在 src/strategies/fakeout.js（線上 Worker 用同一份）
  */
-function scan(symbol, interval, c, mode) {
+function scan(symbol, interval, c, mode, big = null) {
   const x = prepare(c);
   const n = c.length;
   const out = [];
@@ -79,7 +82,7 @@ function scan(symbol, interval, c, mode) {
     }
   };
 
-  const events = fakeoutEvents(c, { mode, k: K, swing: SWING, window: WINDOW, buf: BUF, from: WARMUP, lastBar: n - 2 }, { atr: x.a, ema: x.e200 });
+  const events = fakeoutEvents(c, { mode, k: K, swing: SWING, window: WINDOW, buf: BUF, from: WARMUP, lastBar: n - 2 }, { atr: x.a, ema: x.e200, ...(mode === 'HTF' ? { levels: htfLevels(c, big, SWING) } : {}) });
   for (const ev of events) {
     const L = ev.dir === 'long';
     const d = L ? 1 : -1;
@@ -206,7 +209,11 @@ function runSet(sigs, candlesBy, cfg) {
     for (const symbol of SYMBOLS) {
       const c = candlesBy.get(`${symbol}|${interval}`);
       if (!c || c.length < WARMUP + 50) continue;
-      for (const mode of MODES) sigs.push(...scan(symbol, interval, c, mode));
+      for (const mode of MODES) {
+        if (mode !== 'HTF') { sigs.push(...scan(symbol, interval, c, mode)); continue; }
+        const big = candlesBy.get(`${symbol}|${HTF}`);
+        if (interval !== HTF && big?.length) sigs.push(...scan(symbol, interval, c, mode, big));
+      }
     }
     const groups = new Map();
     for (const s of sigs) {
