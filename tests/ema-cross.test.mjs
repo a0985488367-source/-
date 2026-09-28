@@ -340,3 +340,34 @@ test('Worker 假突破反手：停損用假突破極值外的固定價格、止�
   assert.equal(pos.strategy, 'fakeout');
   assert.equal(pos.management, 'fixed');
 });
+
+test('Worker：Executor 換成真錢帳戶後，Demo 開的舊部位紀錄靜靜刪掉；真錢部位平倉照常通知並標「真錢」', async () => {
+  // 用另一個網址，避免 Executor 模式的快取影響同一個檔案裡其他測試
+  const LIVE = 'https://executor-live.test';
+  const discord = [];
+  stub({ discord, executor: { calls: [] }, prices: { ABCUSDT: 1.2 } });
+  const orig = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    if (!u.startsWith(LIVE)) return orig(url, init);
+    calls.push(u);
+    const j = (o) => new Response(JSON.stringify(o), { status: 200 });
+    if (u.endsWith('/health')) return j({ ok: true, liveTrading: true });
+    if (u.includes('/position')) return j({ positions: [] });
+    return j({ ok: true });
+  };
+  const base = { dir: 'long', entry: 1, stop: 0.9, initialStop: 0.9, targets: [], ladder: [], qty: 1, riskAmount: 1 };
+  const env = makeEnv({
+    'open-pos:SEIUSDT:long': JSON.stringify({ ...base, symbol: 'SEIUSDT' }), // 舊紀錄（Demo 開的，沒有 account）
+    'open-pos:ABCUSDT:long': JSON.stringify({ ...base, symbol: 'ABCUSDT', strategy: 'fakeout', management: 'fixed', account: 'live' }),
+  }, { EXECUTOR_URL: LIVE, BREAKOUT_ENABLED: 'false', EMA_CROSS_ENABLED: 'false' });
+  await runWorker(env);
+  assert.equal(await env.SMC_KV.get('open-pos:SEIUSDT:long'), null);
+  assert.equal(await env.SMC_KV.get('open-pos:ABCUSDT:long'), null);
+  const titles = discord.flatMap((d) => d.embeds ?? []).map((e) => e.title);
+  assert.ok(!titles.some((t) => t.includes('SEI')), titles.join('\n'));
+  assert.ok(titles.some((t) => t.includes('ABC') && t.includes('真錢')), titles.join('\n'));
+  // 只有真錢那張平倉後會去清殘單；Demo 的舊紀錄不能碰現在的（真錢）帳戶
+  assert.equal(calls.filter((u) => u.includes('/cancel-all')).length, 1);
+});

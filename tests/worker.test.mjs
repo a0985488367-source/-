@@ -75,6 +75,8 @@ function stubFetch({ market, prices, discord, executor, btcTrend }) {
 
 /** 模擬獨立部署的 Bybit Executor 服務——回應形狀跟 executor/src/routes.js 的真實回應一致 */
 function handleExecutorCall(executor, u, init) {
+  // /health 只是查 Demo／真錢模式（不需要驗證、不算交易相關呼叫），不記進 calls
+  if (u.endsWith('/health')) return new Response(JSON.stringify({ ok: true, liveTrading: false }), { status: 200 });
   executor.calls?.push({ url: u, method: init.method, body: init.body ? JSON.parse(init.body) : null });
   const j = (obj) => new Response(JSON.stringify(obj), { status: 200 });
   if (u.includes('/balance')) {
@@ -1171,6 +1173,19 @@ test('預設只自動下多單：空單訊號照常推播，但不送單', async
   assert.equal(executor.calls.length, 0, '不允許的方向連餘額都不該查');
   const field = discord[0].embeds[0].fields.find((f) => f.name.includes('自動下單'));
   assert.match(field.value, /不自動下單/);
+});
+
+test('SMC_AUTO_TRADE_ENABLED=false：SMC 進場區照常推播，但不送單（另外的策略不受影響）', async () => {
+  const discord = [];
+  const executor = { calls: [], wallet: { totalAvailableBalance: 1000, totalWalletBalance: 1000 }, instrument: demoInstrument };
+  const env = withExecutor({ SMC_AUTO_TRADE_ENABLED: 'false' });
+  await env.SMC_KV.put('auto-trade:enabled', 'true');
+  stubFetch({ market: makeMarket([row()]), prices: { ABCUSDT: 99.9 }, discord, executor });
+  const out = await runWorker(env);
+  assert.equal(out.alerts, 1, '還是要推播');
+  assert.ok(!executor.calls.some((c) => c.url.endsWith('/trade')), '不能送單');
+  const field = discord[0].embeds[0].fields.find((f) => f.name.includes('自動下單'));
+  assert.match(field.value, /SMC 自動下單已關閉/);
 });
 
 test('AUTO_TRADE_DIRECTIONS 加上 short 之後空單會正常下單', async () => {

@@ -33,11 +33,16 @@ const day = (ms) => new Date(ms + 8 * 3_600_000).toISOString().slice(5, 16).repl
 
 (async () => {
   if (!URL_BASE || !SECRET) throw new Error('缺少 EXECUTOR_URL 或 EXECUTOR_HMAC_SECRET');
-  const [hist, bal] = await Promise.all([executorGet(`/history?days=${DAYS}`), executorGet('/balance').catch(() => null)]);
+  const [hist, bal, health] = await Promise.all([
+    executorGet(`/history?days=${DAYS}`),
+    executorGet('/balance').catch(() => null),
+    fetch(URL_BASE + '/health').then((r) => r.json()).catch(() => null),
+  ]);
+  const acct = health?.liveTrading === true ? '💰真錢帳戶' : health?.liveTrading === false ? 'Demo 帳戶' : '帳戶';
   if (hist.errors?.executions) throw new Error(`查成交明細失敗：${hist.errors.executions}`);
   const { trades, stillOpen } = rebuildTrades(hist.executions);
 
-  log(`## Demo 帳戶實際成交（最近 ${hist.days} 天，已扣手續費）`);
+  log(`## ${acct}實際成交（最近 ${hist.days} 天，已扣手續費）`);
   if (bal) log(`目前帳戶總額：${bal.totalWalletBalance.toFixed(2)}U`);
   log(`成交明細 ${hist.executions.length} 筆 → 還原成 ${trades.length} 筆已平倉交易（還開著 ${stillOpen.length} 筆不算）`);
   log('');
