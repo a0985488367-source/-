@@ -208,6 +208,9 @@ const DEFAULTS = {
   AUTO_TRADE_MIN_TP1_RR: '1.5',
   AUTO_TRADE_BTC_TREND_EMA: '200',
   WORKER_SCAN_ENABLED: 'false',
+  // SMC 只盯這些幣（逗號分隔，例如市值前 10 大）；留空＝照成交額排的 WORKER_SCAN_TOP 檔。
+  // 有設的話 Worker 掃描只抓這些，推播／下單也只看這些
+  SMC_SYMBOLS: '',
   WORKER_SCAN_TOP: '120',              // 候選池總大小：想涵蓋幾檔（循環一輪會全部算過）
   WORKER_SCAN_BATCH_SIZE: '20',        // 每次真的重新掃描只算這麼多檔，請求量才不會一次太密集
   WORKER_SCAN_BATCH_INTERVAL_MIN: '10', // 幾分鐘算下一批；一輪時間 ≈ (TOP/BATCH_SIZE) × 這個值
@@ -294,6 +297,9 @@ function altSignalId(sig, interval, barOpen) {
   const base = sig.symbol.replace(/USDT$/, '');
   return `${SIGNAL_PREFIX[sig.strategy] ?? 'bo'}:${base}:${sig.dir === 'long' ? 'l' : 's'}:${interval}:${Math.floor(barOpen / 3_600_000).toString(36)}`;
 }
+
+/** SMC 只盯的幣（SMC_SYMBOLS，大寫）；空陣列＝不限制 */
+const smcSymbols = (env) => String(cfg(env, 'SMC_SYMBOLS')).split(',').map((x) => x.trim().toUpperCase()).filter(Boolean);
 
 /** 要判斷的週期：BREAKOUT_INTERVALS（逗號分隔）優先，沒設就用 BREAKOUT_INTERVAL */
 const breakoutIntervals = (env) => {
@@ -630,7 +636,8 @@ async function run(env, { dry = false } = {}) {
 
   const minScore = Number(cfg(env, 'MIN_SCORE'));
   const nearPct = Number(cfg(env, 'NEAR_PCT'));
-  const watch = market.rows.filter((r) => r.valid && r.status === 'waiting' && r.score >= minScore);
+  const only = smcSymbols(env);
+  const watch = market.rows.filter((r) => r.valid && r.status === 'waiting' && r.score >= minScore && (!only.length || only.includes(r.symbol)));
   if (!watch.length) return { checked: 0, alerts: 0, ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout };
 
   const prices = await getPrices(watch.map((r) => r.symbol));
@@ -908,6 +915,7 @@ async function getFreshMarket(env) {
   // Cloudflare 邊緣節點是共用 IP，同時發太多請求容易被交易所限流擋掉；
   // 用比 scripts/market-scan.mjs（有專屬 IP，預設 concurrency=8）低的並行數。
   const concurrency = Number(cfg(env, 'WORKER_SCAN_CONCURRENCY'));
+  const symbols = smcSymbols(env);
 
   if (!env.SMC_KV) {
     // 沒有 KV 就沒辦法記住批次進度／累積結果，退化成每個週期都整批重掃
@@ -915,7 +923,7 @@ async function getFreshMarket(env) {
     // 把 TOP 調小或只留一個週期。
     const results = [];
     for (const interval of intervals) {
-      results.push(await scanMarket({ providerIds, top, detailTop: top, interval, minScore: scanMinScore, concurrency }));
+      results.push(await scanMarket({ providerIds, top, detailTop: top, interval, minScore: scanMinScore, concurrency, symbols }));
     }
     return { ...results[0], rows: results.flatMap((r) => r.rows) };
   }
@@ -946,7 +954,7 @@ async function getFreshMarket(env) {
   const cursorRaw = await env.SMC_KV.get(WORKER_SCAN_CURSOR_KEY);
   const cursorByInterval = parseScanCursor(cursorRaw);
   const cursor = cursorByInterval[interval] || 0;
-  const batch = await scanMarket({ providerIds, top, offset: cursor, batchSize, interval, minScore: scanMinScore, detailTop: batchSize, concurrency });
+  const batch = await scanMarket({ providerIds, top, offset: cursor, batchSize, interval, minScore: scanMinScore, detailTop: batchSize, concurrency, symbols });
 
   const rowsRaw = await env.SMC_KV.get(WORKER_SCAN_ROWS_KEY);
   const rows = parseScanRows(rowsRaw, intervals);

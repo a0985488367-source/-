@@ -106,6 +106,7 @@ function toRow(symbol, a, provider, quoteVolume, interval) {
  *   concurrency   並行請求數
  *   minScore      粗篩門檻
  *   detailTop     精算（補抓高週期偏向）的檔數；0 表示跳過精算，只用粗篩結果
+ *   symbols       指定候選池（例如市值前 10 大）；有給就不照成交額排，只掃這些，順序照給的
  * @returns 跟 data/market.json 相同的結構，可以直接餵給既有的下游邏輯；
  *   另外多帶 poolTotal（候選池總大小）與 universeSymbols（這一批實際算了
  *   哪些代號，含沒有通過門檻的），給呼叫端做 batching 的累積與清理用
@@ -119,9 +120,12 @@ export async function scanMarket({
   concurrency = 8,
   minScore = 50,
   detailTop = 30,
+  symbols = null,
 } = {}) {
   const { result: tickers, provider } = await withFallback(providerIds, (p) => p.fetchSymbols());
-  const topPool = tickers.filter((t) => !EXCLUDE_SYMBOL.test(t.symbol)).slice(0, top);
+  const topPool = symbols?.length
+    ? symbols.map((s) => tickers.find((t) => t.symbol === s)).filter(Boolean)
+    : tickers.filter((t) => !EXCLUDE_SYMBOL.test(t.symbol)).slice(0, top);
   const size = Math.min(batchSize ?? topPool.length, topPool.length);
   // 用取模索引做循環：candidatePool 不變的話，offset 每次往前推 size，
   // 繞一圈剛好把整個候選池都算過一輪
