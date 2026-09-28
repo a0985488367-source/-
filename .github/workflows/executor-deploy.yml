@@ -102,12 +102,17 @@ jobs:
           URL="${EXECUTOR_URL%/}/health"
           for i in $(seq 1 18); do
             H="$(curl -sS -m 10 "$URL" || true)"
-            LIVE="$(printf '%s' "$H" | sed -nE 's/.*"liveTrading":(true|false).*/\1/p')"
-            OK="$(printf '%s' "$H" | sed -nE 's/.*"ok":(true|false).*/\1/p')"
+            # /health 回的是排版過的多行 JSON，用 node 解析，不要用 sed 抓
+            field() { printf '%s' "$H" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const v=JSON.parse(s)[process.argv[1]];if(typeof v==="boolean")process.stdout.write(String(v))}catch{}})' "$1"; }
+            LIVE="$(field liveTrading)"
+            OK="$(field ok)"
             if [ -n "$LIVE" ] && { [ -z "$EXPECT" ] || [ "$LIVE" = "$EXPECT" ]; }; then
               echo "/health：$H"
               if [ "$LIVE" = "true" ]; then echo "💰 Executor 現在接的是【真錢帳戶】"; else echo "🧪 Executor 現在接的是 Demo 帳戶"; fi
-              [ "$OK" = "true" ] || echo "::warning::Executor 回報 ok=false（緊急停止中）：多半是金鑰錯誤或權限不足，看上面的 reason"
+              if [ "$OK" != "true" ]; then
+                echo "::error::Executor 回報 ok=false（緊急停止中，所有下單都會被拒絕）：多半是金鑰錯誤、權限不足或 IP 限制，看上面的 reason"
+                exit 1
+              fi
               exit 0
             fi
             sleep 10
