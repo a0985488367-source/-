@@ -526,7 +526,7 @@ Worker）」卡片，填一次 Worker 網址跟 token（只存這台裝置，不
 
 | 變數 | 預設 | 意思 |
 |---|---|---|
-| `AUTO_TRADE_RISK_PCT` | 5 | 每筆風險占 Demo 帳戶可用餘額的 %（調高會讓單筆賺賠都放大，同時能同時撐住的倉位數會變少）。模擬盤紀錄出現過連 19 敗：5% 會虧掉約 62%，2% 約 32% |
+| `AUTO_TRADE_RISK_PCT` | 3 | 每筆風險占 Demo 帳戶可用餘額的 %（調高會讓單筆賺賠都放大，同時能同時撐住的倉位數會變少）。模擬盤紀錄出現過連 19 敗：5% 會虧掉約 62%，2% 約 32% |
 | `AUTO_TRADE_LEVERAGE_MIN` | 3 | 評分等於 `MIN_SCORE` 時用的槓桿倍數 |
 | `AUTO_TRADE_LEVERAGE_MAX` | 10 | 評分 100 分時用的槓桿倍數 |
 | `AUTO_TRADE_MAX_MARGIN_PCT` | 25 | 單筆最多佔用可用餘額的 %，避免停損很近時一張單吃光整個帳戶的保證金 |
@@ -579,7 +579,7 @@ OKX 的 6H K 棒預設用香港時間切，程式改用 `6Hutc` 跟其他交易�
 | `BREAKOUT_INTERVALS` | 空（wrangler.toml 設 4h,6h） | 逗號分隔的週期；空＝只用 `BREAKOUT_INTERVAL` |
 | `MACD_ZERO_ENABLED`／`MACD_ZERO_STOP_ATR` | false（2026-09-28 起關閉）／2 | MACD 零軸開關、停損幾倍 ATR；保本／追蹤跟 EMA 交叉共用 |
 | `EMA_CROSS_ENABLED` | false（2026-09-28 起關閉） | EMA 交叉開關 |
-| `FAKEOUT_ENABLED` | false（wrangler.toml 開啟） | 假突破反手開關（`src/strategies/fakeout.js`）：結構高／低點被收盤突破後 20 根內沒延續、收盤跌破最近小波段又回到突破線內（MSS）就反手；停損在假突破極值外 0.1 ATR、止盈 `BREAKOUT_TP_R`；跟其他策略共用週期、每單風險、張數上限 |
+| `FAKEOUT_ENABLED` | false | 假突破反手開關（`src/strategies/fakeout.js`）：結構高／低點被收盤突破後 20 根內沒延續、收盤跌破最近小波段又回到突破線內（MSS）就反手；停損在假突破極值外 0.1 ATR、止盈 `BREAKOUT_TP_R`；跟其他策略共用週期、每單風險、張數上限 |
 | `EMA_CROSS_FAST`／`EMA_CROSS_SLOW`／`EMA_CROSS_STOP_ATR` | 20／50／2 | 快慢均線、停損幾倍 ATR |
 | `EMA_CROSS_BE_R`／`EMA_CROSS_TRAIL_FROM_R`／`EMA_CROSS_TRAIL_GAP_R` | 1／1.5／1.5 | 幾 R 保本、幾 R 開始追蹤、追蹤距離 |
 | `BREAKOUT_TP_R` | 1 | 固定止盈 R |
