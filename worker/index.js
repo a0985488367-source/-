@@ -1215,7 +1215,10 @@ async function autoTradeOrder(env, hit) {
     ]);
     if (wallet.error) return { error: `查餘額失敗：${wallet.error}` };
     if (instrument.error) return { error: `查合約資訊失敗：${instrument.error}` };
-    const accountSize = Number(wallet.totalAvailableBalance ?? 0);
+    // Bybit 統一帳戶設成「逐倉」時，帳戶層級的 totalAvailableBalance 會回空字串（→ 0），
+    // 真錢帳戶就是這樣（2026-09-28 /auto-trade/status 看到可用 0、總額 939）；這時改用帳戶總額
+    const available = Number(wallet.totalAvailableBalance ?? 0);
+    const accountSize = available > 0 ? available : Number(wallet.totalWalletBalance ?? 0);
     const { qtyStep, minQty, tickSize, maxLeverage } = instrument;
 
     const perUnit = Math.abs(r.entry - r.stop);

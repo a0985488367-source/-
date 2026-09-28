@@ -846,6 +846,19 @@ test('開啟後價格到了：用可用餘額 × 風險 % 算數量，送出一�
   assert.match(field.value, /5x 槓桿/);
 });
 
+test('逐倉帳戶可用餘額回 0：改用帳戶總額算數量，照樣下單', async () => {
+  const discord = [];
+  const executor = { calls: [], wallet: { totalAvailableBalance: 0, totalWalletBalance: 1000 }, instrument: demoInstrument };
+  const env = withExecutor();
+  await env.SMC_KV.put('auto-trade:enabled', 'true');
+  stubFetch({ market: makeMarket([row()]), prices: { ABCUSDT: 99.9 }, discord, executor });
+  await runWorker(env);
+
+  const tradeCall = executor.calls.find((c) => c.url.endsWith('/trade'));
+  assert.ok(tradeCall, '可用餘額 0 不能讓 SMC 完全下不了單');
+  assert.equal(tradeCall.body.qty, '2');
+});
+
 test('分批出場目標會一次算好、放進 /trade 的 ladder 欄位送給 Executor（預設不掛保本鏢）', async () => {
   const discord = [];
   const executor = { calls: [], wallet: { totalAvailableBalance: 1000, totalWalletBalance: 1000 }, instrument: demoInstrument };
