@@ -43,9 +43,9 @@ MAX_MARKET_AGE_MIN = "240"
 ALERT_TTL_SEC = "21600"
 NEAR_PCT = "0.08"
 # 自動下單（選用，預設關閉，開關另外看 KV 的 auto-trade:enabled）
-# SMC 進場區自動下單：2026-09-28 使用者決定真錢帳戶只跑假突破反手，SMC 只推播不下單
-SMC_AUTO_TRADE_ENABLED = "false"
-AUTO_TRADE_RISK_PCT = "5"
+# SMC 進場區自動下單：2026-09-28 使用者決定真錢帳戶改回最早的 SMC 自動下單（假突破反手關掉），每單風險 3%
+SMC_AUTO_TRADE_ENABLED = "true"
+AUTO_TRADE_RISK_PCT = "3"
 # 槓桿照評分線性插值：評分等於 MIN_SCORE 給 MIN 倍，100 分給 MAX 倍
 AUTO_TRADE_LEVERAGE_MIN = "3"
 AUTO_TRADE_LEVERAGE_MAX = "10"
@@ -85,8 +85,8 @@ MACD_ZERO_ENABLED = "false"
 # 20 根內沒延續、反而收盤跌破最近的小波段點又回到突破線內（MSS）→ 反手市價進場；
 # 停損在假突破極值外 0.1 ATR、止盈 1R（BREAKOUT_TP_R）。用 BREAKOUT_INTERVALS、每單 BREAKOUT_RISK_PCT、
 # 跟其他策略共用 BREAKOUT_MAX_OPEN。回測（74 檔、5 分鐘精準版）4h 20 格 13 格賺、6h 16 格賺，
-# 每單約 +0.02（長期）～+0.16R（近 150 天）
-FAKEOUT_ENABLED = "true"
+# 每單約 +0.02（長期）～+0.16R（近 150 天）。2026-09-28 使用者決定關掉，改回 SMC 自動下單
+FAKEOUT_ENABLED = "false"
 # 三個策略在 4h 和 6h 都判斷；幣種留空＝內建 74 檔（五組回測驗證過的幣）
 BREAKOUT_INTERVALS = "4h,6h"
 # 突破／EMA 交叉／MACD 零軸加起來同時最多 3 張，不限方向（2026-09 組合模擬：74 檔、約 800 天，
