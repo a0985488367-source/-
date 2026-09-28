@@ -29,6 +29,37 @@ function lastConfirmed(swings, n, strength, type) {
   return out;
 }
 
+/**
+ * 大週期關卡（HTF 模式）：把大週期（例如 4h）已確認的結構高低點，對齊到小週期（例如 1h）的每一根。
+ * 大週期的波段要等右邊 strength 根「收盤」之後才算確認；小週期第 j 根收盤時看得到的才算數。
+ * 回傳的點 index 是「大週期那根收完之後的第一根小週期」前一根，讓 breakoutAt 從那之後檢查有沒有被收盤突破過。
+ */
+export function htfLevels(small, big, strength = FAKEOUT_DEFAULTS.swing) {
+  const n = small.length;
+  const sHigh = new Array(n).fill(null), sLow = new Array(n).fill(null);
+  if (!small.length || big.length < 2) return { sHigh, sLow };
+  const bigMs = big[1].time - big[0].time;
+  const smallMs = n > 1 ? small[1].time - small[0].time : bigMs;
+  const firstAtOrAfter = (t) => { let lo = 0, hi = n; while (lo < hi) { const m = (lo + hi) >> 1; if (small[m].time < t) lo = m + 1; else hi = m; } return lo; };
+  const swings = detectSwings(big, strength)
+    .filter((s) => s.index + strength < big.length)
+    .map((s) => ({
+      type: s.type, price: s.price,
+      confirmClose: big[s.index + strength].time + bigMs, // 確認那根大 K 收盤的時間
+      index: firstAtOrAfter(big[s.index].time + bigMs) - 1,
+    }));
+  for (const [type, out] of [['high', sHigh], ['low', sLow]]) {
+    const list = swings.filter((s) => s.type === type);
+    let cur = null, p = 0;
+    for (let j = 0; j < n; j++) {
+      const closeAt = small[j].time + smallMs;
+      while (p < list.length && list[p].confirmClose <= closeAt) { cur = list[p]; p++; }
+      out[j] = cur;
+    }
+  }
+  return { sHigh, sLow };
+}
+
 function breakoutAt(o, c, i, ctx) {
   if (o.mode === 'D55') {
     const s = breakoutSignal(c, { lookback: 55 }, i, { ema: ctx.e200, atr: ctx.a });
@@ -40,7 +71,7 @@ function breakoutAt(o, c, i, ctx) {
     if (!s) continue;
     if ((c[i].close - s.price) * above <= 0) continue;
     let broken = false;
-    for (let j = s.index + 1; j < i; j++) if ((c[j].close - s.price) * above > 0) { broken = true; break; }
+    for (let j = Math.max(0, s.index + 1); j < i; j++) if ((c[j].close - s.price) * above > 0) { broken = true; break; }
     if (!broken) return { dir, level: s.price };
   }
   return null;
@@ -65,6 +96,11 @@ export function fakeoutEvents(candles, opts = {}, pre = {}) {
     const outer = detectSwings(c, o.swing);
     ctx.sHigh = lastConfirmed(outer, n, o.swing, 'high');
     ctx.sLow = lastConfirmed(outer, n, o.swing, 'low');
+  } else if (o.mode === 'HTF') {
+    // 大週期的結構點當關卡（pre.levels 由 htfLevels 算好），判斷方式跟 SW 一樣
+    if (!pre.levels) throw new Error('HTF 模式需要 pre.levels（htfLevels 的結果）');
+    ctx.sHigh = pre.levels.sHigh;
+    ctx.sLow = pre.levels.sLow;
   } else {
     ctx.e200 = pre.ema ?? ema(c.map((k) => k.close), 200);
   }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fakeoutEvents, fakeoutSignal, FAKEOUT_DEFAULTS } from '../src/strategies/fakeout.js';
+import { fakeoutEvents, fakeoutSignal, htfLevels, FAKEOUT_DEFAULTS } from '../src/strategies/fakeout.js';
 import { atr } from '../src/core/indicators.js';
 
 const H4 = 4 * 3_600_000;
@@ -38,6 +38,30 @@ test('fakeoutSignal（線上只看到最後一根）跟整段跑出來的 MSS �
     }
   }
   assert.ok(hits > 5, `隨機資料要有足夠的假突破（${hits}）`);
+});
+
+test('htfLevels：1h 每一根只看得到「確認那根 4h 已經收盤」的結構點；HTF 模式跑得出事件', () => {
+  const H1 = 3_600_000;
+  const small = randomWalk(4000, 21).map((k, i) => ({ ...k, time: i * H1 }));
+  // 用 1h 組出 4h（跟交易所的 4h 一樣從整點對齊）
+  const big = [];
+  for (let i = 0; i + 4 <= small.length; i += 4) {
+    const s = small.slice(i, i + 4);
+    big.push({ time: s[0].time, open: s[0].open, high: Math.max(...s.map((x) => x.high)), low: Math.min(...s.map((x) => x.low)), close: s[3].close, volume: 4 });
+  }
+  const { sHigh, sLow } = htfLevels(small, big, 5);
+  let seen = 0;
+  for (let j = 0; j < small.length; j++) {
+    for (const lv of [sHigh[j], sLow[j]]) {
+      if (!lv) continue;
+      seen++;
+      assert.ok(lv.confirmClose <= small[j].time + H1, `第 ${j} 根看到了還沒確認的點`);
+      assert.ok(lv.index < j, '關卡的起點要在這根之前');
+    }
+  }
+  assert.ok(seen > 1000);
+  const ev = fakeoutEvents(small, { mode: 'HTF', from: 210 }, { levels: { sHigh, sLow } });
+  assert.ok(ev.some((e) => e.type === 'mss'));
 });
 
 test('fakeoutEvents：每個被追蹤的突破最多只有一個結果（延續或 MSS），而且都在 window 根內', () => {
