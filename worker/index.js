@@ -187,6 +187,7 @@ import { ema } from '../src/core/indicators.js';
 import { breakoutSignal } from '../src/strategies/breakout.js';
 import { emaCrossSignal } from '../src/strategies/ema-cross.js';
 import { macdZeroSignal } from '../src/strategies/macd-zero.js';
+import { fakeoutSignal, FAKEOUT_DEFAULTS } from '../src/strategies/fakeout.js';
 
 const DEFAULTS = {
   MARKET_URL: 'https://raw.githubusercontent.com/a0985488367-source/-/main/data/market.json',
@@ -245,13 +246,16 @@ const DEFAULTS = {
   // MACD 穿零軸（見 src/strategies/macd-zero.js）；出場跟 EMA 交叉一樣（保本＋追蹤）；預設關閉
   MACD_ZERO_ENABLED: 'false',
   MACD_ZERO_STOP_ATR: '2',
+  // 假突破反手（見 src/strategies/fakeout.js）：結構高低點被突破後沒延續、出現 MSS 就反手；
+  // 停損在假突破極值外 0.1 ATR、止盈固定 BREAKOUT_TP_R；預設關閉
+  FAKEOUT_ENABLED: 'false',
 };
 
 /** 突破單、EMA 交叉單這類「另外的策略」（不是 SMC） */
-const ALT_STRATEGIES = ['breakout', 'ema', 'macd'];
-const STRATEGY_LABEL = { breakout: '突破單', ema: 'EMA 交叉單', macd: 'MACD 零軸單' };
-const STRATEGY_NAME = { breakout: '突破', ema: 'EMA 交叉', macd: 'MACD 零軸' };
-const SIGNAL_PREFIX = { breakout: 'bo', ema: 'ema', macd: 'macd' };
+const ALT_STRATEGIES = ['breakout', 'ema', 'macd', 'fakeout'];
+const STRATEGY_LABEL = { breakout: '突破單', ema: 'EMA 交叉單', macd: 'MACD 零軸單', fakeout: '假突破反手單' };
+const STRATEGY_NAME = { breakout: '突破', ema: 'EMA 交叉', macd: 'MACD 零軸', fakeout: '假突破反手' };
+const SIGNAL_PREFIX = { breakout: 'bo', ema: 'ema', macd: 'macd', fakeout: 'fo' };
 /**
  * 下單用的 signal_id（也是 Bybit 的 orderLinkId，最長 36 字；止盈單還會再加「:leg:0」）。
  * 例：macd:PENDLE:s:6h:anrc（K 棒開盤時間用「第幾個小時」的 36 進位表示）
@@ -517,6 +521,7 @@ async function handleFetch(request, env) {
           lastCheckedBar: env.SMC_KV ? await env.SMC_KV.get(`breakout:done:${cfg(env, 'BREAKOUT_INTERVAL')}`).then((v) => (v ? new Date(Number(v)).toISOString() : null)) : null,
           lastCheckedBars: env.SMC_KV ? Object.fromEntries(await Promise.all(breakoutIntervals(env).map(async (iv) => [iv, await env.SMC_KV.get(`breakout:done:${iv}`).then((v) => (v ? new Date(Number(v)).toISOString() : null))]))) : null,
         },
+        fakeout: { enabled: cfg(env, 'FAKEOUT_ENABLED') === 'true' },
         macdZero: {
           enabled: cfg(env, 'MACD_ZERO_ENABLED') === 'true',
           stopAtr: Number(cfg(env, 'MACD_ZERO_STOP_ATR')),
@@ -1542,8 +1547,9 @@ async function runBreakout(env, { dry = false } = {}) {
     breakout: cfg(env, 'BREAKOUT_ENABLED') === 'true',
     ema: cfg(env, 'EMA_CROSS_ENABLED') === 'true',
     macd: cfg(env, 'MACD_ZERO_ENABLED') === 'true',
+    fakeout: cfg(env, 'FAKEOUT_ENABLED') === 'true',
   };
-  if (!use.breakout && !use.ema && !use.macd) return { enabled: false };
+  if (!Object.values(use).some(Boolean)) return { enabled: false };
   if (!env.SMC_KV) return { skipped: 'no-kv' };
   const intervals = breakoutIntervals(env);
   // 每次 tick 的請求額度由所有週期共用（4h、6h 在 UTC 0／12 點會同時收盤）
@@ -1603,6 +1609,8 @@ async function runBreakoutInterval(env, interval, { dry, use, budget }) {
     if (ec) found.push({ symbol, strategy: 'ema', ...ec });
     const mz = use.macd && macdZeroSignal(closed, macdOpts);
     if (mz) found.push({ symbol, strategy: 'macd', ...mz });
+    const fo = use.fakeout && fakeoutSignal(closed);
+    if (fo) found.push({ symbol, strategy: 'fakeout', ...fo });
     return { symbol, found };
   });
 
@@ -1676,8 +1684,12 @@ async function breakoutOrder(env, sig, interval, barOpen) {
 
     const long = sig.dir === 'long';
     const entry = Number(prices[sig.symbol]) || sig.close;
-    const risk = sig.stopDistance;
-    const stop = long ? entry - risk : entry + risk;
+    // 假突破反手的停損是固定價格（假突破極值外），其他策略是離進場價固定距離
+    const risk = sig.stopPrice ? (long ? entry - sig.stopPrice : sig.stopPrice - entry) : sig.stopDistance;
+    const stop = sig.stopPrice ?? (long ? entry - risk : entry + risk);
+    if (sig.stopPrice && !(risk > 0)) return { skipped: 'past-stop', entry, stop };
+    // 收盤後價格已經跑到停損附近：停損太近倉位會太大、手續費也吃掉大半 R（回測同樣不做）
+    if (sig.stopPrice && sig.atr > 0 && risk < FAKEOUT_DEFAULTS.minRiskAtr * sig.atr) return { skipped: 'too-close-to-stop', entry, stop };
     // EMA 交叉單不設止盈，靠保本＋追蹤停損出場
     const tpR = isEma ? null : Number(cfg(env, 'BREAKOUT_TP_R'));
     const tp = isEma ? null : long ? entry + risk * tpR : entry - risk * tpR;
@@ -1731,19 +1743,22 @@ function buildBreakoutEmbed(sig, res, interval) {
   const ok = !!res.orderId;
   const isEma = sig.strategy === 'ema' || sig.strategy === 'macd';
   const name = STRATEGY_NAME[sig.strategy] ?? '突破';
+  const up = sig.breakoutDir === 'long';
+  const fakeoutWhy = `${up ? '結構高點被突破' : '結構低點被跌破'}後沒有延續，收盤${up ? '跌破' : '站上'}最近的小波段${up ? '低' : '高'}點、回到突破線內（MSS），`
+    + `反手市價${long ? '做多' : '做空'}；停損在假突破${up ? '最高' : '最低'}點外、止盈 1R，之後不移動停損。`;
   const why = sig.strategy === 'macd'
     ? `MACD ${long ? '由負轉正' : '由正轉負'}、收在 EMA200 ${long ? '之上' : '之下'}`
     : `EMA20 ${long ? '上穿' : '下穿'} EMA50、收在 EMA200 ${long ? '之上' : '之下'}`;
   return {
     username: 'SMC 即時守門員',
     embeds: [{
-      title: `${isEma ? '📈' : '🚀'} ${base}/USDT ${interval} ${name}${long ? '做多' : '做空'}${ok ? ' · 🤖 已下單（Demo）' : ''}`,
+      title: `${isEma ? '📈' : sig.strategy === 'fakeout' ? '🔄' : '🚀'} ${base}/USDT ${interval} ${name}${long ? '做多' : '做空'}${ok ? ' · 🤖 已下單（Demo）' : ''}`,
       color: ok ? (long ? 0x26a69a : 0xef5350) : 0x9e9e9e,
       description: !ok
         ? `有${name}訊號，但下單失敗：${res.error}`
         : isEma
           ? `${why}，市價進場；停損 2 ATR，賺 1R 移到成本、1.5R 後追蹤停損，不設止盈。`
-          : `收盤${long ? '突破' : '跌破'}近 55 根${long ? '高' : '低'}點，市價進場；停損 2 ATR、止盈 1R，之後不移動停損。`,
+          : sig.strategy === 'fakeout' ? fakeoutWhy : `收盤${long ? '突破' : '跌破'}近 55 根${long ? '高' : '低'}點，市價進場；停損 2 ATR、止盈 1R，之後不移動停損。`,
       fields: ok ? [
         { name: '進場約', value: fmt(res.entry), inline: true },
         { name: '停損', value: fmt(res.stop), inline: true },

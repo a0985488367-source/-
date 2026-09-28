@@ -25,8 +25,7 @@
  */
 
 import { opt as optFrom, klines, runSignals, r2, pct, printTable } from './lib.mjs';
-import { detectSwings } from '../../src/smc/swings.js';
-import { breakoutSignal } from '../../src/strategies/breakout.js';
+import { fakeoutEvents } from '../../src/strategies/fakeout.js';
 import { prepare } from './strategy-zoo.mjs';
 
 const ARGS = process.argv.slice(2);
@@ -53,53 +52,14 @@ const log = (...a) => console.log(...a);
 
 const EXITS = ['T0', 'T-0.27', '1R', '2R'];
 
-/** 每根 K 棒收盤時「最近一個已確認」的波段點（index + strength ≤ 這根） */
-function lastConfirmed(swings, n, strength, type) {
-  const out = new Array(n).fill(null);
-  let cur = null, p = 0;
-  const list = swings.filter((s) => s.type === type);
-  for (let j = 0; j < n; j++) {
-    while (p < list.length && list[p].index + strength <= j) { cur = list[p]; p++; }
-    out[j] = cur;
-  }
-  return out;
-}
-
-/** 突破：回傳 { dir, level } 或 null */
-function breakoutAt(mode, x, c, i, ctx) {
-  if (mode === 'D55') {
-    const s = breakoutSignal(c, { lookback: 55 }, i, { ema: x.e200, atr: x.a });
-    return s ? { dir: s.dir, level: s.level } : null;
-  }
-  // SW：收盤第一次越過最近一個已確認的結構高／低點
-  for (const [dir, arr, above] of [['long', ctx.sHigh, 1], ['short', ctx.sLow, -1]]) {
-    const s = arr[i];
-    if (!s) continue;
-    if ((c[i].close - s.price) * above <= 0) continue;
-    let broken = false;
-    for (let j = s.index + 1; j < i; j++) if ((c[j].close - s.price) * above > 0) { broken = true; break; }
-    if (!broken) return { dir, level: s.price };
-  }
-  return null;
-}
-
 /**
  * 找出一個幣／週期的所有交易設定。回傳訊號陣列（給 runSignals）：
  *   setup 名稱 = `${mode}_CONT_OTE${f}`／`${mode}_MSS_MKT`／`${mode}_MSS_OTE${f}`，exit 另外帶
+ * 突破／延續／MSS 的判斷在 src/strategies/fakeout.js（線上 Worker 用同一份）
  */
 function scan(symbol, interval, c, mode) {
   const x = prepare(c);
   const n = c.length;
-  const inner = detectSwings(c, K);
-  const ctx = {
-    lowK: lastConfirmed(inner, n, K, 'low'),
-    highK: lastConfirmed(inner, n, K, 'high'),
-  };
-  if (mode === 'SW') {
-    const outer = detectSwings(c, SWING);
-    ctx.sHigh = lastConfirmed(outer, n, SWING, 'high');
-    ctx.sLow = lastConfirmed(outer, n, SWING, 'low');
-  }
   const out = [];
   const half = (i) => (i < (WARMUP + n) / 2 ? 0 : 1);
   const base = { symbol, interval };
@@ -119,93 +79,76 @@ function scan(symbol, interval, c, mode) {
     }
   };
 
-  let busyUntil = -1; // 同一個幣同一時間只追一個突破設定
-  for (let b = WARMUP; b < n - 2; b++) {
-    const br = breakoutAt(mode, x, c, b, ctx);
-    if (!br || !(x.a[b] > 0)) continue;
-    const L = br.dir === 'long';
+  const events = fakeoutEvents(c, { mode, k: K, swing: SWING, window: WINDOW, buf: BUF, from: WARMUP, lastBar: n - 2 }, { atr: x.a, ema: x.e200 });
+  for (const ev of events) {
+    const L = ev.dir === 'long';
     const d = L ? 1 : -1;
-
-    // BASE：原本的突破單（只有 D55 才有；不受下面「同時只追一個設定」影響，跟線上一樣）
-    if (mode === 'D55') {
-      const entry = c[b + 1].open;
-      const risk = 2 * x.a[b];
-      out.push({ ...base, setup: 'BASE', exit: '1R', index: b, time: c[b].time, dir: br.dir, entry, stop: entry - d * risk,
-        entryType: 'market', filledTime: c[b + 1].time, targets: [{ name: 'TP1', price: entry + d * risk, rr: 1 }], stopPct: risk / entry, half: half(b) });
-    }
-    if (b <= busyUntil) continue;
     const ext = (k) => (L ? c[k].high : c[k].low); // 突破方向的極值
     const opp = (k) => (L ? c[k].low : c[k].high);
-    const better = (p, q) => (L ? p > q : p < q); // p 比 q 更往突破方向
-    const pivots = L ? ctx.lowK : ctx.highK; // 回檔形成的小波段（做多看低點）
+    const better = (p, q) => (L ? p > q : p < q);
 
-    let H = ext(b), Hidx = b, PL = null, Hpre = null, done = false;
-    for (let j = b + 1; j <= Math.min(b + WINDOW, n - 2) && !done; j++) {
-      if (better(ext(j), H)) { H = ext(j); Hidx = j; }
-      // 突破之後確認的第一個回檔小波段
-      const pv = pivots[j];
-      if (!PL && pv && pv.index > b) {
-        PL = pv;
-        Hpre = ext(b);
-        for (let k = b; k <= pv.index; k++) if (better(ext(k), Hpre)) Hpre = ext(k);
-      }
-      const close = c[j].close;
-      // 延續：收盤突破回檔前的高點（BOS）
-      if (PL && j > PL.index + K - 1 && better(close, Hpre)) {
-        done = true; busyUntil = j;
-        const stop = PL.price - d * BUF * x.a[j];
-        for (const f of FIBS) {
-          let hi = H;
-          for (let q = PL.index; q <= j; q++) if (better(ext(q), hi)) hi = ext(q);
-          for (let q = j + 1; q <= Math.min(j + FILL_BARS, n - 1); q++) {
-            const leg = Math.abs(hi - PL.price);
-            const entry = hi - d * f * leg;
-            const risk = Math.abs(entry - stop);
-            const touched = L ? c[q].low <= entry : c[q].high >= entry;
-            if (touched) {
-              if (risk >= MIN_RISK_ATR * x.a[j]) {
-                push(`${mode}_CONT_OTE${f}`, { index: q - 1, time: c[j].time, dir: br.dir, entry, stop, entryType: 'limit' }, { t0: hi, leg });
-              }
-              break;
+    if (ev.type === 'breakout') {
+      // BASE：原本的突破單（只有 D55 才有；不受「同時只追一個設定」影響，跟線上一樣）
+      if (mode !== 'D55') continue;
+      const b = ev.index;
+      const entry = c[b + 1].open;
+      const risk = 2 * x.a[b];
+      out.push({ ...base, setup: 'BASE', exit: '1R', index: b, time: c[b].time, dir: ev.dir, entry, stop: entry - d * risk,
+        entryType: 'market', filledTime: c[b + 1].time, targets: [{ name: 'TP1', price: entry + d * risk, rr: 1 }], stopPct: risk / entry, half: half(b) });
+      continue;
+    }
+
+    const j = ev.index;
+    if (ev.type === 'cont') {
+      // 延續：從下一根開始，限價買在 高點 −f×(高點−PL)，高點隨新高更新
+      const PL = ev.pl;
+      const stop = PL.price - d * BUF * x.a[j];
+      for (const f of FIBS) {
+        let hi = ev.H;
+        for (let q = PL.index; q <= j; q++) if (better(ext(q), hi)) hi = ext(q);
+        for (let q = j + 1; q <= Math.min(j + FILL_BARS, n - 1); q++) {
+          const leg = Math.abs(hi - PL.price);
+          const entry = hi - d * f * leg;
+          const risk = Math.abs(entry - stop);
+          const touched = L ? c[q].low <= entry : c[q].high >= entry;
+          if (touched) {
+            if (risk >= MIN_RISK_ATR * x.a[j]) {
+              push(`${mode}_CONT_OTE${f}`, { index: q - 1, time: c[j].time, dir: ev.dir, entry, stop, entryType: 'limit' }, { t0: hi, leg });
             }
-            if (better(ext(q), hi)) hi = ext(q);
+            break;
           }
+          if (better(ext(q), hi)) hi = ext(q);
         }
-        break;
       }
-      // MSS：收盤跌破最近一個已確認的小波段低點，而且收回突破線內
-      const ms = (L ? ctx.lowK : ctx.highK)[j];
-      if (ms && !better(close, ms.price) && close !== ms.price && !better(close, br.level)) {
-        done = true; busyUntil = j;
-        const rd = L ? 'short' : 'long';
-        const rs = -d; // 反手方向
-        const stop = H + d * BUF * x.a[j];
-        // MKT：下一根開盤市價
-        const entry = c[j + 1].open;
-        if ((stop - entry) * d > MIN_RISK_ATR * x.a[j]) {
-          push(`${mode}_MSS_MKT`, { index: j, time: c[j].time, dir: rd, entry, stop, entryType: 'market', filledTime: c[j + 1].time }, null);
-        }
-        // OTE：假突破最高點 → 之後最低點
-        for (const f of FIBS) {
-          let lo = opp(Hidx);
-          for (let q = Hidx; q <= j; q++) if (rs > 0 ? c[q].high > lo : c[q].low < lo) lo = rs > 0 ? c[q].high : c[q].low;
-          for (let q = j + 1; q <= Math.min(j + FILL_BARS, n - 1); q++) {
-            const leg = Math.abs(H - lo);
-            const e = lo + d * f * leg;
-            const risk = Math.abs(stop - e);
-            const touched = L ? c[q].high >= e : c[q].low <= e;
-            if (touched) {
-              if (risk >= MIN_RISK_ATR * x.a[j]) {
-                push(`${mode}_MSS_OTE${f}`, { index: q - 1, time: c[j].time, dir: rd, entry: e, stop, entryType: 'limit' }, { t0: lo, leg });
-              }
-              break;
-            }
-            if (rs > 0 ? c[q].high > lo : c[q].low < lo) lo = rs > 0 ? c[q].high : c[q].low;
+      continue;
+    }
+
+    // MSS 反手
+    const { H, Hidx, stop, rdir: rd } = ev;
+    const rs = -d;
+    // MKT：下一根開盤市價
+    const entry = c[j + 1].open;
+    if ((stop - entry) * d > MIN_RISK_ATR * x.a[j]) {
+      push(`${mode}_MSS_MKT`, { index: j, time: c[j].time, dir: rd, entry, stop, entryType: 'market', filledTime: c[j + 1].time }, null);
+    }
+    // OTE：假突破最高點 → 之後最低點
+    for (const f of FIBS) {
+      let lo = opp(Hidx);
+      for (let q = Hidx; q <= j; q++) if (rs > 0 ? c[q].high > lo : c[q].low < lo) lo = rs > 0 ? c[q].high : c[q].low;
+      for (let q = j + 1; q <= Math.min(j + FILL_BARS, n - 1); q++) {
+        const leg = Math.abs(H - lo);
+        const e = lo + d * f * leg;
+        const risk = Math.abs(stop - e);
+        const touched = L ? c[q].high >= e : c[q].low <= e;
+        if (touched) {
+          if (risk >= MIN_RISK_ATR * x.a[j]) {
+            push(`${mode}_MSS_OTE${f}`, { index: q - 1, time: c[j].time, dir: rd, entry: e, stop, entryType: 'limit' }, { t0: lo, leg });
           }
+          break;
         }
+        if (rs > 0 ? c[q].high > lo : c[q].low < lo) lo = rs > 0 ? c[q].high : c[q].low;
       }
     }
-    if (!done) busyUntil = Math.min(b + WINDOW, n);
   }
   return out;
 }

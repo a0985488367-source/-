@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Demo 帳戶實際成交的績效報告：跟 Executor 拿最近幾天的成交明細（GET /history），
- * 還原成一筆一筆的交易，依策略（SMC／突破／EMA 交叉／MACD 零軸）分開統計。
+ * 還原成一筆一筆的交易，依策略（SMC／突破／EMA 交叉／MACD 零軸／假突破反手）分開統計。
  *
  * 用法（GitHub Actions demo-report.yml 會帶這些環境變數）：
  *   EXECUTOR_URL=… EXECUTOR_HMAC_SECRET=… DAYS=30 node scripts/demo-report.mjs
@@ -43,7 +43,7 @@ const day = (ms) => new Date(ms + 8 * 3_600_000).toISOString().slice(5, 16).repl
   log('');
   log('| 策略 | 筆數 | 勝率 | 淨損益 | 平均賺 | 平均賠 | 賺賠比（總賺÷總賠） | 最長連虧 | 最大一筆虧損 | 手續費 |');
   log('|---|---|---|---|---|---|---|---|---|---|');
-  const groups = ['smc', 'breakout', 'ema', 'macd', 'manual'];
+  const groups = ['smc', 'breakout', 'ema', 'macd', 'fakeout', 'manual'];
   for (const g of [...groups, 'all']) {
     const xs = g === 'all' ? trades : trades.filter((t) => t.strategy === g);
     if (!xs.length) continue;
