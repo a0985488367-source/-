@@ -249,6 +249,8 @@ const DEFAULTS = {
   // 假突破反手（見 src/strategies/fakeout.js）：結構高低點被突破後沒延續、出現 MSS 就反手；
   // 停損在假突破極值外 0.1 ATR、止盈固定 BREAKOUT_TP_R；預設關閉
   FAKEOUT_ENABLED: 'false',
+  // SMC 進場區的自動下單（false＝只推播不下單；突破／假突破這些另外的策略不受影響）
+  SMC_AUTO_TRADE_ENABLED: 'true',
 };
 
 /** 突破單、EMA 交叉單這類「另外的策略」（不是 SMC） */
@@ -493,7 +495,7 @@ async function handleFetch(request, env) {
       return json({
         enabled: await isAutoTradeEnabled(env),
         hasKeys: hasExecutor,
-        mode: 'demo',
+        mode: hasExecutor ? (await executorMode(env)) ?? 'unknown' : 'none',
         riskPct: Number(cfg(env, 'AUTO_TRADE_RISK_PCT')),
         leverageMin: Number(cfg(env, 'AUTO_TRADE_LEVERAGE_MIN')),
         leverageMax: Number(cfg(env, 'AUTO_TRADE_LEVERAGE_MAX')),
@@ -551,7 +553,7 @@ async function handleFetch(request, env) {
       const enable = url.pathname === '/auto-trade/on';
       await env.SMC_KV.put('auto-trade:enabled', String(enable));
       return new Response(
-        enable ? '✅ 自動下單已開啟（Demo 模擬交易，非真錢）' : '⛔ 自動下單已關閉',
+        enable ? `✅ 自動下單已開啟（Executor 目前接：${modeLabel(await executorMode(env))}）` : '⛔ 自動下單已關閉',
         { headers: { 'content-type': 'text/plain; charset=utf-8', ...CORS_HEADERS } },
       );
     }
@@ -560,7 +562,7 @@ async function handleFetch(request, env) {
         '  GET /status         檢查設定與資料新鮮度\n' +
         '  GET /run            立刻執行一次（?dry=1 只看結果不推播）\n' +
         '  GET /auto-trade/status        查看自動下單開關（唯讀，不需要 token）\n' +
-        '  GET /auto-trade/on?token=xxx  開啟自動下單（Demo）\n' +
+        '  GET /auto-trade/on?token=xxx  開啟自動下單（Demo 或真錢看 Executor 的 LIVE_TRADING）\n' +
         '  GET /auto-trade/off?token=xxx 關閉自動下單\n',
       { headers: { 'content-type': 'text/plain; charset=utf-8' } },
     );
@@ -626,7 +628,7 @@ async function run(env, { dry = false } = {}) {
       // 跟 Discord 通知共用同一個去重 key：同一個進場區只會下單一次，
       // 不會因為 Worker 每 2 分鐘重跑就對同一個訊號重複下單。
       if (autoTradeOn) autoTrade = await autoTradeOrder(env, hit);
-      await postDiscord(env, buildEmbed(hit, market, autoTrade));
+      await postDiscord(env, buildEmbed(hit, market, autoTrade, autoTrade ? await executorMode(env) : null));
       if (env.SMC_KV) await env.SMC_KV.put(key, String(Date.now()), { expirationTtl: Number(cfg(env, 'ALERT_TTL_SEC')) });
     }
     sent.push(`${hit.row.symbol} ${hit.row.dir} @ ${hit.price}${autoTrade?.orderId ? ' 🤖已下單' : ''}`);
@@ -1002,7 +1004,7 @@ function fmt(v) {
   return Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 }
 
-function buildEmbed({ row: r, price }, market, autoTrade) {
+function buildEmbed({ row: r, price }, market, autoTrade, mode = null) {
   const base = r.symbol.replace(/USDT$/, '');
   const long = r.dir === 'long';
   const tps = (r.targets || []).map((t) => `**${t.name}** ${fmt(t.price)} · ${t.rr.toFixed(2)}R`).join('\n');
@@ -1021,7 +1023,7 @@ function buildEmbed({ row: r, price }, market, autoTrade) {
         { name: '目標', value: tps || '—' },
         { name: '評分', value: `${r.score}/100（匯流 ${r.checksPassed}/${r.checksTotal}）`, inline: true },
         { name: '區間位置', value: r.pd ? `${r.pd.zone} ${r.pd.pct?.toFixed?.(0) ?? ''}%` : '—', inline: true },
-        ...(autoTrade ? [{ name: '🤖 自動下單（Demo）', value: autoTradeText(autoTrade) }] : []),
+        ...(autoTrade ? [{ name: `🤖 自動下單（${modeLabel(mode)}）`, value: autoTradeText(autoTrade) }] : []),
       ],
       footer: { text: `${r.interval} 計畫 · 分析於 ${new Date(market.generatedAt).toISOString().slice(5, 16).replace('T', ' ')} UTC · 僅供研究，非投資建議` },
       timestamp: new Date().toISOString(),
@@ -1031,6 +1033,7 @@ function buildEmbed({ row: r, price }, market, autoTrade) {
 
 function autoTradeText(t) {
   if (t.skipped === 'no-keys') return '⏭️ 尚未設定 EXECUTOR_URL／EXECUTOR_HMAC_SECRET，已略過';
+  if (t.skipped === 'smc-off') return '⏭️ SMC 自動下單已關閉（SMC_AUTO_TRADE_ENABLED），只通知不下單';
   if (t.skipped === 'direction') return '⏭️ 這個方向目前不自動下單（AUTO_TRADE_DIRECTIONS），只通知不下單';
   if (t.skipped === 'btc-uptrend') return t.unknown
     ? `⏭️ 讀不到 BTC 走勢，無法確認不是漲勢，空單先不下（AUTO_TRADE_BTC_TREND_EMA）`
@@ -1074,6 +1077,26 @@ async function isAutoTradeEnabled(env) {
   if (!env.SMC_KV) return false;
   return (await env.SMC_KV.get('auto-trade:enabled')) === 'true';
 }
+
+/**
+ * Executor 現在接的是真錢還是 Demo（看 GET /health 的 liveTrading；那個開關只能在 Executor 的環境變數改）。
+ * 通知標題、部位紀錄都照這個標，查不到回 null。同一個 isolate 裡 5 分鐘內重用結果。
+ */
+const modeCache = new Map();
+async function executorMode(env) {
+  if (!env.EXECUTOR_URL) return null;
+  const hit = modeCache.get(env.EXECUTOR_URL);
+  if (hit && Date.now() - hit.at < 300_000) return hit.mode;
+  let mode = null;
+  try {
+    const res = await fetch(env.EXECUTOR_URL.replace(/\/$/, '') + '/health');
+    const h = res.ok ? await res.json() : null;
+    if (typeof h?.liveTrading === 'boolean') mode = h.liveTrading ? 'live' : 'demo';
+  } catch { /* 查不到就當不知道 */ }
+  if (mode) modeCache.set(env.EXECUTOR_URL, { mode, at: Date.now() });
+  return mode;
+}
+const modeLabel = (mode) => (mode === 'live' ? '💰真錢' : mode === 'demo' ? 'Demo' : '帳戶模式未知');
 
 /** HMAC-SHA256，跟 executor/src/hmac.js 用同一套規則：HMAC(secret, timestamp字串 + rawBody字串) */
 async function executorHmac(secret, message) {
@@ -1165,6 +1188,7 @@ function ladderWithAbsoluteFractions(ladder) {
  */
 async function autoTradeOrder(env, hit) {
   if (!env.EXECUTOR_URL || !env.EXECUTOR_HMAC_SECRET) return { skipped: 'no-keys' };
+  if (cfg(env, 'SMC_AUTO_TRADE_ENABLED') !== 'true') return { skipped: 'smc-off' };
   const r = hit.row;
   if (!allowedDirections(env).includes(r.dir)) return { skipped: 'direction' };
   if (excludedPoiTypes(env).includes(String(r.poiType).toLowerCase())) return { skipped: 'poi', poiType: r.poiType };
@@ -1297,6 +1321,7 @@ async function autoTradeOrder(env, hit) {
         targets: r.targets, ladder: legOrders, tickSize,
         maxFavorableR: 0, beMoved: false, trailing: false,
         qty, riskAmount, leverage, grade: r.grade, score: r.score, openedAt: Date.now(),
+        account: await executorMode(env),
       });
     }
 
@@ -1327,12 +1352,21 @@ async function checkClosedPositions(env) {
       .map((p) => `open-pos:${p.symbol}:${p.side === 'Buy' ? 'long' : 'short'}`),
   );
 
+  const mode = await executorMode(env);
   let closed = 0;
   for (const { name: key } of tracked.keys) {
-    if (stillOpen.has(key)) continue;
     const raw = await env.SMC_KV.get(key);
-    if (raw) {
-      const pos = JSON.parse(raw);
+    const pos = raw ? JSON.parse(raw) : null;
+    // Executor 換了帳戶（Demo ↔ 真錢）：另一個帳戶的部位不歸現在管，靜靜刪掉追蹤紀錄，
+    // 不發平倉通知、也不去現在的帳戶取消委託。舊紀錄沒有 account 欄位（都是 Demo 開的）；
+    // 開倉當下查不到模式的記成 null，不會被當成別的帳戶刪掉
+    const account = pos && (pos.account === undefined ? 'demo' : pos.account);
+    if (pos && mode && account && account !== mode) {
+      await deleteOpenPos(env, key);
+      continue;
+    }
+    if (stillOpen.has(key)) continue;
+    if (pos) {
       try {
         const prices = await getPrices([pos.symbol]);
         const exitPrice = prices[pos.symbol];
@@ -1456,7 +1490,7 @@ function buildCloseEmbed(pos, exitPrice) {
   return {
     username: 'SMC 即時守門員',
     embeds: [{
-      title: `${win ? '✅' : '❌'} ${base}/USDT ${long ? '做多' : '做空'} 已平倉（Demo）· ${r >= 0 ? '+' : ''}${r.toFixed(2)}R`,
+      title: `${win ? '✅' : '❌'} ${base}/USDT ${long ? '做多' : '做空'} 已平倉（${modeLabel(pos.account === undefined ? 'demo' : pos.account)}）· ${r >= 0 ? '+' : ''}${r.toFixed(2)}R`,
       color: win ? 0x26a69a : 0xef5350,
       description: `進場 ${fmt(pos.entry)} → 平倉當下市價約 ${fmt(exitPrice)}（用偵測到平倉那一刻的市價估算，不是交易所回報的精確成交價，會有些微誤差）`,
       fields: [
@@ -1640,7 +1674,7 @@ async function runBreakoutInterval(env, interval, { dry, use, budget }) {
     if (dry) { orders.push({ symbol: sig.symbol, strategy: sig.strategy, dir: sig.dir, dry: true }); continue; }
     const res = await breakoutOrder(env, sig, interval, barOpen);
     orders.push({ symbol: sig.symbol, strategy: sig.strategy, dir: sig.dir, ...res });
-    if (res.orderId || res.error) await postDiscord(env, buildBreakoutEmbed(sig, res, interval)).catch(() => {});
+    if (res.orderId || res.error) await postDiscord(env, buildBreakoutEmbed(sig, res, interval, res.account ?? await executorMode(env))).catch(() => {});
   }
   return {
     bar,
@@ -1723,21 +1757,22 @@ async function breakoutOrder(env, sig, interval, barOpen) {
     });
     if (trade.error) return { error: trade.error };
     const ladder = (trade.ladder || []).map((leg) => ({ name: leg.name, price: leg.price, fraction: 1, qty: leg.qty, ...(leg.orderId ? { orderId: leg.orderId } : { error: leg.error }) }));
+    const account = await executorMode(env);
 
     await putOpenPos(env, `open-pos:${sig.symbol}:${sig.dir}`, {
       symbol: sig.symbol, dir: sig.dir, entry, stop, initialStop: stop,
       targets: isEma ? [] : [{ name: 'TP1', price: tp, rr: tpR }], ladder, tickSize,
       maxFavorableR: 0, beMoved: false, trailing: false,
       strategy: sig.strategy ?? 'breakout', management: isEma ? emaCrossManagement(env) : 'fixed', interval, bar: barOpen,
-      qty, riskAmount, leverage, openedAt: Date.now(),
+      qty, riskAmount, leverage, openedAt: Date.now(), account,
     });
-    return { orderId: trade.orderId, qty, riskAmount, leverage, entry, stop, tp, ladder };
+    return { orderId: trade.orderId, qty, riskAmount, leverage, entry, stop, tp, ladder, account };
   } catch (e) {
     return { error: e.message };
   }
 }
 
-function buildBreakoutEmbed(sig, res, interval) {
+function buildBreakoutEmbed(sig, res, interval, mode = null) {
   const base = sig.symbol.replace(/USDT$/, '');
   const long = sig.dir === 'long';
   const ok = !!res.orderId;
@@ -1752,7 +1787,7 @@ function buildBreakoutEmbed(sig, res, interval) {
   return {
     username: 'SMC 即時守門員',
     embeds: [{
-      title: `${isEma ? '📈' : sig.strategy === 'fakeout' ? '🔄' : '🚀'} ${base}/USDT ${interval} ${name}${long ? '做多' : '做空'}${ok ? ' · 🤖 已下單（Demo）' : ''}`,
+      title: `${isEma ? '📈' : sig.strategy === 'fakeout' ? '🔄' : '🚀'} ${base}/USDT ${interval} ${name}${long ? '做多' : '做空'}${ok ? ` · 🤖 已下單（${modeLabel(mode)}）` : ''}`,
       color: ok ? (long ? 0x26a69a : 0xef5350) : 0x9e9e9e,
       description: !ok
         ? `有${name}訊號，但下單失敗：${res.error}`
