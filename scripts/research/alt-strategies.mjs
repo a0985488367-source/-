@@ -15,6 +15,7 @@
 import { opt as optFrom, klines, runSignals, r2, pct, printTable, simulatePortfolio } from './lib.mjs';
 import { ema, atr, rsi } from '../../src/core/indicators.js';
 import { breakoutSignal } from '../../src/strategies/breakout.js';
+import { fakeoutEvents, FAKEOUT_DEFAULTS } from '../../src/strategies/fakeout.js';
 import { prepare, ZOO } from './strategy-zoo.mjs';
 
 const ARGS = process.argv.slice(2);
@@ -124,6 +125,17 @@ Object.assign(STRATEGIES, {
   },
 });
 
+// 假突破反手（src/strategies/fakeout.js 的 SW 模式，跟線上同一套判斷）：
+// 停損是固定價格（假突破極值外 0.1 ATR），用 stopPrice 回傳；下一根開盤離停損不到 0.3 ATR 就不做
+STRATEGIES.FAKEOUT = (x, i) => {
+  if (!x.fo) {
+    x.fo = new Map(fakeoutEvents(x.c, { from: WARMUP, lastBar: x.c.length - 2 }, { atr: x.a })
+      .filter((e) => e.type === 'mss').map((e) => [e.index, e]));
+  }
+  const e = x.fo.get(i);
+  return e ? { dir: e.rdir, stopPrice: e.stop } : null;
+};
+
 /** 出場規則（stepTrade 的設定＋止盈 R） */
 const EXITS = {
   '固定 1R': { tpR: 1, cfg: { breakevenAtR: 0, trailFromR: 0 } },
@@ -156,8 +168,15 @@ function buildSignals(symbol, interval, c, name, en = ENTRIES[0] ?? { name: 'mar
     const long = s.dir === 'long';
     if (en.retest && !(s.level > 0)) continue; // 沒有突破線的策略不能測回踩
     const entry = market ? c[i + 1].open : en.retest ? s.level : c[i].close + (long ? -1 : 1) * en.offsetAtr * x.a[i];
-    const risk = x.a[i] * (en.retest && en.stopAtr ? en.stopAtr : s.stopAtr);
-    const stop = long ? entry - risk : entry + risk;
+    let risk = x.a[i] * (en.retest && en.stopAtr ? en.stopAtr : s.stopAtr);
+    let stop = long ? entry - risk : entry + risk;
+    if (s.stopPrice) {
+      // 固定價格的停損（假突破反手）：只支援市價進場
+      if (!market) continue;
+      risk = long ? entry - s.stopPrice : s.stopPrice - entry;
+      if (!(risk > FAKEOUT_DEFAULTS.minRiskAtr * x.a[i])) continue;
+      stop = s.stopPrice;
+    }
     out.push({
       symbol, interval, index: i, time: c[i].time, dir: s.dir, entry, stop, entryType: market ? 'market' : 'limit',
       ...(market ? { filledTime: c[i + 1].time } : {}), stopPct: risk / entry, strategy: name,
