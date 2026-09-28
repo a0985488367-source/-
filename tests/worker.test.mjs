@@ -135,6 +135,15 @@ test('價格回到進場區 → 推播一則提醒', async () => {
   assert.match(discord[0].embeds[0].title, /ABC\/USDT 價格到了/);
 });
 
+test('SMC_SYMBOLS：只盯清單上的幣，其他幣價格到了也不推播', async () => {
+  const discord = [];
+  stubFetch({ market: makeMarket([row(), row({ symbol: 'BTCUSDT' })]), prices: { ABCUSDT: 99.9, BTCUSDT: 99.9 }, discord });
+  const out = await runWorker(makeEnv({ SMC_SYMBOLS: 'btcusdt, ETHUSDT' }));
+  assert.equal(out.checked, 1);
+  assert.equal(discord.length, 1);
+  assert.match(discord[0].embeds[0].title, /BTC\/USDT/);
+});
+
 test('價格還沒到 → 不推播', async () => {
   const discord = [];
   stubFetch({ market: makeMarket([row()]), prices: { ABCUSDT: 108 }, discord });
