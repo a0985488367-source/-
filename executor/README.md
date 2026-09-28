@@ -87,6 +87,11 @@ Executor 收到請求會檢查：
 
 ## 部署
 
+> **手機也能部署／切換 Demo 與真錢**：GitHub Actions 的「部署 Executor（切換 Demo／真錢）」
+> （`.github/workflows/executor-deploy.yml`）。先在 Repo Secrets 放 `FLY_API_TOKEN`、
+> `BYBIT_LIVE_API_KEY`、`BYBIT_LIVE_API_SECRET`（切回 Demo 另外要 `BYBIT_DEMO_API_KEY`／`BYBIT_DEMO_API_SECRET`），
+> 手動執行時選「切到真錢」並在 confirm 輸入 `REAL`。它會設定 `LIVE_TRADING`、部署最新程式，最後打 `/health` 確認。
+
 兩種方式擇一：
 
 ### 方案一：Fly.io（推薦，不用自己管伺服器）

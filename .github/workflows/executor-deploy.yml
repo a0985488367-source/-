@@ -1,0 +1,116 @@
+# 部署 Bybit Executor（Fly.io），順便切換 Demo／真錢帳戶——手機上就能按，不用電腦裝 flyctl
+#
+# 需要在 Repo → Settings → Secrets and variables → Actions → Secrets 分頁加入：
+#   FLY_API_TOKEN           Fly.io 網頁 → Tokens（或 Account → Access Tokens）建立的 Token
+#   BYBIT_LIVE_API_KEY      真實帳戶的 API Key（只開合約交易權限，不要開提現／轉帳）
+#   BYBIT_LIVE_API_SECRET   真實帳戶的 API Secret
+#   BYBIT_DEMO_API_KEY／BYBIT_DEMO_API_SECRET（選用，切回 Demo 時才需要）
+# App 名稱從 EXECUTOR_URL（https://<App 名稱>.fly.dev）自動取出；網址不是 fly.dev 的話，
+# 另外在 Variables 分頁設定 FLY_APP。金鑰只會傳給 Fly.io，log 裡不會出現內容。
+name: 部署 Executor（切換 Demo／真錢）
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: '要做什麼'
+        type: choice
+        options: [只更新程式（不換帳戶）, 切到真錢, 切回 Demo]
+        default: 只更新程式（不換帳戶）
+      confirm:
+        description: '切到真錢時請輸入 REAL（大寫）確認'
+        default: ''
+
+concurrency:
+  group: executor-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: 檢查設定
+        env:
+          MODE: ${{ inputs.mode }}
+          CONFIRM: ${{ inputs.confirm }}
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          EXECUTOR_URL: ${{ secrets.EXECUTOR_URL }}
+          FLY_APP_VAR: ${{ vars.FLY_APP }}
+          LIVE_KEY: ${{ secrets.BYBIT_LIVE_API_KEY }}
+          LIVE_SECRET: ${{ secrets.BYBIT_LIVE_API_SECRET }}
+          DEMO_KEY: ${{ secrets.BYBIT_DEMO_API_KEY }}
+          DEMO_SECRET: ${{ secrets.BYBIT_DEMO_API_SECRET }}
+        run: |
+          fail() { echo "::error::$1"; exit 1; }
+          [ -n "$FLY_API_TOKEN" ] || fail "缺少 FLY_API_TOKEN：到 Fly.io 網頁建立一個 Token，在 GitHub Secrets 分頁新增名為 FLY_API_TOKEN 的 secret。"
+          APP="$FLY_APP_VAR"
+          if [ -z "$APP" ]; then
+            APP="$(printf '%s' "$EXECUTOR_URL" | sed -nE 's#^https?://([a-z0-9-]+)\.fly\.dev.*#\1#p')"
+          fi
+          [ -n "$APP" ] || fail "找不到 Fly App 名稱：EXECUTOR_URL 不是 https://<名稱>.fly.dev 的格式，請在 Variables 分頁新增 FLY_APP。"
+          echo "APP=$APP" >> "$GITHUB_ENV"
+          echo "Fly App：$APP"
+          case "$MODE" in
+            切到真錢)
+              [ "$CONFIRM" = "REAL" ] || fail "切到真錢要在 confirm 欄位輸入 REAL（大寫）確認。"
+              [ -n "$LIVE_KEY" ] && [ -n "$LIVE_SECRET" ] || fail "缺少 BYBIT_LIVE_API_KEY 或 BYBIT_LIVE_API_SECRET。"
+              echo "EXPECT=true" >> "$GITHUB_ENV" ;;
+            切回\ Demo)
+              [ -n "$DEMO_KEY" ] && [ -n "$DEMO_SECRET" ] || fail "缺少 BYBIT_DEMO_API_KEY 或 BYBIT_DEMO_API_SECRET（切回 Demo 需要 Demo 金鑰）。"
+              echo "EXPECT=false" >> "$GITHUB_ENV" ;;
+            *) echo "EXPECT=" >> "$GITHUB_ENV" ;;
+          esac
+          echo "✅ 設定齊全（不會顯示金鑰內容）"
+
+      - name: 下載目前的 Fly 設定（fly.toml 不在 repo 裡）
+        working-directory: executor
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          flyctl config save -a "$APP"
+          echo "--- fly.toml ---"; cat fly.toml
+
+      - name: 設定帳戶金鑰（只在切換時）
+        if: ${{ env.EXPECT != '' }}
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          LIVE_KEY: ${{ secrets.BYBIT_LIVE_API_KEY }}
+          LIVE_SECRET: ${{ secrets.BYBIT_LIVE_API_SECRET }}
+          DEMO_KEY: ${{ secrets.BYBIT_DEMO_API_KEY }}
+          DEMO_SECRET: ${{ secrets.BYBIT_DEMO_API_SECRET }}
+        run: |
+          trim() { printf '%s' "$1" | tr -d '[:space:]'; }
+          if [ "$EXPECT" = "true" ]; then K="$(trim "$LIVE_KEY")"; S="$(trim "$LIVE_SECRET")"; else K="$(trim "$DEMO_KEY")"; S="$(trim "$DEMO_SECRET")"; fi
+          echo "::add-mask::$K"; echo "::add-mask::$S"
+          flyctl secrets set --stage -a "$APP" "BYBIT_API_KEY=$K" "BYBIT_API_SECRET=$S" "LIVE_TRADING=$EXPECT" > /dev/null
+          echo "✅ 已設定 LIVE_TRADING=$EXPECT 和對應的金鑰（部署後生效）"
+
+      - name: 部署
+        working-directory: executor
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl deploy --remote-only --ha=false -a "$APP"
+
+      - name: 確認 Executor 狀態
+        env:
+          EXECUTOR_URL: ${{ secrets.EXECUTOR_URL }}
+        run: |
+          URL="${EXECUTOR_URL%/}/health"
+          for i in $(seq 1 18); do
+            H="$(curl -sS -m 10 "$URL" || true)"
+            LIVE="$(printf '%s' "$H" | sed -nE 's/.*"liveTrading":(true|false).*/\1/p')"
+            OK="$(printf '%s' "$H" | sed -nE 's/.*"ok":(true|false).*/\1/p')"
+            if [ -n "$LIVE" ] && { [ -z "$EXPECT" ] || [ "$LIVE" = "$EXPECT" ]; }; then
+              echo "/health：$H"
+              if [ "$LIVE" = "true" ]; then echo "💰 Executor 現在接的是【真錢帳戶】"; else echo "🧪 Executor 現在接的是 Demo 帳戶"; fi
+              [ "$OK" = "true" ] || echo "::warning::Executor 回報 ok=false（緊急停止中）：多半是金鑰錯誤或權限不足，看上面的 reason"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::等了 3 分鐘，Executor 的狀態還不是預期的樣子。最後一次回應：$H"
+          exit 1
