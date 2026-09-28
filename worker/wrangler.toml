@@ -121,7 +121,8 @@ WORKER_SCAN_BATCH_INTERVAL_MIN = "10"
 # 只是把原本大部分 tick 都空著的時間拿來輪流服務其他週期；每個週期各自
 # 涵蓋一輪候選池的時間跟只開一個週期時一樣（≈ TOP/BATCH_SIZE ×
 # BATCH_INTERVAL_MIN ≈ 1 小時），不會變慢
-WORKER_SCAN_INTERVAL = "4h,1h,30m"
+# 2026-09-29 使用者要求 SMC 前 10 大「全部週期都看」：15m 到日線 7 個週期（15m 以下雜訊太多、回測最差，不看）
+WORKER_SCAN_INTERVAL = "1d,6h,4h,2h,1h,30m,15m"
 # 掃描累積門檻，故意設很低（幾乎不濾）：跟上面的 MIN_SCORE（推播/下單
 # 門檻）是兩件事，掃描這一步只要是有效計畫就先存起來，要不要因此推播、
 # 下單留到比對現價那一步才照 MIN_SCORE 篩——這樣累積結果才不會被鎖死在
