@@ -48,7 +48,7 @@ const day = (ms) => new Date(ms + 8 * 3_600_000).toISOString().slice(5, 16).repl
   log('');
   log('| 策略 | 筆數 | 勝率 | 淨損益 | 平均賺 | 平均賠 | 賺賠比（總賺÷總賠） | 最長連虧 | 最大一筆虧損 | 手續費 |');
   log('|---|---|---|---|---|---|---|---|---|---|');
-  const groups = ['smc', 'breakout', 'ema', 'macd', 'fakeout', 'manual'];
+  const groups = ['smc', 'breakout', 'ema', 'macd', 'fakeout', 'vol', 'st', 'gc', 'manual'];
   for (const g of [...groups, 'all']) {
     const xs = g === 'all' ? trades : trades.filter((t) => t.strategy === g);
     if (!xs.length) continue;
