@@ -20,6 +20,14 @@ import { aggregateBias, tfSuite } from '../smc/mtf.js';
 export const EXCLUDE_SYMBOL = /(USDC|FDUSD|TUSD|BUSD|DAI|USDP|USDE|USD1|USDF|PYUSD|AEUR|EURI|XUSD|BFUSD|EUR|GBP|TRY|BRL|ARS|JPY|UP|DOWN|BULL|BEAR)USDT$/;
 /** 近期波動度低於此值（相對價格）就視為穩定幣或殭屍幣，直接跳過 */
 export const MIN_ATR_PCT = 0.15;
+/**
+ * 進場週期抓幾根 K 棒（含盤中那根，分析時會去掉）。跟 App 圖表預設的
+ * 500 根（src/core/store.js 的 candleCount）一樣：結構判斷會受「從哪一根
+ * 開始算」影響，兩邊根數不同，同一個幣的計畫就可能對不上 Discord 通知。
+ */
+export const SCAN_BARS = 500;
+/** 高週期偏向抓幾根（App 的 loadHtfBias 也用這個數字） */
+export const SCAN_HTF_BARS = 260;
 
 async function withFallback(providerIds, fn) {
   let err;
@@ -133,10 +141,14 @@ export async function scanMarket({
     ? Array.from({ length: size }, (_, i) => topPool[(offset + i) % topPool.length])
     : [];
 
+  // 粗篩抓到的 K 棒留著給精算用，不用再抓一次（精算只是多帶高週期偏向重算）
+  const closedBySymbol = new Map();
   const stage1 = await pool(universe, concurrency, async (t) => {
     const p = PROVIDERS[provider];
-    const candles = await p.fetchKlines(t.symbol, interval, { limit: 320 });
-    const a = analyze(candles.slice(0, -1));
+    const candles = await p.fetchKlines(t.symbol, interval, { limit: SCAN_BARS });
+    const closed = candles.slice(0, -1);
+    closedBySymbol.set(t.symbol, closed);
+    const a = analyze(closed);
     if (a.empty) return null;
     // 第二道防線：波動度太低（穩定幣、殭屍幣）的訊號沒有意義
     const atrPct = (a.atrValue / a.price) * 100;
@@ -164,25 +176,30 @@ export async function scanMarket({
       const p = PROVIDERS[provider];
       let htf = null;
       try {
-        const h = await p.fetchKlines(row.symbol, htfInterval, { limit: 260 });
+        const h = await p.fetchKlines(row.symbol, htfInterval, { limit: SCAN_HTF_BARS });
         const ha = analyze(h.slice(0, -1));
         if (!ha.empty) htf = aggregateBias([{ interval: htfInterval, bias: ha.bias }]);
       } catch { /* 高週期補抓失敗就沒有這段加分，不影響主流程 */ }
-      const candles = await p.fetchKlines(row.symbol, interval, { limit: 320 });
-      const a = analyze(candles.slice(0, -1), { htfBias: htf });
+      const closed = closedBySymbol.get(row.symbol)
+        ?? (await p.fetchKlines(row.symbol, interval, { limit: SCAN_BARS })).slice(0, -1);
+      const a = analyze(closed, { htfBias: htf });
       if (a.empty) return row;
       const fresh = toRow(row.symbol, a, provider, row.quoteVolume, interval);
-      return fresh ? { ...fresh, htfBias: htf?.score ?? null } : row;
+      return fresh ? { ...fresh, htfBias: htf?.score ?? null, htfInterval: htf ? htfInterval : null } : row;
     });
     rows = [...refined.filter((r) => r && !r.error), ...candidates.slice(detailTop)];
   }
-  rows = rows.sort((a, b) => b.score - a.score);
+  const generatedAt = new Date().toISOString();
+  // 每一筆記下自己是哪一次掃描算出來的：Worker 會把不同批次、不同週期的結果
+  // 累積在一起，整份的 generatedAt 只代表「最新那一批」，Discord 通知要標的是
+  // 這一筆自己的分析時間，使用者才知道 App 上要對照哪個時間點
+  rows = rows.map((r) => ({ ...r, scannedAt: generatedAt })).sort((a, b) => b.score - a.score);
 
   const ready = rows.filter((r) => r.status === 'ready' && r.valid);
   const waiting = rows.filter((r) => r.status === 'waiting' && r.valid);
 
   return {
-    generatedAt: new Date().toISOString(),
+    generatedAt,
     provider,
     interval,
     htfInterval,
