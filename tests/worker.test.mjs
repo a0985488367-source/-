@@ -149,6 +149,7 @@ test('推播寫清楚去 App 對照要看的週期、資料源、分析時間（
   assert.match(field.value, /資料源 \*\*Bybit\*\*/);
   assert.match(field.value, /高週期 1d/);
   assert.match(field.value, /分析於 09-29 12:02（台灣時間），用到 09-29 12:00 收盤的 K 棒/);
+  assert.match(field.value, /https:\/\/www\.tradingview\.com\/chart\/\?symbol=BYBIT%3AABCUSDT\.P&interval=60/);
   assert.match(discord[0].embeds[0].footer.text, /09-29 12:02 台灣時間/);
 });
 

@@ -106,15 +106,19 @@ const binance = {
 
 const BYBIT_TF = { '1m': '1', '3m': '3', '5m': '5', '15m': '15', '30m': '30', '1h': '60', '2h': '120', '4h': '240', '6h': '360', '12h': '720', '1d': 'D', '1w': 'W' };
 
+// Bybit 用 USDT 永續（linear），不是現貨：實際下單的就是永續合約，
+// TradingView 上看的 BYBIT:xxxUSDT.P 也是永續——K 線來源一樣，SMC 計畫才對得上
+const BYBIT_CATEGORY = 'linear';
+
 const bybit = {
   id: 'bybit',
   label: 'Bybit',
-  market: 'Spot',
+  market: 'Perp',
   supportsStream: true,
   intervals: Object.keys(BYBIT_TF),
   async fetchKlines(symbol, interval, { limit = 1000, endTime } = {}) {
     const tf = BYBIT_TF[interval] || '15';
-    const q = new URLSearchParams({ category: 'spot', symbol, interval: tf, limit: String(Math.min(1000, limit)) });
+    const q = new URLSearchParams({ category: BYBIT_CATEGORY, symbol, interval: tf, limit: String(Math.min(1000, limit)) });
     if (endTime) q.set('end', String(endTime));
     const res = await J(`https://api.bybit.com/v5/market/kline?${q}`);
     if (res.retCode !== 0) throw new Error(res.retMsg || 'bybit error');
@@ -123,7 +127,7 @@ const bybit = {
       .sort((a, b) => a.time - b.time);
   },
   async fetchSymbols() {
-    const res = await J('https://api.bybit.com/v5/market/tickers?category=spot');
+    const res = await J(`https://api.bybit.com/v5/market/tickers?category=${BYBIT_CATEGORY}`);
     return res.result.list
       .filter((r) => /USDT$/.test(r.symbol))
       .map((r) => ({
@@ -137,13 +141,13 @@ const bybit = {
       .sort((a, b) => b.quoteVolume - a.quoteVolume);
   },
   async fetchTicker(symbol) {
-    const res = await J(`https://api.bybit.com/v5/market/tickers?category=spot&symbol=${symbol}`);
+    const res = await J(`https://api.bybit.com/v5/market/tickers?category=${BYBIT_CATEGORY}&symbol=${symbol}`);
     const r = res.result.list[0];
     return { symbol, price: +r.lastPrice, change: +r.price24hPcnt * 100, high: +r.highPrice24h, low: +r.lowPrice24h, quoteVolume: +r.turnover24h };
   },
   createStream(symbol, interval, onCandle, onStatus) {
     const tf = BYBIT_TF[interval] || '15';
-    const ws = new WebSocket('wss://stream.bybit.com/v5/public/spot');
+    const ws = new WebSocket(`wss://stream.bybit.com/v5/public/${BYBIT_CATEGORY}`);
     ws.onopen = () => {
       onStatus?.('live');
       ws.send(JSON.stringify({ op: 'subscribe', args: [`kline.${tf}.${symbol}`] }));
