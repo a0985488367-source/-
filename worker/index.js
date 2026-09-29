@@ -37,6 +37,12 @@
  * 6 批 × 10 分鐘 ≈ 1 小時涵蓋 120 檔；縮小 BATCH_SIZE 或 CONCURRENCY 可以
  * 再降低單批的請求密度。
  *
+ * 候選池一批就裝得下（例如 SMC_SYMBOLS 只盯 10 檔、BATCH_SIZE=20）時，
+ * 改成「那個週期有新的 K 棒收盤才重掃」（收盤後約 1～3 分鐘）：分析只看
+ * 已收盤的 K 棒，沒有新收盤的 K 棒重掃結果也一樣；這樣 15m 每 15 分鐘、
+ * 1d 每天更新一次，計畫跟 App 圖表（同樣只看已收盤 K 棒）對得上。另外
+ * 超過 2 小時沒掃、或上一批有抓資料失敗的，也會照 BATCH_INTERVAL_MIN 補掃。
+ *
  * 「算下一批」跟「Worker 每 2 分鐘的 cron 頻率」是兩回事：比對現價、自動
  * 下單這些仍然每 2 分鐘執行，只有「輪到的那一批要不要重新分析」照
  * WORKER_SCAN_BATCH_INTERVAL_MIN 的頻率跑，沒輪到批次的 tick 只讀 KV
@@ -183,6 +189,7 @@
 import { scanMarket } from '../src/market/scan.js';
 import { DEFAULT_MANAGEMENT, buildLadder } from '../src/smc/manage.js';
 import { PROVIDERS } from '../src/data/providers.js';
+import { intervalToMs } from '../src/core/utils.js';
 import { ema } from '../src/core/indicators.js';
 import { breakoutSignal } from '../src/strategies/breakout.js';
 import { emaCrossSignal } from '../src/strategies/ema-cross.js';
@@ -776,6 +783,35 @@ function parseScanCursor(cursorRaw) {
  */
 const scanRowKey = (interval, symbol) => `${interval}::${symbol}`;
 
+/** K 棒收盤後等多久才重掃：剛收盤那幾秒，交易所有時還沒把新 K 棒生出來 */
+const SCAN_CLOSE_DELAY_MS = 60_000;
+/** 「收盤才重掃」模式下，最久多少分鐘一定補掃一次（日線一天才收一次，太久沒掃會被當成資料過期） */
+const SCAN_MAX_AGE_MIN = 120;
+
+/**
+ * 某個週期「從什麼時候開始該重掃」，還不用重掃就回傳 null。
+ * - 候選池一批就裝得下（meta.poolTotal <= batchSize）：有新的 K 棒收盤
+ *   （而且收盤滿 SCAN_CLOSE_DELAY_MS）才重掃；上一批有資料抓失敗的，隔
+ *   intervalMin 分鐘補掃；超過 SCAN_MAX_AGE_MIN 也補掃。
+ * - 候選池要分好幾批才掃得完：照舊每 intervalMin 分鐘算下一批。
+ * 回傳值拿來排序：越早到期的越先處理，不會有週期一直被插隊餓死。
+ */
+function scanDueAt(meta, interval, { intervalMin, batchSize, now }) {
+  if (!meta) return 0;
+  const last = new Date(meta.lastBatchAt).getTime();
+  const everyMin = last + intervalMin * 60000;
+  const ms = intervalToMs(interval);
+  // 週線以上的 K 棒邊界不是從 1970-01-01 起算的整數倍，不適用收盤判斷
+  if (meta.poolTotal > 0 && meta.poolTotal <= batchSize && ms <= 86_400_000) {
+    const readyAt = Math.floor((now - SCAN_CLOSE_DELAY_MS) / ms) * ms + SCAN_CLOSE_DELAY_MS;
+    if (last < readyAt) return readyAt;
+    if (meta.lastBatchErrors > 0 && now >= everyMin) return everyMin;
+    const maxAge = last + SCAN_MAX_AGE_MIN * 60000;
+    return now >= maxAge ? maxAge : null;
+  }
+  return now >= everyMin ? everyMin : null;
+}
+
 /**
  * 把 SMC_KV 裡累積的批次結果組成跟 data/market.json 一樣的結構。
  * meta 現在是「每個週期各自的 meta」（{ [interval]: {...} }），因為每個
@@ -935,15 +971,14 @@ async function getFreshMarket(env) {
   // 找出「到期該重新掃描」的週期，優先處理最久沒更新的那個（沒 meta 的
   // 當成最久沒更新，第一次一定會被排到）——同一個 tick 只真的重新掃描
   // 一個週期，其他到期的留給下一個 tick，避免一次塞爆對外請求。
+  const now = Date.now();
   const due = intervals
-    .filter((iv) => !metaByInterval[iv] || (Date.now() - new Date(metaByInterval[iv].lastBatchAt).getTime()) / 60000 >= intervalMin)
-    .sort((a, b) => {
-      const at = metaByInterval[a]?.lastBatchAt;
-      const bt = metaByInterval[b]?.lastBatchAt;
-      if (!at) return -1;
-      if (!bt) return 1;
-      return new Date(at) - new Date(bt);
-    });
+    .map((iv) => ({ iv, at: scanDueAt(metaByInterval[iv], iv, { intervalMin, batchSize, now }) }))
+    .filter((d) => d.at != null)
+    // 先處理「最早到期」的，同時到期（例如整點好幾個週期一起收盤）就先算短週期：
+    // 短週期的計畫變得快，晚幾分鐘更新影響比較大
+    .sort((a, b) => a.at - b.at || intervalToMs(a.iv) - intervalToMs(b.iv))
+    .map((d) => d.iv);
 
   if (!due.length) {
     const rowsRaw = await env.SMC_KV.get(WORKER_SCAN_ROWS_KEY);
@@ -1046,6 +1081,30 @@ function fmt(v) {
   return Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 }
 
+/** 轉成台灣時間（UTC+8）的「MM-DD HH:mm」；使用者看 App 跟 Discord 都是台灣時間 */
+function twTime(t) {
+  const ms = typeof t === 'number' ? t : new Date(t).getTime();
+  if (!isFinite(ms)) return '—';
+  return new Date(ms + 8 * 3600_000).toISOString().slice(5, 16).replace('T', ' ');
+}
+
+const PROVIDER_NAME = { bybit: 'Bybit', binance: 'Binance', okx: 'OKX' };
+
+/**
+ * 「去 App 對照」要用的資訊：哪個週期、哪個資料源、高週期看哪個、用到哪一根
+ * 收盤的 K 棒。App 圖表的算法跟 Worker 一樣（只看已收盤 K 棒、同一個高週期），
+ * 但只要週期或資料源切錯，或 App 上已經又多收了幾根 K 棒，看到的計畫就會不同。
+ */
+function compareText(r, market) {
+  const closeAt = r.updatedAt != null ? r.updatedAt + intervalToMs(r.interval) : null;
+  const analyzedAt = r.scannedAt ?? market.generatedAt;
+  return [
+    `週期 **${r.interval}**　資料源 **${PROVIDER_NAME[r.provider] ?? r.provider ?? '—'}**${r.htfInterval ? `　高週期 ${r.htfInterval}` : ''}`,
+    `分析於 ${twTime(analyzedAt)}（台灣時間），用到 ${closeAt != null ? twTime(closeAt) : '—'} 收盤的 K 棒`,
+    'App 要切到同一個週期和資料源；之後又收了新 K 棒，計畫可能已經變了',
+  ].join('\n');
+}
+
 function buildEmbed({ row: r, price }, market, autoTrade, mode = null) {
   const base = r.symbol.replace(/USDT$/, '');
   const long = r.dir === 'long';
@@ -1053,7 +1112,7 @@ function buildEmbed({ row: r, price }, market, autoTrade, mode = null) {
   return {
     username: 'SMC 即時守門員',
     embeds: [{
-      title: `⚡ ${base}/USDT 價格到了　${long ? '🟢 做多' : '🔴 做空'} · ${r.grade} 級`,
+      title: `⚡ ${base}/USDT 【${r.interval}】價格到了　${long ? '🟢 做多' : '🔴 做空'} · ${r.grade} 級`,
       color: long ? 0x26a69a : 0xef5350,
       description:
         `等待中的計畫，價格剛剛回到進場區。\n` +
@@ -1065,9 +1124,10 @@ function buildEmbed({ row: r, price }, market, autoTrade, mode = null) {
         { name: '目標', value: tps || '—' },
         { name: '評分', value: `${r.score}/100（匯流 ${r.checksPassed}/${r.checksTotal}）`, inline: true },
         { name: '區間位置', value: r.pd ? `${r.pd.zone} ${r.pd.pct?.toFixed?.(0) ?? ''}%` : '—', inline: true },
+        { name: '📱 去 App 對照', value: compareText(r, market) },
         ...(autoTrade ? [{ name: `🤖 自動下單（${modeLabel(mode)}）`, value: autoTradeText(autoTrade) }] : []),
       ],
-      footer: { text: `${r.interval} 計畫 · 分析於 ${new Date(market.generatedAt).toISOString().slice(5, 16).replace('T', ' ')} UTC · 僅供研究，非投資建議` },
+      footer: { text: `${r.interval} 計畫 · 分析於 ${twTime(r.scannedAt ?? market.generatedAt)} 台灣時間 · 僅供研究，非投資建議` },
       timestamp: new Date().toISOString(),
     }],
   };

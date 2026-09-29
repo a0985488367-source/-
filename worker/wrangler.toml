@@ -115,6 +115,8 @@ WORKER_SCAN_ENABLED = "true"
 SMC_SYMBOLS = "BTCUSDT,ETHUSDT,XRPUSDT,BNBUSDT,SOLUSDT,DOGEUSDT,ADAUSDT,TRXUSDT,LINKUSDT,AVAXUSDT"
 WORKER_SCAN_TOP = "120"
 WORKER_SCAN_BATCH_SIZE = "20"
+# 只盯 SMC_SYMBOLS 10 檔、一批（20）就裝得下：改成「每個週期有新 K 棒收盤才重掃」
+# （收盤後約 1～3 分鐘），這個間隔只剩「上一批抓資料失敗時多久補掃」的作用
 WORKER_SCAN_BATCH_INTERVAL_MIN = "10"
 # 逗號分隔可以同時開多個進場週期：每個週期各自輪流掃描（同一個 tick 只
 # 真的重新掃描一個到期的週期），不會因為多加週期就讓單批的請求量變大，
