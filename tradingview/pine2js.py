@@ -16,7 +16,7 @@ SKIP_PREFIXES = (
     'indicator(', 'box.new(', 'line.new(', 'label.new(', 'table.cell(', 'table.clear(',
     'alert(', 'var table ', 'float htfScore', 'float htfRaw', 'HTF_TF =', 'HTF_MS =',
 )
-SKIP_FUNCS = {'getWindow', 'htfOf', 'tfName'}
+SKIP_FUNCS = {'getWindow', 'htfOf', 'tfName', 'tablePosOf', 'shortKind'}
 INPUT_RE = re.compile(r'^(\w+)\s*=\s*input\.')
 
 
