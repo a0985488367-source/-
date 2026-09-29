@@ -44,7 +44,7 @@ const file = join(dir, 'pine.mjs');
 writeFileSync(file, `${PRELUDE}
 export function runPine(env) {
   const { candles, htfScore, mode } = env;
-  const iBars = 500, iUseHtf = true, iShowPois = true, iShowStruct = true, iShowTable = true, iAlertScore = 65, iNearPct = 0.08;
+  const iBars = 500, iUseHtf = true, iShowStruct = true, iShowInternal = true, iShowTable = true, iTableDetail = true, iPoiMax = 14, iPlanWidth = 40, iTextSize = '中', iTablePos = '右上', iAlertScore = 65, iNearPct = 0.08;
   const barstate = { islast: true, isconfirmed: !!env.confirmed };
   const bar_index = candles.length - 1;
   const close = candles[candles.length - 1].close;

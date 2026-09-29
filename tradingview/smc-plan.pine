@@ -18,9 +18,15 @@ indicator("SMC 計畫（跟 Discord 通知同一套）", shorttitle = "SMC 計�
 
 iBars       = input.int(500, "分析 K 棒數（含盤中那根）", minval = 60, maxval = 900, tooltip = "系統固定抓 500 根、去掉盤中那根再分析。改了就會跟 Discord 通知對不上。")
 iUseHtf     = input.bool(true, "使用高週期偏向（跟通知一樣）")
-iShowPois   = input.bool(true, "畫出其他 OB／FVG")
-iShowStruct = input.bool(true, "畫出 BOS／CHoCH")
-iShowTable  = input.bool(true, "顯示計畫表")
+G_VIEW = "顯示"
+iTextSize   = input.string("中", "文字大小", options = ["小", "中", "大"], group = G_VIEW)
+iTablePos   = input.string("右上", "計畫表位置", options = ["右上", "右中", "右下", "左上", "左下"], group = G_VIEW)
+iShowTable  = input.bool(true, "顯示計畫表", group = G_VIEW)
+iTableDetail = input.bool(false, "計畫表列出 10 項匯流明細", group = G_VIEW)
+iPoiMax     = input.int(3, "其他 OB／FVG 最多畫幾個（0 = 不畫）", minval = 0, maxval = 14, group = G_VIEW)
+iShowStruct = input.bool(true, "畫出 BOS／CHoCH（大結構）", group = G_VIEW)
+iShowInternal = input.bool(false, "也畫小結構的 BOS／CHoCH", group = G_VIEW)
+iPlanWidth  = input.int(40, "右邊計畫區寬度（K 棒數）", minval = 10, maxval = 200, group = G_VIEW)
 iAlertScore = input.int(65, "警報最低分數（系統推播門檻 65）")
 iNearPct    = input.float(0.08, "價格離進場多近算到了（%）", step = 0.01)
 
@@ -935,6 +941,30 @@ inKillzone(int ts) =>
     hf = hour(ts, "UTC") + minute(ts, "UTC") / 60.0
     (hf >= 0 and hf < 6) or (hf >= 7 and hf < 10) or (hf >= 12 and hf < 15) or (hf >= 17.5 and hf < 20)
 
+// ───────────────────────────────────────────────────────────── 顯示設定
+
+sizeOf(string s, int step) =>
+    // step：0 = 設定的大小，-1 = 小一號（說明文字用）
+    idx = (s == "小" ? 1 : s == "中" ? 2 : 3) + step
+    idx <= 0 ? size.tiny : idx == 1 ? size.small : idx == 2 ? size.normal : size.large
+
+tablePosOf(string s) =>
+    switch s
+        "右中" => position.middle_right
+        "右下" => position.bottom_right
+        "左上" => position.top_left
+        "左下" => position.bottom_left
+        => position.top_right
+
+// 圖上短名稱，框裡的字越少越清楚
+shortKind(string k) =>
+    switch k
+        "Order Block" => "OB"
+        "Breaker" => "Breaker"
+        "Inversion FVG" => "iFVG"
+        "Volume Imbalance" => "VI"
+        => k
+
 // ───────────────────────────────────────────────────────────── 主分析（只在最後一根算）
 
 // 分析視窗第 k 根（0 = 最舊）在圖上的 bar_index
@@ -948,7 +978,7 @@ COL_BULL = color.new(#26a69a, 0)
 COL_BEAR = color.new(#ef5350, 0)
 COL_TEXT = color.new(#d1d4dc, 0)
 
-var table panel = table.new(position.top_right, 2, 20, bgcolor = color.new(#131722, 10), border_color = color.new(#363a45, 0), border_width = 1)
+var table panel = table.new(tablePosOf(iTablePos), 2, 22, bgcolor = color.new(#131722, 8), frame_color = color.new(#434651, 0), frame_width = 1, border_color = color.new(#2a2e39, 0), border_width = 1)
 
 if barstate.islast
     for b in box.all
@@ -957,7 +987,7 @@ if barstate.islast
         ln.delete()
     for lb in label.all
         lb.delete()
-    table.clear(panel, 0, 0, 1, 19)
+    table.clear(panel, 0, 0, 1, 21)
 
     // 盤中那根不算（跟系統一樣只看已收盤的 K 棒）
     off = barstate.isconfirmed ? 0 : 1
@@ -1233,80 +1263,115 @@ if barstate.islast
                 gradePlan := scorePlan >= 80 ? "A+" : scorePlan >= 68 ? "A" : scorePlan >= 55 ? "B" : scorePlan >= 42 ? "C" : "D"
                 validPlan := scorePlan >= 42 and rrFinal >= math.min(1.5, MIN_RR)
 
-                // ── 畫圖：進場區、進場／停損／目標線
+                // ── 畫圖：左邊是進場區（OB／FVG），右邊空白處畫成「多空部位工具」的樣子
                 colDir = dir == 1 ? COL_BULL : COL_BEAR
                 xNow = bar_index
+                xL = xNow + 2
+                xR = xNow + iPlanWidth
                 xLeft = poi.index >= 0 ? xAt(n, off, poi.index) : xAt(n, off, math.max(0, n - 30))
-                box.new(xLeft, poi.top, xNow + 15, poi.bottom, border_color = colDir, border_width = 2, bgcolor = color.new(colDir, 80), text = poi.kind + "（計畫進場區）", text_color = COL_TEXT, text_size = size.small, text_halign = text.align_left, text_valign = text.align_top)
-                line.new(xNow - 5, entry, xNow + 25, entry, color = colDir, width = 2)
-                label.new(xNow + 25, entry, "進場 " + str.tostring(entry, format.mintick), style = label.style_label_left, color = colDir, textcolor = color.white, size = size.small)
-                line.new(xNow - 5, stop, xNow + 25, stop, color = COL_BEAR, width = 2, style = line.style_dashed)
-                label.new(xNow + 25, stop, "停損 " + str.tostring(stop, format.mintick), style = label.style_label_left, color = COL_BEAR, textcolor = color.white, size = size.small)
+                tsz = sizeOf(iTextSize, 0)
+                tszS = sizeOf(iTextSize, -1)
+                box.new(xLeft, poi.top, xNow, poi.bottom, border_color = color.new(colDir, 20), border_width = 1, bgcolor = color.new(colDir, 82), text = shortKind(poi.kind) + " 進場區", text_color = color.new(COL_TEXT, 10), text_size = tszS, text_halign = text.align_left, text_valign = text.align_center)
+                lastTp = targets.size() > 0 ? targets.get(targets.size() - 1).price : entry
+                // 獲利區（進場 → 最後一個目標）、虧損區（停損 → 進場）
+                box.new(xL, math.max(entry, lastTp), xR, math.min(entry, lastTp), border_color = color.new(COL_BULL, 100), bgcolor = color.new(COL_BULL, 85))
+                box.new(xL, math.max(entry, stop), xR, math.min(entry, stop), border_color = color.new(COL_BEAR, 100), bgcolor = color.new(COL_BEAR, 85))
+                line.new(xLeft, entry, xR, entry, color = colDir, width = 2)
+                line.new(xL, stop, xR, stop, color = COL_BEAR, width = 2)
+                label.new(xR, entry, "進場 " + str.tostring(entry, format.mintick) + (inside ? "（市價）" : "（掛單）"), style = label.style_label_left, color = colDir, textcolor = color.white, size = tsz)
+                label.new(xR, stop, "停損 " + str.tostring(stop, format.mintick) + "  -" + str.tostring(riskV / entry * 100, "#.##") + "%", style = label.style_label_left, color = COL_BEAR, textcolor = color.white, size = tsz)
                 if targets.size() > 0
                     for q = 0 to targets.size() - 1
                         tg = targets.get(q)
-                        line.new(xNow - 5, tg.price, xNow + 25, tg.price, color = COL_BULL, width = 1, style = line.style_dashed)
-                        label.new(xNow + 25, tg.price, "TP" + str.tostring(q + 1) + " " + str.tostring(tg.price, format.mintick) + "（" + str.tostring(tg.rr, "#.##") + "R " + tg.name + "）", style = label.style_label_left, color = color.new(COL_BULL, 30), textcolor = color.white, size = size.small)
+                        line.new(xL, tg.price, xR, tg.price, color = color.new(COL_BULL, 20), width = 1, style = line.style_dashed)
+                        label.new(xR, tg.price, "TP" + str.tostring(q + 1) + " " + str.tostring(tg.price, format.mintick) + "  " + str.tostring(tg.rr, "#.#") + "R", style = label.style_label_left, color = color.new(COL_BULL, 25), textcolor = color.white, size = tsz)
+                // 計畫標題放在獲利區外側（多單在上方、空單在下方），不壓到價格線
+                titleY = dir == 1 ? math.max(entry, lastTp) : math.min(entry, lastTp)
+                label.new(math.round((xL + xR) / 2), titleY, (dir == 1 ? "做多" : "做空") + " · " + gradePlan + " 級 · " + str.tostring(scorePlan, "#") + " 分" + (validPlan ? "" : "（無效）"), style = dir == 1 ? label.style_label_down : label.style_label_up, color = colDir, textcolor = color.white, size = tsz)
 
-        // ── 其他 POI
-        if iShowPois and pois.size() > 0
+        // ── 其他 POI：只畫排名最前面幾個，框淡一點、字只留短名稱
+        if iPoiMax > 0 and pois.size() > 0
+            int drawn = 0
             for q = 0 to pois.size() - 1
+                if drawn >= iPoiMax
+                    break
                 p = pois.get(q)
                 if p.index < 0 or (not na(poi) and p.index == poi.index and p.kind == poi.kind and p.dir == poi.dir)
                     continue
                 colP = p.dir == 1 ? COL_BULL : COL_BEAR
-                box.new(xAt(n, off, p.index), p.top, bar_index + 5, p.bottom, border_color = color.new(colP, 50), border_style = line.style_dotted, bgcolor = color.new(colP, 92), text = p.kind + " " + str.tostring(p.score, "#"), text_color = color.new(COL_TEXT, 40), text_size = size.tiny, text_halign = text.align_right, text_valign = text.align_bottom)
+                box.new(xAt(n, off, p.index), p.top, bar_index, p.bottom, border_color = color.new(colP, 70), border_style = line.style_dotted, bgcolor = color.new(colP, 94), text = shortKind(p.kind), text_color = color.new(colP, 30), text_size = sizeOf(iTextSize, -1), text_halign = text.align_right, text_valign = text.align_center)
+                drawn += 1
 
-        // ── 結構事件（最近幾次）
+        // ── 結構事件：預設只畫大結構最近 3 次，小結構要另外打開
         if iShowStruct
             for sc = 0 to 1
+                if sc == 0 and not iShowInternal
+                    continue
                 Struct st = sc == 1 ? swingSt : intSt
                 ne = st.evType.size()
-                first = math.max(0, ne - (sc == 1 ? 4 : 6))
+                first = math.max(0, ne - 3)
                 if ne > 0
                     for k = first to ne - 1
                         colE = st.evDir.get(k) == 1 ? COL_BULL : COL_BEAR
                         x1 = xAt(n, off, st.evFrom.get(k))
                         x2 = xAt(n, off, st.evBreak.get(k))
-                        line.new(x1, st.evPrice.get(k), x2, st.evPrice.get(k), color = colE, width = sc == 1 ? 2 : 1, style = sc == 1 ? line.style_solid : line.style_dotted)
-                        label.new(math.round((x1 + x2) / 2), st.evPrice.get(k), (st.evType.get(k) == 2 ? "CHoCH" : "BOS") + (sc == 1 ? "" : "·i"), style = st.evDir.get(k) == 1 ? label.style_label_down : label.style_label_up, color = color.new(colE, 100), textcolor = colE, size = size.tiny)
+                        line.new(x1, st.evPrice.get(k), x2, st.evPrice.get(k), color = color.new(colE, sc == 1 ? 20 : 50), width = 1, style = sc == 1 ? line.style_solid : line.style_dotted)
+                        label.new(math.round((x1 + x2) / 2), st.evPrice.get(k), (st.evType.get(k) == 2 ? "CHoCH" : "BOS") + (sc == 1 ? "" : "·小"), style = st.evDir.get(k) == 1 ? label.style_label_down : label.style_label_up, color = color.new(colE, 100), textcolor = color.new(colE, sc == 1 ? 0 : 40), size = sizeOf(iTextSize, -1))
 
-    // ── 計畫表
+    // ── 計畫表：重點放前面、字放大；10 項匯流預設只顯示「幾項通過、缺哪些」
     if iShowTable
+        tsz = sizeOf(iTextSize, 0)
+        tszS = sizeOf(iTextSize, -1)
+        COL_DIM = color.new(COL_TEXT, 45)
         row = 0
-        table.cell(panel, 0, row, "SMC 計畫 · " + tfName(timeframe.period), text_color = color.white, text_size = size.small)
-        table.cell(panel, 1, row, syminfo.ticker, text_color = color.white, text_size = size.small)
-        row += 1
-        table.cell(panel, 0, row, "本週期偏向", text_color = COL_TEXT, text_size = size.small)
-        table.cell(panel, 1, row, na(localScore) ? "—" : str.tostring(localScore, "#"), text_color = COL_TEXT, text_size = size.small)
-        row += 1
-        table.cell(panel, 0, row, "高週期 " + tfName(HTF_TF), text_color = COL_TEXT, text_size = size.small)
-        table.cell(panel, 1, row, na(htfScore) ? "—" : str.tostring(htfScore, "#"), text_color = COL_TEXT, text_size = size.small)
+        table.cell(panel, 0, row, "SMC 計畫", text_color = color.white, text_size = tsz, text_halign = text.align_left)
+        table.cell(panel, 1, row, syminfo.ticker + " · " + tfName(timeframe.period), text_color = COL_DIM, text_size = tsz, text_halign = text.align_right)
         row += 1
         if hasPlan
             colDir = dirPlan == 1 ? COL_BULL : COL_BEAR
-            table.cell(panel, 0, row, (dirPlan == 1 ? "做多" : "做空") + " · " + gradePlan + " 級", text_color = colDir, text_size = size.normal)
-            table.cell(panel, 1, row, str.tostring(scorePlan, "#") + " 分" + (validPlan ? "" : "（無效）"), text_color = colDir, text_size = size.normal)
+            table.cell(panel, 0, row, (dirPlan == 1 ? "▲ 做多" : "▼ 做空") + "  " + gradePlan + " 級", text_color = color.white, bgcolor = color.new(colDir, 25), text_size = tsz, text_halign = text.align_left)
+            table.cell(panel, 1, row, str.tostring(scorePlan, "#") + " 分" + (validPlan ? "" : "（無效）"), text_color = color.white, bgcolor = color.new(colDir, 25), text_size = tsz, text_halign = text.align_right)
             row += 1
-            table.cell(panel, 0, row, "進場（" + entryType + "）", text_color = COL_TEXT, text_size = size.small)
-            table.cell(panel, 1, row, str.tostring(entry, format.mintick), text_color = COL_TEXT, text_size = size.small)
+            table.cell(panel, 0, row, "進場", text_color = COL_DIM, text_size = tsz, text_halign = text.align_left)
+            table.cell(panel, 1, row, str.tostring(entry, format.mintick) + "  " + (entryType == "掛單等回踩" ? "掛單" : "市價"), text_color = COL_TEXT, text_size = tsz, text_halign = text.align_right)
             row += 1
-            table.cell(panel, 0, row, "停損", text_color = COL_TEXT, text_size = size.small)
-            table.cell(panel, 1, row, str.tostring(stop, format.mintick) + "（" + str.tostring(riskV / entry * 100, "#.##") + "%）", text_color = COL_TEXT, text_size = size.small)
+            table.cell(panel, 0, row, "停損", text_color = COL_DIM, text_size = tsz, text_halign = text.align_left)
+            table.cell(panel, 1, row, str.tostring(stop, format.mintick) + "  -" + str.tostring(riskV / entry * 100, "#.##") + "%", text_color = COL_BEAR, text_size = tsz, text_halign = text.align_right)
             row += 1
             if targets.size() > 0
                 for q = 0 to targets.size() - 1
                     tg = targets.get(q)
-                    table.cell(panel, 0, row, "TP" + str.tostring(q + 1), text_color = COL_TEXT, text_size = size.small)
-                    table.cell(panel, 1, row, str.tostring(tg.price, format.mintick) + " · " + str.tostring(tg.rr, "#.##") + "R", text_color = COL_TEXT, text_size = size.small)
+                    table.cell(panel, 0, row, "TP" + str.tostring(q + 1), text_color = COL_DIM, text_size = tsz, text_halign = text.align_left)
+                    table.cell(panel, 1, row, str.tostring(tg.price, format.mintick) + "  " + str.tostring(tg.rr, "#.#") + "R", text_color = COL_BULL, text_size = tsz, text_halign = text.align_right)
                     row += 1
+            table.cell(panel, 0, row, "偏向", text_color = COL_DIM, text_size = tszS, text_halign = text.align_left)
+            table.cell(panel, 1, row, "本週期 " + (na(localScore) ? "—" : str.tostring(localScore, "#")) + " · " + tfName(HTF_TF) + " " + (na(htfScore) ? "—" : str.tostring(htfScore, "#")), text_color = COL_TEXT, text_size = tszS, text_halign = text.align_right)
+            row += 1
+            int passed = 0
+            string missing = ""
             for q = 0 to 9
-                table.cell(panel, 0, row, (checks.get(q) ? "✅ " : "⬜ ") + CHECK_NAMES.get(q), text_color = checks.get(q) ? COL_TEXT : color.new(COL_TEXT, 50), text_size = size.tiny)
-                table.cell(panel, 1, row, str.tostring(CHECK_WEIGHTS.get(q)), text_color = color.new(COL_TEXT, 50), text_size = size.tiny)
-                row += 1
+                if checks.get(q)
+                    passed += 1
+                else
+                    missing := missing + (missing == "" ? "" : "、") + CHECK_NAMES.get(q)
+            table.cell(panel, 0, row, "匯流 " + str.tostring(passed) + "/10", text_color = COL_DIM, text_size = tszS, text_halign = text.align_left)
+            table.cell(panel, 1, row, missing == "" ? "全部通過" : "缺：" + missing, text_color = COL_DIM, text_size = tszS, text_halign = text.align_right)
+            row += 1
+            if iTableDetail
+                for q = 0 to 9
+                    table.cell(panel, 0, row, (checks.get(q) ? "✅ " : "⬜ ") + CHECK_NAMES.get(q), text_color = checks.get(q) ? COL_TEXT : COL_DIM, text_size = tszS, text_halign = text.align_left)
+                    table.cell(panel, 1, row, "+" + str.tostring(CHECK_WEIGHTS.get(q)), text_color = COL_DIM, text_size = tszS, text_halign = text.align_right)
+                    row += 1
         else
-            table.cell(panel, 0, row, n < 30 ? "K 棒不夠（至少 30 根）" : "目前沒有計畫", text_color = COL_TEXT, text_size = size.small)
-            table.cell(panel, 1, row, noneReason, text_color = color.new(COL_TEXT, 30), text_size = size.tiny)
+            table.cell(panel, 0, row, n < 30 ? "K 棒不夠（至少 30 根）" : "目前沒有計畫", text_color = COL_TEXT, text_size = tsz, text_halign = text.align_left)
+            table.cell(panel, 1, row, "", text_size = tsz)
+            row += 1
+            if noneReason != ""
+                table.cell(panel, 0, row, noneReason, text_color = COL_DIM, text_size = tszS, text_halign = text.align_left)
+                table.cell(panel, 1, row, "", text_size = tszS)
+                row += 1
+            table.cell(panel, 0, row, "偏向", text_color = COL_DIM, text_size = tszS, text_halign = text.align_left)
+            table.cell(panel, 1, row, "本週期 " + (na(localScore) ? "—" : str.tostring(localScore, "#")) + " · " + tfName(HTF_TF) + " " + (na(htfScore) ? "—" : str.tostring(htfScore, "#")), text_color = COL_TEXT, text_size = tszS, text_halign = text.align_right)
 
     // ── 警報：價格回到進場區（跟 Discord 推播一樣的條件）
     if hasPlan and validPlan and scorePlan >= iAlertScore
