@@ -1,0 +1,1316 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0
+//
+// SMC 計畫 —— 跟 Discord 通知（Cloudflare Worker 掃描）同一套規則的 TradingView 版本
+//
+// 這支指標是 src/smc/*.js（engine／swings／structure／fvg／orderblocks／liquidity／
+// zones／setups／sessions）逐行改寫過來的，規則、參數、邊界條件都照抄：
+//   - 只分析「已收盤」的 K 棒：跟系統一樣抓 500 根（含盤中那根），去掉盤中那根，剩 499 根
+//   - 均線、ATR、RSI 都只用這 499 根重新算（不是 TradingView 內建從頭算的版本），
+//     因為系統也是這樣算，起算點不同數字就會不一樣
+//   - 高週期偏向只看一個高週期：15m／30m→4h、1h／2h／4h→1d、6h／1d→1w，抓 260 根去掉盤中那根
+// 請掛在 BYBIT:xxxUSDT.P（Bybit 永續）上：系統的 K 線就是 Bybit 永續。
+// 改了 src/smc/ 的規則，這支也要跟著改，不然兩邊又會對不上。
+//
+//@version=6
+indicator("SMC 計畫（跟 Discord 通知同一套）", shorttitle = "SMC 計畫", overlay = true, max_bars_back = 1000, max_boxes_count = 200, max_lines_count = 300, max_labels_count = 300)
+
+// ───────────────────────────────────────────────────────────── 輸入
+
+iBars       = input.int(500, "分析 K 棒數（含盤中那根）", minval = 60, maxval = 900, tooltip = "系統固定抓 500 根、去掉盤中那根再分析。改了就會跟 Discord 通知對不上。")
+iUseHtf     = input.bool(true, "使用高週期偏向（跟通知一樣）")
+iShowPois   = input.bool(true, "畫出其他 OB／FVG")
+iShowStruct = input.bool(true, "畫出 BOS／CHoCH")
+iShowTable  = input.bool(true, "顯示計畫表")
+iAlertScore = input.int(65, "警報最低分數（系統推播門檻 65）")
+iNearPct    = input.float(0.08, "價格離進場多近算到了（%）", step = 0.01)
+
+// ───────────────────────────────────────────────────────────── 固定參數（= src/smc/engine.js DEFAULT_SETTINGS）
+
+INTERNAL_STR = 2
+SWING_STR    = 7
+MIN_DISP_ATR = 1.0
+FVG_MIN_ATR  = 0.25
+LIQ_TOL_ATR  = 0.18
+MIN_RR       = 2.0
+RISK_BUF_ATR = 0.35
+MAX_POIS     = 14
+HTF_BARS     = 260
+
+// ───────────────────────────────────────────────────────────── 資料結構
+
+type Struct
+    int trend = 0
+    array<int> evType      // 1 = BOS, 2 = CHoCH
+    array<int> evDir       // 1 = 看多, -1 = 看空
+    array<float> evPrice
+    array<int> evFrom
+    array<int> evBreak
+    int phIdx = -1         // pendingHigh
+    float phPrice = na
+    int plIdx = -1         // pendingLow
+    float plPrice = na
+    int shIdx = -1         // strongHigh
+    float shPrice = na
+    int slIdx = -1         // strongLow
+    float slPrice = na
+
+type Gap
+    int kind               // 0 = FVG, 1 = Volume Imbalance
+    int dir
+    int index
+    float top
+    float bottom
+    float mid
+    float sizeAtr
+    float disp
+    string state = "fresh"
+    float fillPct = 0.0
+    int invDir = 0
+    float score = 0.0
+
+type OB
+    int dir
+    int scale              // 0 = internal, 1 = swing
+    int index
+    float top
+    float bottom
+    float mid
+    bool choch
+    int breakIdx
+    float dispAtr
+    float rvol
+    bool containsFvg
+    bool swept
+    string state = "fresh"
+    int touches = 0
+    float mitPct = 0.0
+    int breakerDir = 0
+    float score = 0.0
+
+type Poi
+    string kind
+    int dir
+    float top
+    float bottom
+    float mid
+    float score
+    string state
+    int index              // -1 = OTE（沒有對應的 K 棒）
+    float rank = 0.0
+
+type Pool
+    int side               // 1 = buyside（上方）, -1 = sellside（下方）
+    float price
+    int touches = 1
+    bool equal = false
+    int lastIndex
+    bool swept = false
+    float strength = 0.0
+
+type Target
+    float price
+    string name
+    float rr
+
+// ───────────────────────────────────────────────────────────── 小工具
+
+// JavaScript 的 Math.round（0.5 一律往上），Pine 的 math.round 負數時不一樣
+jsRound(float x) =>
+    math.floor(x + 0.5)
+
+// JS 的 `x || fallback`：na 或 0 都算沒有
+orElse(float x, float fallback) =>
+    na(x) or x == 0 ? fallback : x
+
+// 取最近 n 根 K 棒（off = 從第幾根往前算；0 = 目前這根），陣列 0 = 最舊
+getWindow(int n, int off) =>
+    o = array.new<float>(n, na)
+    h = array.new<float>(n, na)
+    l = array.new<float>(n, na)
+    c = array.new<float>(n, na)
+    v = array.new<float>(n, na)
+    t = array.new<int>(n, 0)
+    if n > 0
+        for k = 0 to n - 1
+            bi = off + n - 1 - k
+            o.set(k, open[bi])
+            h.set(k, high[bi])
+            l.set(k, low[bi])
+            c.set(k, close[bi])
+            v.set(k, nz(volume[bi]))
+            t.set(k, time[bi])
+    [o, h, l, c, v, t]
+
+// ───────────────────────────────────────────────────────────── 指標（src/core/indicators.js）
+
+rmaArr(array<float> src, int period) =>
+    n = src.size()
+    out = array.new<float>(n, na)
+    if n >= period
+        float prev = 0.0
+        for i = 0 to period - 1
+            prev := prev + src.get(i)
+        prev := prev / period
+        out.set(period - 1, prev)
+        if n > period
+            for i = period to n - 1
+                prev := (prev * (period - 1) + src.get(i)) / period
+                out.set(i, prev)
+    out
+
+atrArr(array<float> h, array<float> l, array<float> c) =>
+    n = h.size()
+    tr = array.new<float>(n, na)
+    if n > 0
+        for i = 0 to n - 1
+            if i == 0
+                tr.set(i, h.get(i) - l.get(i))
+            else
+                p = c.get(i - 1)
+                tr.set(i, math.max(h.get(i) - l.get(i), math.abs(h.get(i) - p), math.abs(l.get(i) - p)))
+    rmaArr(tr, 14)
+
+// EMA 最後一個值（前 period 根用簡單平均起算，跟 JS 一樣）；根數不夠就是 na
+emaLast(array<float> src, int period) =>
+    n = src.size()
+    float out = na
+    if n >= period
+        k = 2.0 / (period + 1)
+        float prev = 0.0
+        for i = 0 to period - 1
+            prev := prev + src.get(i)
+        prev := prev / period
+        if n > period
+            for i = period to n - 1
+                prev := src.get(i) * k + prev * (1 - k)
+        out := prev
+    out
+
+rsiLast(array<float> c) =>
+    n = c.size()
+    gains = array.new<float>(n, 0.0)
+    losses = array.new<float>(n, 0.0)
+    if n > 1
+        for i = 1 to n - 1
+            d = c.get(i) - c.get(i - 1)
+            gains.set(i, math.max(0.0, d))
+            losses.set(i, math.max(0.0, -d))
+    ag = rmaArr(gains, 14)
+    al = rmaArr(losses, 14)
+    float out = na
+    if n > 0
+        a1 = ag.get(n - 1)
+        a2 = al.get(n - 1)
+        if not na(a1) and not na(a2)
+            out := a2 == 0 ? 100.0 : 100 - 100 / (1 + a1 / a2)
+    out
+
+// 相對量能（目前 K 棒量能 / 前 20 根平均）
+rvolAt(array<float> v, int i) =>
+    float out = na
+    if i >= 19
+        // 跟 JS 的 sma 一樣用「加新的、減掉最舊的」累加，浮點誤差才會一樣
+        float acc = 0.0
+        for j = 0 to i
+            acc := acc + v.get(j)
+            if j >= 20
+                acc := acc - v.get(j - 20)
+        avg = acc / 20
+        out := avg == 0 ? na : v.get(i) / avg
+    out
+
+// ───────────────────────────────────────────────────────────── 擺動點（src/smc/swings.js）
+
+// 偵測 + 高低交替；type 1 = 高點, -1 = 低點
+swingsOf(array<float> h, array<float> l, int strength) =>
+    n = h.size()
+    rIdx = array.new<int>()
+    rPrice = array.new<float>()
+    rType = array.new<int>()
+    if n >= strength * 2 + 1
+        for i = strength to n - strength - 1
+            bool isHigh = true
+            bool isLow = true
+            ch = h.get(i)
+            cl = l.get(i)
+            for j = 1 to strength
+                if h.get(i - j) >= ch or h.get(i + j) > ch
+                    isHigh := false
+                if l.get(i - j) <= cl or l.get(i + j) < cl
+                    isLow := false
+                if not isHigh and not isLow
+                    break
+            // 同一根同時是高低點時，低點排前面（跟 JS 的排序一致）
+            if isLow
+                rIdx.push(i)
+                rPrice.push(cl)
+                rType.push(-1)
+            if isHigh
+                rIdx.push(i)
+                rPrice.push(ch)
+                rType.push(1)
+    aIdx = array.new<int>()
+    aPrice = array.new<float>()
+    aType = array.new<int>()
+    m = rIdx.size()
+    if m > 0
+        for k = 0 to m - 1
+            s = aIdx.size()
+            if s == 0
+                aIdx.push(rIdx.get(k))
+                aPrice.push(rPrice.get(k))
+                aType.push(rType.get(k))
+            else if aType.get(s - 1) == rType.get(k)
+                keepNew = rType.get(k) == 1 ? rPrice.get(k) >= aPrice.get(s - 1) : rPrice.get(k) <= aPrice.get(s - 1)
+                if keepNew
+                    aIdx.set(s - 1, rIdx.get(k))
+                    aPrice.set(s - 1, rPrice.get(k))
+            else
+                aIdx.push(rIdx.get(k))
+                aPrice.push(rPrice.get(k))
+                aType.push(rType.get(k))
+    [aIdx, aPrice, aType]
+
+lowestBetween(array<float> l, int a, int b) =>
+    n = l.size()
+    int bi = -1
+    float bp = na
+    lo = math.max(0, a)
+    hi = math.min(n - 1, b)
+    if hi >= lo
+        for i = lo to hi
+            if bi < 0 or l.get(i) < bp
+                bi := i
+                bp := l.get(i)
+    [bi, bp]
+
+highestBetween(array<float> h, int a, int b) =>
+    n = h.size()
+    int bi = -1
+    float bp = na
+    lo = math.max(0, a)
+    hi = math.min(n - 1, b)
+    if hi >= lo
+        for i = lo to hi
+            if bi < 0 or h.get(i) > bp
+                bi := i
+                bp := h.get(i)
+    [bi, bp]
+
+// ───────────────────────────────────────────────────────────── 結構 BOS／CHoCH（src/smc/structure.js，收盤突破）
+
+structureOf(array<float> h, array<float> l, array<float> c, array<int> sIdx, array<float> sPrice, array<int> sType, int strength) =>
+    st = Struct.new(0, array.new<int>(), array.new<int>(), array.new<float>(), array.new<int>(), array.new<int>())
+    n = c.size()
+    m = sIdx.size()
+    int p = 0
+    if n > 0
+        for i = 0 to n - 1
+            // 擺動點要再過 strength 根才算成立
+            while p < m and sIdx.get(p) + strength <= i
+                if sType.get(p) == 1
+                    if st.phIdx < 0 or sIdx.get(p) > st.phIdx
+                        st.phIdx := sIdx.get(p)
+                        st.phPrice := sPrice.get(p)
+                else
+                    if st.plIdx < 0 or sIdx.get(p) > st.plIdx
+                        st.plIdx := sIdx.get(p)
+                        st.plPrice := sPrice.get(p)
+                p += 1
+            ci = c.get(i)
+            if st.phIdx >= 0 and ci > st.phPrice
+                st.evType.push(st.trend == -1 ? 2 : 1)
+                st.evDir.push(1)
+                st.evPrice.push(st.phPrice)
+                st.evFrom.push(st.phIdx)
+                st.evBreak.push(i)
+                st.trend := 1
+                [li, lp] = lowestBetween(l, st.phIdx, i)
+                st.slIdx := li
+                st.slPrice := lp
+                st.shIdx := -1
+                st.shPrice := na
+                if li >= 0
+                    st.plIdx := li
+                    st.plPrice := lp
+                st.phIdx := -1
+                st.phPrice := na
+            else if st.plIdx >= 0 and ci < st.plPrice
+                st.evType.push(st.trend == 1 ? 2 : 1)
+                st.evDir.push(-1)
+                st.evPrice.push(st.plPrice)
+                st.evFrom.push(st.plIdx)
+                st.evBreak.push(i)
+                st.trend := -1
+                [hi2, hp] = highestBetween(h, st.plIdx, i)
+                st.shIdx := hi2
+                st.shPrice := hp
+                st.slIdx := -1
+                st.slPrice := na
+                if hi2 >= 0
+                    st.phIdx := hi2
+                    st.phPrice := hp
+                st.plIdx := -1
+                st.plPrice := na
+    st
+
+protectedHighOf(Struct st) =>
+    st.shIdx >= 0 ? st.shPrice : st.phIdx >= 0 ? st.phPrice : na
+
+protectedLowOf(Struct st) =>
+    st.slIdx >= 0 ? st.slPrice : st.plIdx >= 0 ? st.plPrice : na
+
+// ───────────────────────────────────────────────────────────── 流動性池（src/smc/liquidity.js）
+
+// 擺動結構（7）跟內部結構（2）的擺動點合併，依 K 棒順序；同一根時擺動結構的排前面
+mergeSwings(array<int> aIdx, array<float> aPrice, array<int> aType, array<int> bIdx, array<float> bPrice, array<int> bType) =>
+    mIdx = array.new<int>()
+    mPrice = array.new<float>()
+    mType = array.new<int>()
+    int i = 0
+    int j = 0
+    sa = aIdx.size()
+    nb = bIdx.size()
+    while i < sa or j < nb
+        takeA = j >= nb or (i < sa and aIdx.get(i) <= bIdx.get(j))
+        if takeA
+            mIdx.push(aIdx.get(i))
+            mPrice.push(aPrice.get(i))
+            mType.push(aType.get(i))
+            i += 1
+        else
+            mIdx.push(bIdx.get(j))
+            mPrice.push(bPrice.get(j))
+            mType.push(bType.get(j))
+            j += 1
+    [mIdx, mPrice, mType]
+
+poolsOf(array<float> h, array<float> l, array<float> atr, array<int> sIdx, array<float> sPrice, array<int> sType) =>
+    n = h.size()
+    pools = array.new<Pool>()
+    m = sIdx.size()
+    if m > 0
+        for k = 0 to m - 1
+            si = sIdx.get(k)
+            if n - si > 500
+                continue
+            tol = orElse(orElse(atr.get(si), h.get(si) - l.get(si)), 1.0) * LIQ_TOL_ATR
+            side = sType.get(k) == 1 ? 1 : -1
+            sp = sPrice.get(k)
+            int found = -1
+            ps = pools.size()
+            if ps > 0
+                for q = 0 to ps - 1
+                    pl = pools.get(q)
+                    if pl.side == side and math.abs(pl.price - sp) <= tol and not pl.swept
+                        found := q
+                        break
+            if found >= 0
+                pl = pools.get(found)
+                pl.touches := pl.touches + 1
+                pl.price := side == 1 ? math.max(pl.price, sp) : math.min(pl.price, sp)
+                pl.lastIndex := si
+                pl.equal := true
+            else
+                pools.push(Pool.new(side, sp, 1, false, si, false, 0.0))
+    ps2 = pools.size()
+    if ps2 > 0
+        for q = 0 to ps2 - 1
+            pl = pools.get(q)
+            if pl.lastIndex + 1 <= n - 1
+                for i = pl.lastIndex + 1 to n - 1
+                    if pl.side == 1 ? h.get(i) > pl.price : l.get(i) < pl.price
+                        pl.swept := true
+                        break
+            pl.strength := math.min(100, 30 + pl.touches * 18 + (pl.equal ? 15 : 0) + (pl.swept ? -25 : 10))
+    // 依價格由低到高（穩定排序）
+    sorted = array.new<Pool>()
+    if ps2 > 0
+        for q = 0 to ps2 - 1
+            pl = pools.get(q)
+            int pos = sorted.size()
+            while pos > 0 and sorted.get(pos - 1).price > pl.price
+                pos -= 1
+            sorted.insert(pos, pl)
+    sorted
+
+// 還沒被掃掉的流動性：上方由近到遠、下方由近到遠
+untapped(array<Pool> pools, float price) =>
+    above = array.new<Pool>()
+    below = array.new<Pool>()
+    ps = pools.size()
+    if ps > 0
+        for q = 0 to ps - 1
+            pl = pools.get(q)
+            if not pl.swept and pl.price > price
+                above.push(pl)
+            if not pl.swept and pl.price < price
+                int pos = below.size()
+                while pos > 0 and below.get(pos - 1).price < pl.price
+                    pos -= 1
+                below.insert(pos, pl)
+    [above, below]
+
+liqBiasOf(array<Pool> above, array<Pool> below, float price) =>
+    float up = 0.0
+    float down = 0.0
+    if above.size() > 0
+        for q = 0 to above.size() - 1
+            pl = above.get(q)
+            up := up + pl.strength / math.max(1.0, math.abs(pl.price - price) / price * 100)
+    if below.size() > 0
+        for q = 0 to below.size() - 1
+            pl = below.get(q)
+            down := down + pl.strength / math.max(1.0, math.abs(pl.price - price) / price * 100)
+    total = orElse(up + down, 1.0)
+    [up / total * 100, down / total * 100]
+
+// ───────────────────────────────────────────────────────────── 交易區間／折溢價（src/smc/swings.js、zones.js）
+
+// 回傳 [hi, lo, hiIndex, loIndex, 有沒有區間]
+dealingRange(array<float> h, array<float> l, array<int> sIdx, array<float> sPrice, array<int> sType) =>
+    n = h.size()
+    int hIdx = -1
+    float hP = na
+    int lIdx = -1
+    float lP = na
+    m = sIdx.size()
+    if m > 0
+        for k = m - 1 to 0
+            if hIdx < 0 and sType.get(k) == 1
+                hIdx := sIdx.get(k)
+                hP := sPrice.get(k)
+            if lIdx < 0 and sType.get(k) == -1
+                lIdx := sIdx.get(k)
+                lP := sPrice.get(k)
+            if hIdx >= 0 and lIdx >= 0
+                break
+    bool ok = hIdx >= 0 and lIdx >= 0
+    float hi = hP
+    float lo = lP
+    int hiI = hIdx
+    int loI = lIdx
+    if ok
+        start = math.max(hIdx, lIdx)
+        if start <= n - 1
+            for i = start to n - 1
+                if h.get(i) > hi
+                    hi := h.get(i)
+                    hiI := i
+                if l.get(i) < lo
+                    lo := l.get(i)
+                    loI := i
+    [hi, lo, hiI, loI, ok]
+
+// ───────────────────────────────────────────────────────────── 偏向評分（src/smc/engine.js computeBias）
+
+biasScoreOf(Struct swingSt, Struct intSt, bool hasPd, float pdRatio, float upPct, float downPct, float ema50, float ema200, float rsiV, float price) =>
+    float raw = swingSt.trend * 34 + intSt.trend * 16
+    if hasPd
+        raw += (0.5 - pdRatio) * 24
+    raw += (upPct - downPct) / 100 * 12
+    if not na(ema50)
+        raw += price > ema50 ? 8 : -8
+    if not na(ema200)
+        raw += price > ema200 ? 10 : -10
+    if not na(rsiV)
+        raw += (rsiV - 50) / 50 * 8
+    math.max(-100.0, math.min(100.0, jsRound(raw)))
+
+// 折溢價比例：[ratio（0～1）, 有沒有]
+pdOf(bool rangeOk, float hi, float lo, float price) =>
+    span = hi - lo
+    bool ok = rangeOk and span > 0
+    float ratio = na
+    if ok
+        ratio := math.max(0.0, math.min(1.0, (price - lo) / span))
+    [ratio, ok]
+
+// ───────────────────────────────────────────────────────────── 只算偏向（高週期用）
+
+htfBiasCalc(int nBars, int htfMs) =>
+    float out = na
+    // 只在最後幾根高週期 K 棒算，歷史 K 棒不用算（省時間）
+    if timenow - time_close <= 3 * htfMs
+        n = math.min(nBars, bar_index + 1)
+        if n >= 30
+            [o, h, l, c, v, t] = getWindow(n, 0)
+            atr = atrArr(h, l, c)
+            price = c.get(n - 1)
+            [swI, swP, swT] = swingsOf(h, l, SWING_STR)
+            [miI, miP, miT] = swingsOf(h, l, INTERNAL_STR)
+            swingSt = structureOf(h, l, c, swI, swP, swT, SWING_STR)
+            intSt = structureOf(h, l, c, miI, miP, miT, INTERNAL_STR)
+            [mgI, mgP, mgT] = mergeSwings(swI, swP, swT, miI, miP, miT)
+            pools = poolsOf(h, l, atr, mgI, mgP, mgT)
+            [above, below] = untapped(pools, price)
+            [upPct, downPct] = liqBiasOf(above, below, price)
+            [rHi, rLo, rHiI, rLoI, rOk] = dealingRange(h, l, swI, swP, swT)
+            [pdRatio, pdOk] = pdOf(rOk, rHi, rLo, price)
+            out := biasScoreOf(swingSt, intSt, pdOk, pdRatio, upPct, downPct, emaLast(c, 50), emaLast(c, 200), rsiLast(c), price)
+    out
+
+// ───────────────────────────────────────────────────────────── 週期對照（src/smc/mtf.js HTF_MAP）
+
+htfOf(string tf) =>
+    switch tf
+        "1" => "15"
+        "3" => "30"
+        "5" => "60"
+        "15" => "240"
+        "30" => "240"
+        "60" => "D"
+        "120" => "D"
+        "240" => "D"
+        "360" => "W"
+        "720" => "W"
+        "D" => "W"
+        "1D" => "W"
+        "3D" => "W"
+        "W" => "W"
+        "1W" => "W"
+        => "240"
+
+tfName(string tf) =>
+    switch tf
+        "1" => "1m"
+        "3" => "3m"
+        "5" => "5m"
+        "15" => "15m"
+        "30" => "30m"
+        "60" => "1h"
+        "120" => "2h"
+        "240" => "4h"
+        "360" => "6h"
+        "720" => "12h"
+        "D" => "1d"
+        "1D" => "1d"
+        "3D" => "3d"
+        "W" => "1w"
+        "1W" => "1w"
+        => tf
+
+HTF_TF = htfOf(timeframe.period)
+HTF_MS = timeframe.in_seconds(HTF_TF) * 1000
+// f()[1] + lookahead_on：拿「上一根已收盤的高週期 K 棒」算出來的值，跟系統去掉盤中那根一樣
+float htfRaw = request.security(syminfo.tickerid, HTF_TF, htfBiasCalc(HTF_BARS - 1, HTF_MS)[1], lookahead = barmerge.lookahead_on)
+float htfScore = iUseHtf ? htfRaw : na
+
+// ───────────────────────────────────────────────────────────── FVG（src/smc/fvg.js）
+
+fvgsOf(array<float> o, array<float> h, array<float> l, array<float> c, array<float> atr) =>
+    n = c.size()
+    gaps = array.new<Gap>()
+    if n > 2
+        for i = 2 to n - 1
+            if n - i > 600
+                continue
+            ref = orElse(orElse(atr.get(i), h.get(i) - l.get(i)), 1.0)
+            h0 = h.get(i - 2)
+            l0 = l.get(i - 2)
+            int kind = -1
+            int dir = 0
+            float top = na
+            float bot = na
+            float disp = 0.0
+            if l.get(i) > h0
+                if (l.get(i) - h0) / ref >= FVG_MIN_ATR
+                    kind := 0
+                    dir := 1
+                    bot := h0
+                    top := l.get(i)
+                    disp := math.abs(c.get(i - 1) - o.get(i - 1)) / ref
+            else if h.get(i) < l0
+                if (l0 - h.get(i)) / ref >= FVG_MIN_ATR
+                    kind := 0
+                    dir := -1
+                    bot := h.get(i)
+                    top := l0
+                    disp := math.abs(c.get(i - 1) - o.get(i - 1)) / ref
+            else
+                prevTop = math.max(o.get(i - 1), c.get(i - 1))
+                prevBot = math.min(o.get(i - 1), c.get(i - 1))
+                curTop = math.max(o.get(i), c.get(i))
+                curBot = math.min(o.get(i), c.get(i))
+                if curBot > prevTop and (curBot - prevTop) / ref >= FVG_MIN_ATR * 1.5
+                    kind := 1
+                    dir := 1
+                    bot := prevTop
+                    top := curBot
+                    disp := math.abs(c.get(i) - o.get(i)) / ref
+                else if curTop < prevBot and (prevBot - curTop) / ref >= FVG_MIN_ATR * 1.5
+                    kind := 1
+                    dir := -1
+                    bot := curTop
+                    top := prevBot
+                    disp := math.abs(c.get(i) - o.get(i)) / ref
+            if kind >= 0
+                g = Gap.new(kind, dir, i, top, bot, (top + bot) / 2, (top - bot) / ref, disp)
+                // 追蹤填補與反轉（IFVG）
+                height = orElse(top - bot, 1.0)
+                if i + 1 <= n - 1
+                    for j = i + 1 to n - 1
+                        if dir == 1
+                            if l.get(j) < top
+                                pen = (top - math.max(bot, l.get(j))) / height
+                                g.fillPct := math.max(g.fillPct, math.min(1.0, pen))
+                                if g.state == "fresh"
+                                    g.state := "partial"
+                            if c.get(j) < bot
+                                g.state := "inverted"
+                                g.fillPct := 1.0
+                                g.invDir := -1
+                                break
+                        else
+                            if h.get(j) > bot
+                                pen = (math.min(top, h.get(j)) - bot) / height
+                                g.fillPct := math.max(g.fillPct, math.min(1.0, pen))
+                                if g.state == "fresh"
+                                    g.state := "partial"
+                            if c.get(j) > top
+                                g.state := "inverted"
+                                g.fillPct := 1.0
+                                g.invDir := 1
+                                break
+                        if g.fillPct >= 0.999 and g.state != "inverted"
+                            g.state := "filled"
+                float s = 35.0
+                s += math.min(25.0, g.sizeAtr * 30)
+                s += math.min(15.0, g.disp * 12)
+                if g.state == "fresh"
+                    s += 18
+                else if g.state == "partial"
+                    s += 8
+                else if g.state == "filled"
+                    s -= 20
+                if g.kind == 1
+                    s -= 10
+                if g.state == "inverted"
+                    s += 4
+                s -= math.min(10.0, (n - g.index) / 80.0)
+                g.score := math.max(0.0, math.min(100.0, jsRound(s)))
+                gaps.push(g)
+    gaps
+
+// ───────────────────────────────────────────────────────────── 流動性掃除（src/smc/liquidity.js detectSweeps）
+
+// 回傳 [最後一次掃除的 K 棒, 方向, 所有掃除的 K 棒, 所有掃除的方向]
+sweepsOf(array<float> o, array<float> h, array<float> l, array<float> c, array<float> atr, array<int> sIdx, array<float> sPrice, array<int> sType) =>
+    n = c.size()
+    swIdx = array.new<int>()
+    swDir = array.new<int>()
+    int lastIdx = -1
+    int lastDir = 0
+    m = sIdx.size()
+    if m > 0
+        for k = 0 to m - 1
+            si = sIdx.get(k)
+            sp = sPrice.get(k)
+            lim = math.min(n - 1, si + 60)
+            if si + 2 <= lim
+                for i = si + 2 to lim
+                    ref = orElse(atr.get(i), 1.0)
+                    if sType.get(k) == 1 and h.get(i) > sp
+                        wick = h.get(i) - math.max(o.get(i), c.get(i))
+                        if c.get(i) < sp and wick / ref >= 0.05
+                            swIdx.push(i)
+                            swDir.push(-1)
+                            if i >= lastIdx
+                                lastIdx := i
+                                lastDir := -1
+                        break
+                    if sType.get(k) == -1 and l.get(i) < sp
+                        wick = math.min(o.get(i), c.get(i)) - l.get(i)
+                        if c.get(i) > sp and wick / ref >= 0.05
+                            swIdx.push(i)
+                            swDir.push(1)
+                            if i >= lastIdx
+                                lastIdx := i
+                                lastDir := 1
+                        break
+    [lastIdx, lastDir, swIdx, swDir]
+
+// ───────────────────────────────────────────────────────────── 訂單塊（src/smc/orderblocks.js）
+
+overlapRatio(float aTop, float aBot, float bTop, float bBot) =>
+    lo = math.max(aBot, bBot)
+    hi = math.min(aTop, bTop)
+    hi <= lo ? 0.0 : (hi - lo) / math.min(aTop - aBot, bTop - bBot)
+
+obsOf(array<float> o, array<float> h, array<float> l, array<float> c, array<float> v, array<float> atr, Struct swingSt, Struct intSt, array<Gap> gaps, array<int> swpIdx, array<int> swpDir) =>
+    n = c.size()
+    // 兩個尺度的事件依突破 K 棒排序；同一根時擺動結構的排前面
+    eScale = array.new<int>()
+    eK = array.new<int>()
+    int i1 = 0
+    int i2 = 0
+    n1 = swingSt.evBreak.size()
+    n2 = intSt.evBreak.size()
+    while i1 < n1 or i2 < n2
+        takeSwing = i2 >= n2 or (i1 < n1 and swingSt.evBreak.get(i1) <= intSt.evBreak.get(i2))
+        if takeSwing
+            eScale.push(1)
+            eK.push(i1)
+            i1 += 1
+        else
+            eScale.push(0)
+            eK.push(i2)
+            i2 += 1
+    blocks = array.new<OB>()
+    ids = array.new<string>()
+    ne = eScale.size()
+    if ne > 0
+        for e = 0 to ne - 1
+            Struct st = eScale.get(e) == 1 ? swingSt : intSt
+            k = eK.get(e)
+            dir = st.evDir.get(k)
+            fromI = st.evFrom.get(k)
+            brk = st.evBreak.get(k)
+            isBull = dir == 1
+            int lsI = -1
+            if isBull
+                [li, lp] = lowestBetween(l, fromI, brk)
+                lsI := li
+            else
+                [hi3, hp3] = highestBetween(h, fromI, brk)
+                lsI := hi3
+            if lsI < 0
+                continue
+            int obI = -1
+            lowEnd = math.max(0, lsI - 3)
+            if brk >= lowEnd
+                for i = brk to lowEnd
+                    if isBull and c.get(i) < o.get(i)
+                        obI := i
+                        break
+                    if not isBull and c.get(i) > o.get(i)
+                        obI := i
+                        break
+            if obI < 0
+                obI := lsI
+            legRange = isBull ? h.get(brk) - l.get(lsI) : h.get(lsI) - l.get(brk)
+            atrRef = orElse(orElse(orElse(atr.get(brk), atr.get(obI)), legRange / 4), 1.0)
+            dispAtr = legRange / atrRef
+            if dispAtr < MIN_DISP_ATR
+                continue
+            if n - obI > 600
+                continue
+            top = h.get(obI)
+            bot = l.get(obI)
+            if not (top > bot)
+                continue
+            id = str.tostring(eScale.get(e)) + ":" + str.tostring(dir) + ":" + str.tostring(obI)
+            if ids.includes(id)
+                continue
+            ids.push(id)
+            bool hasFvg = false
+            if gaps.size() > 0
+                for q = 0 to gaps.size() - 1
+                    g = gaps.get(q)
+                    if g.dir == dir and g.index >= obI and g.index <= obI + 3
+                        hasFvg := true
+                        break
+            bool swept = false
+            if swpIdx.size() > 0
+                for q = 0 to swpIdx.size() - 1
+                    if math.abs(swpIdx.get(q) - obI) <= 5 and swpDir.get(q) == dir
+                        swept := true
+                        break
+            b = OB.new(dir, eScale.get(e), obI, top, bot, (top + bot) / 2, st.evType.get(k) == 2, brk, dispAtr, orElse(rvolAt(v, obI), 1.0), hasFvg, swept)
+            // 生命週期：fresh → tapped → mitigated → breaker
+            height = orElse(top - bot, 1.0)
+            if brk + 1 <= n - 1
+                for i = brk + 1 to n - 1
+                    touched = isBull ? l.get(i) <= top : h.get(i) >= bot
+                    if touched
+                        b.touches := b.touches + 1
+                        pen = isBull ? (top - math.max(bot, l.get(i))) / height : (math.min(top, h.get(i)) - bot) / height
+                        b.mitPct := math.max(b.mitPct, math.min(1.0, pen))
+                        if b.state == "fresh"
+                            b.state := "tapped"
+                    broken = isBull ? c.get(i) < bot : c.get(i) > top
+                    if broken
+                        b.state := "breaker"
+                        b.breakerDir := isBull ? -1 : 1
+                        break
+                    if b.mitPct >= 0.98 and b.state != "breaker"
+                        b.state := "mitigated"
+            float s = 40.0
+            s += math.min(25.0, b.dispAtr * 8)
+            s += math.min(12.0, (b.rvol - 1) * 12)
+            if b.containsFvg
+                s += 12
+            if b.swept
+                s += 10
+            if b.choch
+                s += 6
+            if b.scale == 1
+                s += 6
+            if b.state == "fresh"
+                s += 8
+            if b.state == "tapped"
+                s += 2
+            if b.state == "mitigated"
+                s -= 15
+            if b.state == "breaker"
+                s -= 8
+            s -= math.min(12.0, (n - b.index) / 60.0)
+            b.score := math.max(0.0, math.min(100.0, jsRound(s)))
+            blocks.push(b)
+    // 同方向、重疊超過 60% 的只留分數高的（先依 K 棒由新到舊，穩定排序）
+    desc = array.new<OB>()
+    nb = blocks.size()
+    if nb > 0
+        for q = 0 to nb - 1
+            b = blocks.get(q)
+            int pos = desc.size()
+            while pos > 0 and desc.get(pos - 1).index < b.index
+                pos -= 1
+            desc.insert(pos, b)
+    out = array.new<OB>()
+    if nb > 0
+        for q = 0 to nb - 1
+            z = desc.get(q)
+            int dup = -1
+            if out.size() > 0
+                for r = 0 to out.size() - 1
+                    ob = out.get(r)
+                    if ob.dir == z.dir and overlapRatio(ob.top, ob.bottom, z.top, z.bottom) > 0.6
+                        dup := r
+                        break
+            if dup < 0
+                out.push(z.copy())
+            else if z.score > out.get(dup).score
+                out.set(dup, z.copy())
+    // 再依 K 棒由舊到新（穩定排序）
+    asc = array.new<OB>()
+    if out.size() > 0
+        for q = 0 to out.size() - 1
+            b = out.get(q)
+            int pos = asc.size()
+            while pos > 0 and asc.get(pos - 1).index > b.index
+                pos -= 1
+            asc.insert(pos, b)
+    asc
+
+// ───────────────────────────────────────────────────────────── 關鍵時間價位（src/smc/sessions.js keyLevels）
+
+// 回傳前日高低、前週高低、前月高低、今日開盤（依序），沒有就是 na
+keyLevelsOf(array<float> o, array<float> h, array<float> l, array<int> t) =>
+    n = t.size()
+    levels = array.new<float>(7, na)
+    names = array.from("前日高（PDH）", "前日低（PDL）", "前週高（PWH）", "前週低（PWL）", "前月高（PMH）", "前月低（PML）", "今日開盤（DO）")
+    // 三種週期：0 = 日, 1 = 週, 2 = 月
+    for kind = 0 to 2
+        int curKey = na
+        float curH = na
+        float curL = na
+        float curO = na
+        float prevH = na
+        float prevL = na
+        if n > 0
+            for i = 0 to n - 1
+                ti = t.get(i)
+                dk = math.floor(ti / 86400000)
+                key = kind == 0 ? dk : kind == 1 ? dk - (dayofweek(ti, "UTC") + 5) % 7 : year(ti, "UTC") * 12 + month(ti, "UTC")
+                if na(curKey) or key != curKey
+                    if not na(curKey)
+                        prevH := curH
+                        prevL := curL
+                    curKey := key
+                    curH := h.get(i)
+                    curL := l.get(i)
+                    curO := o.get(i)
+                else
+                    curH := math.max(curH, h.get(i))
+                    curL := math.min(curL, l.get(i))
+        levels.set(kind * 2, prevH)
+        levels.set(kind * 2 + 1, prevL)
+        if kind == 0
+            levels.set(6, curO)
+    [levels, names]
+
+// 交易時段（Killzone，UTC）：亞洲 0-6、倫敦 7-10、紐約早盤 12-15、紐約午盤 17.5-20
+inKillzone(int ts) =>
+    hf = hour(ts, "UTC") + minute(ts, "UTC") / 60.0
+    (hf >= 0 and hf < 6) or (hf >= 7 and hf < 10) or (hf >= 12 and hf < 15) or (hf >= 17.5 and hf < 20)
+
+// ───────────────────────────────────────────────────────────── 主分析（只在最後一根算）
+
+// 分析視窗第 k 根（0 = 最舊）在圖上的 bar_index
+xAt(int n, int off, int k) =>
+    bar_index - off - (n - 1 - k)
+
+var CHECK_NAMES = array.from("高週期偏向一致", "進場週期結構確認", "折價／溢價正確側", "進場區新鮮", "進場前掃過流動性", "多重匯流", "風報比達標", "目標有未觸及流動性", "均線／動能支持", "交易時段（Killzone）")
+var CHECK_WEIGHTS = array.from(18, 15, 12, 12, 12, 10, 10, 10, 8, 5)
+
+COL_BULL = color.new(#26a69a, 0)
+COL_BEAR = color.new(#ef5350, 0)
+COL_TEXT = color.new(#d1d4dc, 0)
+
+var table panel = table.new(position.top_right, 2, 20, bgcolor = color.new(#131722, 10), border_color = color.new(#363a45, 0), border_width = 1)
+
+if barstate.islast
+    for b in box.all
+        b.delete()
+    for ln in line.all
+        ln.delete()
+    for lb in label.all
+        lb.delete()
+    table.clear(panel, 0, 0, 1, 19)
+
+    // 盤中那根不算（跟系統一樣只看已收盤的 K 棒）
+    off = barstate.isconfirmed ? 0 : 1
+    n = math.min(iBars - 1, bar_index + 1 - off)
+
+    string noneReason = ""
+    bool hasPlan = false
+    float entry = na
+    float stop = na
+    float riskV = na
+    int dirPlan = 0
+    float scorePlan = na
+    string gradePlan = ""
+    bool validPlan = false
+    float rrFinal = na
+    string entryType = ""
+    array<Target> targets = array.new<Target>()
+    array<bool> checks = array.new<bool>(10, false)
+    float localScore = na
+
+    if n >= 30
+        [o, h, l, c, v, t] = getWindow(n, off)
+        price = c.get(n - 1)
+        atr = atrArr(h, l, c)
+        atrValue = orElse(atr.get(n - 1), price * 0.004)
+        [swI, swP, swT] = swingsOf(h, l, SWING_STR)
+        [miI, miP, miT] = swingsOf(h, l, INTERNAL_STR)
+        swingSt = structureOf(h, l, c, swI, swP, swT, SWING_STR)
+        intSt = structureOf(h, l, c, miI, miP, miT, INTERNAL_STR)
+        [lastSwpIdx, lastSwpDir, swpIdx, swpDir] = sweepsOf(o, h, l, c, atr, miI, miP, miT)
+        gaps = fvgsOf(o, h, l, c, atr)
+        obs = obsOf(o, h, l, c, v, atr, swingSt, intSt, gaps, swpIdx, swpDir)
+        [mgI, mgP, mgT] = mergeSwings(swI, swP, swT, miI, miP, miT)
+        pools = poolsOf(h, l, atr, mgI, mgP, mgT)
+        [above, below] = untapped(pools, price)
+        [upPct, downPct] = liqBiasOf(above, below, price)
+        [rHi, rLo, rHiI, rLoI, rOk] = dealingRange(h, l, swI, swP, swT)
+        [pdRatio, pdOk] = pdOf(rOk, rHi, rLo, price)
+        ema50 = emaLast(c, 50)
+        ema200 = emaLast(c, 200)
+        rsiV = rsiLast(c)
+        localScore := biasScoreOf(swingSt, intSt, pdOk, pdRatio, upPct, downPct, ema50, ema200, rsiV, price)
+        biasDir = localScore >= 25 ? 1 : localScore <= -25 ? -1 : 0
+
+        // ── 候選進場區（src/smc/zones.js buildPois）
+        // OB：沒被消耗完、而且在價格搆得到的那一側，依離現價遠近排序
+        actOb = array.new<Poi>()
+        if obs.size() > 0
+            for q = 0 to obs.size() - 1
+                b = obs.get(q)
+                if b.state == "mitigated"
+                    continue
+                effDir = b.state == "breaker" ? b.breakerDir : b.dir
+                if effDir == 1 ? b.bottom <= price : b.top >= price
+                    p = Poi.new(b.state == "breaker" ? "Breaker" : "Order Block", effDir, b.top, b.bottom, b.mid, b.score, b.state, b.index)
+                    int pos = actOb.size()
+                    while pos > 0 and math.abs(actOb.get(pos - 1).mid - price) > math.abs(p.mid - price)
+                        pos -= 1
+                    actOb.insert(pos, p)
+        actFvg = array.new<Poi>()
+        if gaps.size() > 0
+            for q = 0 to gaps.size() - 1
+                g = gaps.get(q)
+                if g.state != "fresh" and g.state != "partial" and g.state != "inverted"
+                    continue
+                effDir = g.state == "inverted" ? g.invDir : g.dir
+                if effDir == 1 ? g.bottom <= price * 1.001 : g.top >= price * 0.999
+                    kindName = g.kind == 1 ? "Volume Imbalance" : g.state == "inverted" ? "Inversion FVG" : "FVG"
+                    p = Poi.new(kindName, effDir, g.top, g.bottom, g.mid, g.score, g.state, g.index)
+                    int pos = actFvg.size()
+                    while pos > 0 and math.abs(actFvg.get(pos - 1).mid - price) > math.abs(p.mid - price)
+                        pos -= 1
+                    actFvg.insert(pos, p)
+        allPois = array.new<Poi>()
+        if actOb.size() > 0
+            for q = 0 to actOb.size() - 1
+                allPois.push(actOb.get(q))
+        if actFvg.size() > 0
+            for q = 0 to actFvg.size() - 1
+                allPois.push(actFvg.get(q))
+        span = rHi - rLo
+        if rOk and span > 0
+            rangeUp = rHiI > rLoI
+            if rangeUp
+                allPois.push(Poi.new("OTE", 1, rHi - span * 0.618, rHi - span * 0.79, rHi - span * 0.705, 60, "zone", -1))
+            else
+                allPois.push(Poi.new("OTE", -1, rLo + span * 0.79, rLo + span * 0.618, rLo + span * 0.705, 60, "zone", -1))
+        // 綜合排序分數：品質分 + 跟偏向同向 + 離現價越近越優先（穩定排序，大到小）
+        ranked = array.new<Poi>()
+        if allPois.size() > 0
+            for q = 0 to allPois.size() - 1
+                p = allPois.get(q)
+                p.rank := (p.score == 0 ? 50 : p.score) + (biasDir != 0 and p.dir == biasDir ? 12 : -8) - math.min(25.0, math.abs((p.mid - price) / price) * 900)
+                int pos = ranked.size()
+                while pos > 0 and ranked.get(pos - 1).rank < p.rank
+                    pos -= 1
+                ranked.insert(pos, p)
+        pois = array.new<Poi>()
+        if ranked.size() > 0
+            for q = 0 to math.min(MAX_POIS, ranked.size()) - 1
+                pois.push(ranked.get(q))
+
+        // 匯流堆疊（stackConfluence）：價格幾乎重疊的同向 POI 疊在一起
+        stDir = array.new<int>()
+        stTop = array.new<float>()
+        stBot = array.new<float>()
+        stMid = array.new<float>()
+        stScore = array.new<float>()
+        stCount = array.new<int>()
+        if pois.size() > 0
+            for q = 0 to pois.size() - 1
+                p = pois.get(q)
+                int found = -1
+                if stDir.size() > 0
+                    for r = 0 to stDir.size() - 1
+                        if stDir.get(r) == p.dir and math.abs(stMid.get(r) - p.mid) / math.max(1e-9, p.mid) * 100 <= 0.12
+                            found := r
+                            break
+                if found >= 0
+                    stCount.set(found, stCount.get(found) + 1)
+                    stTop.set(found, math.max(stTop.get(found), p.top))
+                    stBot.set(found, math.min(stBot.get(found), p.bottom))
+                    stMid.set(found, (stTop.get(found) + stBot.get(found)) / 2)
+                    stScore.set(found, math.min(100.0, stScore.get(found) + p.score * 0.35))
+                else
+                    stDir.push(p.dir)
+                    stTop.push(p.top)
+                    stBot.push(p.bottom)
+                    stMid.push(p.mid)
+                    stScore.push(p.score)
+                    stCount.push(1)
+        // 依分數大到小（穩定排序）的順序
+        stOrder = array.new<int>()
+        if stDir.size() > 0
+            for q = 0 to stDir.size() - 1
+                int pos = stOrder.size()
+                while pos > 0 and stScore.get(stOrder.get(pos - 1)) < stScore.get(q)
+                    pos -= 1
+                stOrder.insert(pos, q)
+
+        // ── 交易計畫（src/smc/setups.js buildSetup）
+        bool hasHtf = not na(htfScore)
+        float dirScore = hasHtf ? htfScore * 0.6 + localScore * 0.4 : localScore
+        int dir = dirScore > 8 ? 1 : dirScore < -8 ? -1 : 0
+        nInt = intSt.evDir.size()
+        if dir == 0
+            if nInt > 0
+                dir := intSt.evDir.get(nInt - 1)
+            else
+                dir := pdOk and pdRatio < 0.45 ? 1 : -1
+        Poi poi = na
+        Poi firstCand = na
+        Poi firstZone = na
+        reach = math.max(atrValue * 5, price * 0.035)
+        if pois.size() > 0
+            for q = 0 to pois.size() - 1
+                p = pois.get(q)
+                if p.dir != dir or p.state == "mitigated" or p.state == "filled"
+                    continue
+                if na(firstCand)
+                    firstCand := p
+                inZonePool = dir == 1 ? p.bottom <= price * 1.004 : p.top >= price * 0.996
+                if not inZonePool
+                    continue
+                if na(firstZone)
+                    firstZone := p
+                if math.abs(p.mid - price) <= reach
+                    poi := p
+                    break
+        if na(poi)
+            poi := na(firstZone) ? firstCand : firstZone
+        if na(poi)
+            noneReason := "目前偏向" + (dir == 1 ? "做多" : "做空") + "，但沒有還有效的" + (dir == 1 ? "需求" : "供給") + "區（OB／FVG）可以進場"
+        else
+            inside = price <= poi.top and price >= poi.bottom
+            entry := inside ? price : dir == 1 ? math.min(poi.top, price) : math.max(poi.bottom, price)
+            buffer = atrValue * RISK_BUF_ATR
+            pLow = protectedLowOf(intSt)
+            pHigh = protectedHighOf(intSt)
+            structural = dir == 1 ? math.min(poi.bottom, na(pLow) ? poi.bottom : pLow) : math.max(poi.top, na(pHigh) ? poi.top : pHigh)
+            stop := dir == 1 ? structural - buffer : structural + buffer
+            minRisk = atrValue * 0.3
+            if math.abs(entry - stop) < minRisk
+                stop := dir == 1 ? entry - minRisk : entry + minRisk
+            riskV := math.abs(entry - stop)
+            if riskV > 0
+                hasPlan := true
+                dirPlan := dir
+                entryType := inside ? "市價（已在進場區內）" : "掛單等回踩"
+                // 目標：最近兩個未觸及流動性 → 關鍵時間價位 → 區間極值 → 1:3 延伸
+                cands = array.new<Target>()
+                seen = array.new<string>()
+                liqList = dir == 1 ? above : below
+                if liqList.size() > 0
+                    for q = 0 to math.min(2, liqList.size()) - 1
+                        pl = liqList.get(q)
+                        tp = pl.price
+                        key = str.tostring(tp, "#.########")
+                        if (dir == 1 ? tp > entry + riskV * 0.3 : tp < entry - riskV * 0.3) and not seen.includes(key)
+                            seen.push(key)
+                            cands.push(Target.new(tp, pl.equal ? (dir == 1 ? "等高流動性" : "等低流動性") : (dir == 1 ? "擺動高流動性" : "擺動低流動性"), math.abs(tp - entry) / riskV))
+                [kl, klNames] = keyLevelsOf(o, h, l, t)
+                int bestK = -1
+                for q = 0 to 6
+                    lv = kl.get(q)
+                    if na(lv)
+                        continue
+                    if dir == 1 ? lv > price : lv < price
+                        if bestK < 0 or (dir == 1 ? lv < kl.get(bestK) : lv > kl.get(bestK))
+                            bestK := q
+                if bestK >= 0
+                    tp = kl.get(bestK)
+                    key = str.tostring(tp, "#.########")
+                    if (dir == 1 ? tp > entry + riskV * 0.3 : tp < entry - riskV * 0.3) and not seen.includes(key)
+                        seen.push(key)
+                        cands.push(Target.new(tp, klNames.get(bestK), math.abs(tp - entry) / riskV))
+                if rOk
+                    tp = dir == 1 ? rHi : rLo
+                    key = str.tostring(tp, "#.########")
+                    if (dir == 1 ? tp > entry + riskV * 0.3 : tp < entry - riskV * 0.3) and not seen.includes(key)
+                        seen.push(key)
+                        cands.push(Target.new(tp, "區間極值", math.abs(tp - entry) / riskV))
+                tp3 = dir == 1 ? entry + riskV * 3 : entry - riskV * 3
+                key3 = str.tostring(tp3, "#.########")
+                if not seen.includes(key3)
+                    seen.push(key3)
+                    cands.push(Target.new(tp3, "1:3 延伸目標", 3.0))
+                sortedT = array.new<Target>()
+                if cands.size() > 0
+                    for q = 0 to cands.size() - 1
+                        tg = cands.get(q)
+                        int pos = sortedT.size()
+                        while pos > 0 and sortedT.get(pos - 1).rr > tg.rr
+                            pos -= 1
+                        sortedT.insert(pos, tg)
+                usable = array.new<Target>()
+                if sortedT.size() > 0
+                    for q = 0 to sortedT.size() - 1
+                        tg = sortedT.get(q)
+                        if tg.rr >= 0.8 and tg.rr <= 12
+                            usable.push(tg)
+                src = usable.size() > 0 ? usable : sortedT
+                lim = usable.size() > 0 ? math.min(3, usable.size()) : math.min(1, sortedT.size())
+                if lim > 0
+                    for q = 0 to lim - 1
+                        targets.push(src.get(q))
+                rrFinal := targets.size() > 0 ? math.abs(targets.get(targets.size() - 1).price - entry) / riskV : 0.0
+
+                // 匯流檢查（10 項，權重合計 112）
+                lastEvDir = nInt > 0 ? intSt.evDir.get(nInt - 1) : 0
+                bool stacked = false
+                if stOrder.size() > 0
+                    for q = 0 to stOrder.size() - 1
+                        r = stOrder.get(q)
+                        if stDir.get(r) == dir and stBot.get(r) <= poi.top and poi.bottom <= stTop.get(r)
+                            stacked := stCount.get(r) > 1
+                            break
+                checks.set(0, hasHtf ? (dir == 1 ? htfScore > 5 : htfScore < -5) : (dir == 1 ? dirScore > 0 : dirScore < 0))
+                checks.set(1, nInt > 0 and lastEvDir == dir)
+                checks.set(2, pdOk and (dir == 1 ? pdRatio < 0.5 : pdRatio > 0.5))
+                checks.set(3, poi.state == "fresh" or poi.state == "zone")
+                checks.set(4, lastSwpIdx >= 0 and lastSwpDir == dir and n - lastSwpIdx <= 30)
+                checks.set(5, stacked)
+                checks.set(6, rrFinal >= MIN_RR)
+                checks.set(7, dir == 1 ? above.size() > 0 : below.size() > 0)
+                checks.set(8, dir == 1 ? ((not na(ema50) and price > ema50) or (not na(rsiV) and rsiV > 50)) : ((not na(ema50) and price < ema50) or (not na(rsiV) and rsiV < 50)))
+                checks.set(9, inKillzone(t.get(n - 1)))
+                int raw = 0
+                for q = 0 to 9
+                    if checks.get(q)
+                        raw += CHECK_WEIGHTS.get(q)
+                scorePlan := jsRound(raw / 112.0 * 100)
+                gradePlan := scorePlan >= 80 ? "A+" : scorePlan >= 68 ? "A" : scorePlan >= 55 ? "B" : scorePlan >= 42 ? "C" : "D"
+                validPlan := scorePlan >= 42 and rrFinal >= math.min(1.5, MIN_RR)
+
+                // ── 畫圖：進場區、進場／停損／目標線
+                colDir = dir == 1 ? COL_BULL : COL_BEAR
+                xNow = bar_index
+                xLeft = poi.index >= 0 ? xAt(n, off, poi.index) : xAt(n, off, math.max(0, n - 30))
+                box.new(xLeft, poi.top, xNow + 15, poi.bottom, border_color = colDir, border_width = 2, bgcolor = color.new(colDir, 80), text = poi.kind + "（計畫進場區）", text_color = COL_TEXT, text_size = size.small, text_halign = text.align_left, text_valign = text.align_top)
+                line.new(xNow - 5, entry, xNow + 25, entry, color = colDir, width = 2)
+                label.new(xNow + 25, entry, "進場 " + str.tostring(entry, format.mintick), style = label.style_label_left, color = colDir, textcolor = color.white, size = size.small)
+                line.new(xNow - 5, stop, xNow + 25, stop, color = COL_BEAR, width = 2, style = line.style_dashed)
+                label.new(xNow + 25, stop, "停損 " + str.tostring(stop, format.mintick), style = label.style_label_left, color = COL_BEAR, textcolor = color.white, size = size.small)
+                if targets.size() > 0
+                    for q = 0 to targets.size() - 1
+                        tg = targets.get(q)
+                        line.new(xNow - 5, tg.price, xNow + 25, tg.price, color = COL_BULL, width = 1, style = line.style_dashed)
+                        label.new(xNow + 25, tg.price, "TP" + str.tostring(q + 1) + " " + str.tostring(tg.price, format.mintick) + "（" + str.tostring(tg.rr, "#.##") + "R " + tg.name + "）", style = label.style_label_left, color = color.new(COL_BULL, 30), textcolor = color.white, size = size.small)
+
+        // ── 其他 POI
+        if iShowPois and pois.size() > 0
+            for q = 0 to pois.size() - 1
+                p = pois.get(q)
+                if p.index < 0 or (not na(poi) and p.index == poi.index and p.kind == poi.kind and p.dir == poi.dir)
+                    continue
+                colP = p.dir == 1 ? COL_BULL : COL_BEAR
+                box.new(xAt(n, off, p.index), p.top, bar_index + 5, p.bottom, border_color = color.new(colP, 50), border_style = line.style_dotted, bgcolor = color.new(colP, 92), text = p.kind + " " + str.tostring(p.score, "#"), text_color = color.new(COL_TEXT, 40), text_size = size.tiny, text_halign = text.align_right, text_valign = text.align_bottom)
+
+        // ── 結構事件（最近幾次）
+        if iShowStruct
+            for sc = 0 to 1
+                Struct st = sc == 1 ? swingSt : intSt
+                ne = st.evType.size()
+                first = math.max(0, ne - (sc == 1 ? 4 : 6))
+                if ne > 0
+                    for k = first to ne - 1
+                        colE = st.evDir.get(k) == 1 ? COL_BULL : COL_BEAR
+                        x1 = xAt(n, off, st.evFrom.get(k))
+                        x2 = xAt(n, off, st.evBreak.get(k))
+                        line.new(x1, st.evPrice.get(k), x2, st.evPrice.get(k), color = colE, width = sc == 1 ? 2 : 1, style = sc == 1 ? line.style_solid : line.style_dotted)
+                        label.new(math.round((x1 + x2) / 2), st.evPrice.get(k), (st.evType.get(k) == 2 ? "CHoCH" : "BOS") + (sc == 1 ? "" : "·i"), style = st.evDir.get(k) == 1 ? label.style_label_down : label.style_label_up, color = color.new(colE, 100), textcolor = colE, size = size.tiny)
+
+    // ── 計畫表
+    if iShowTable
+        row = 0
+        table.cell(panel, 0, row, "SMC 計畫 · " + tfName(timeframe.period), text_color = color.white, text_size = size.small)
+        table.cell(panel, 1, row, syminfo.ticker, text_color = color.white, text_size = size.small)
+        row += 1
+        table.cell(panel, 0, row, "本週期偏向", text_color = COL_TEXT, text_size = size.small)
+        table.cell(panel, 1, row, na(localScore) ? "—" : str.tostring(localScore, "#"), text_color = COL_TEXT, text_size = size.small)
+        row += 1
+        table.cell(panel, 0, row, "高週期 " + tfName(HTF_TF), text_color = COL_TEXT, text_size = size.small)
+        table.cell(panel, 1, row, na(htfScore) ? "—" : str.tostring(htfScore, "#"), text_color = COL_TEXT, text_size = size.small)
+        row += 1
+        if hasPlan
+            colDir = dirPlan == 1 ? COL_BULL : COL_BEAR
+            table.cell(panel, 0, row, (dirPlan == 1 ? "做多" : "做空") + " · " + gradePlan + " 級", text_color = colDir, text_size = size.normal)
+            table.cell(panel, 1, row, str.tostring(scorePlan, "#") + " 分" + (validPlan ? "" : "（無效）"), text_color = colDir, text_size = size.normal)
+            row += 1
+            table.cell(panel, 0, row, "進場（" + entryType + "）", text_color = COL_TEXT, text_size = size.small)
+            table.cell(panel, 1, row, str.tostring(entry, format.mintick), text_color = COL_TEXT, text_size = size.small)
+            row += 1
+            table.cell(panel, 0, row, "停損", text_color = COL_TEXT, text_size = size.small)
+            table.cell(panel, 1, row, str.tostring(stop, format.mintick) + "（" + str.tostring(riskV / entry * 100, "#.##") + "%）", text_color = COL_TEXT, text_size = size.small)
+            row += 1
+            if targets.size() > 0
+                for q = 0 to targets.size() - 1
+                    tg = targets.get(q)
+                    table.cell(panel, 0, row, "TP" + str.tostring(q + 1), text_color = COL_TEXT, text_size = size.small)
+                    table.cell(panel, 1, row, str.tostring(tg.price, format.mintick) + " · " + str.tostring(tg.rr, "#.##") + "R", text_color = COL_TEXT, text_size = size.small)
+                    row += 1
+            for q = 0 to 9
+                table.cell(panel, 0, row, (checks.get(q) ? "✅ " : "⬜ ") + CHECK_NAMES.get(q), text_color = checks.get(q) ? COL_TEXT : color.new(COL_TEXT, 50), text_size = size.tiny)
+                table.cell(panel, 1, row, str.tostring(CHECK_WEIGHTS.get(q)), text_color = color.new(COL_TEXT, 50), text_size = size.tiny)
+                row += 1
+        else
+            table.cell(panel, 0, row, n < 30 ? "K 棒不夠（至少 30 根）" : "目前沒有計畫", text_color = COL_TEXT, text_size = size.small)
+            table.cell(panel, 1, row, noneReason, text_color = color.new(COL_TEXT, 30), text_size = size.tiny)
+
+    // ── 警報：價格回到進場區（跟 Discord 推播一樣的條件）
+    if hasPlan and validPlan and scorePlan >= iAlertScore
+        reached = dirPlan == 1 ? close <= entry * (1 + iNearPct / 100) : close >= entry * (1 - iNearPct / 100)
+        blown = dirPlan == 1 ? close <= stop : close >= stop
+        if reached and not blown
+            alert(syminfo.ticker + " " + tfName(timeframe.period) + " 價格到了 " + (dirPlan == 1 ? "做多" : "做空") + " " + gradePlan + " 級 " + str.tostring(scorePlan, "#") + " 分｜進場 " + str.tostring(entry, format.mintick) + " 停損 " + str.tostring(stop, format.mintick), alert.freq_once_per_bar)

@@ -1102,7 +1102,16 @@ function compareText(r, market) {
     `週期 **${r.interval}**　資料源 **${PROVIDER_NAME[r.provider] ?? r.provider ?? '—'}**${r.htfInterval ? `　高週期 ${r.htfInterval}` : ''}`,
     `分析於 ${twTime(analyzedAt)}（台灣時間），用到 ${closeAt != null ? twTime(closeAt) : '—'} 收盤的 K 棒`,
     'App 要切到同一個週期和資料源；之後又收了新 K 棒，計畫可能已經變了',
+    `[在 TradingView 開啟 ${r.symbol}.P ${r.interval}](${tradingViewUrl(r.symbol, r.interval)})（掛上「SMC 計畫」指標就會看到同一套計畫）`,
   ].join('\n');
+}
+
+/** TradingView 的週期代號：分鐘數字、D、W */
+const TV_INTERVAL = { '1m': '1', '3m': '3', '5m': '5', '15m': '15', '30m': '30', '1h': '60', '2h': '120', '4h': '240', '6h': '360', '12h': '720', '1d': 'D', '1w': 'W' };
+
+/** 直接開 Bybit 永續（跟系統的 K 線、實際下單的合約一樣）、對應週期的 TradingView 圖 */
+function tradingViewUrl(symbol, interval) {
+  return `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(`BYBIT:${symbol}.P`)}&interval=${TV_INTERVAL[interval] ?? '60'}`;
 }
 
 function buildEmbed({ row: r, price }, market, autoTrade, mode = null) {

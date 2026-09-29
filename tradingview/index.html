@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SMC 計畫 · TradingView 指標</title>
+<style>
+  :root { --bg: #f6f8fb; --fg: #1b1f27; --muted: #5b6474; --card: #ffffff; --line: #d9dee7; --accent: #26a69a; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #0b0e14; --fg: #d1d4dc; --muted: #8b97a8; --card: #131722; --line: #2a2e39; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.6 -apple-system, "PingFang TC", "Noto Sans TC", sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p.lead { color: var(--muted); margin: 0 0 20px; }
+  ol { padding-left: 22px; margin: 0 0 20px; }
+  li { margin: 6px 0; }
+  code { background: var(--card); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; font-size: 14px; }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 12px 20px; font-size: 16px; font-weight: 600; cursor: pointer; width: 100%; }
+  button:disabled { opacity: .6; }
+  #status { color: var(--muted); font-size: 14px; margin: 8px 0 16px; min-height: 1.4em; }
+  textarea { width: 100%; height: 320px; background: var(--card); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; font: 12px/1.5 ui-monospace, Menlo, monospace; }
+  .note { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; color: var(--muted); font-size: 14px; margin-top: 20px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>SMC 計畫 · TradingView 指標</h1>
+  <p class="lead">跟 Discord 通知同一套 SMC 規則：同樣的進場區、進場價、停損、目標和評分。</p>
+  <ol>
+    <li>用<b>電腦</b>打開 TradingView（手機 App 不能貼指標程式碼）。</li>
+    <li>商品切到 Bybit 永續，例如 <code>BYBIT:SOLUSDT.P</code>，週期切到 Discord 通知寫的那個。</li>
+    <li>下方按「複製程式碼」。</li>
+    <li>TradingView 底下打開「Pine 編輯器」，把裡面原本的內容全部刪掉，貼上。</li>
+    <li>按「儲存」，再按「加入圖表」。</li>
+    <li>想要 TradingView 自己跳通知：右上角「警報」→ 條件選「SMC 計畫」→「任何 alert() 函式呼叫」。</li>
+  </ol>
+  <button id="copy" disabled>載入中…</button>
+  <div id="status"></div>
+  <textarea id="code" readonly spellcheck="false"></textarea>
+  <div class="note">
+    指標只看<b>已收盤</b>的 K 棒（盤中那根不算），高週期偏向也跟系統一樣只看一個高週期（15m／30m→4h、1h／2h／4h→1d、6h／1d→1w）。
+    所以剛收盤的前 1～3 分鐘，TradingView 可能比 Discord 早一步換成新計畫，之後就會一致。
+    貼上後如果出現紅字錯誤，把錯誤訊息截圖傳給 Claude。
+  </div>
+</main>
+<script>
+  const btn = document.getElementById('copy');
+  const status = document.getElementById('status');
+  const area = document.getElementById('code');
+  fetch('smc-plan.pine', { cache: 'no-store' })
+    .then((r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+    .then((text) => {
+      area.value = text;
+      btn.disabled = false;
+      btn.textContent = '複製程式碼';
+      status.textContent = `共 ${text.split('\n').length} 行`;
+    })
+    .catch((e) => { btn.textContent = '載入失敗'; status.textContent = '讀不到指標檔案：' + e.message; });
+  btn.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(area.value);
+      status.textContent = '✅ 已複製，去 TradingView 的 Pine 編輯器貼上';
+    } catch {
+      area.select();
+      document.execCommand('copy');
+      status.textContent = '✅ 已複製（如果沒有，請手動全選下面的程式碼複製）';
+    }
+  });
+</script>
+</body>
+</html>
