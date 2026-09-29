@@ -5,8 +5,15 @@ import { deepMerge } from './utils.js';
 
 const KEY = 'smc-terminal:v1';
 
+/**
+ * 設定格式版本。2：預設資料源從 Binance 改成 Bybit——Discord 通知（Worker 掃描）
+ * 用的是 Bybit 的 K 線，兩邊資料源不同，同一個幣的高低點、計畫就會有差。
+ */
+const DATA_VERSION = 2;
+
 export const DEFAULT_STATE = {
-  provider: 'binance',
+  dataVersion: DATA_VERSION,
+  provider: 'bybit',
   symbol: 'BTCUSDT',
   interval: '15m',
   lang: 'zh',
@@ -60,7 +67,11 @@ export function loadState() {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return structuredClone(DEFAULT_STATE);
-    return deepMerge(structuredClone(DEFAULT_STATE), JSON.parse(raw));
+    const saved = JSON.parse(raw);
+    // 舊設定還停在當時預設的 Binance：改成 Bybit，跟 Discord 通知同一個資料源
+    if ((saved.dataVersion ?? 1) < 2 && (saved.provider ?? 'binance') === 'binance') saved.provider = 'bybit';
+    saved.dataVersion = DATA_VERSION;
+    return deepMerge(structuredClone(DEFAULT_STATE), saved);
   } catch {
     return structuredClone(DEFAULT_STATE);
   }

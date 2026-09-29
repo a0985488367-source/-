@@ -132,7 +132,24 @@ test('價格回到進場區 → 推播一則提醒', async () => {
   assert.equal(out.checked, 1);
   assert.equal(out.alerts, 1);
   assert.equal(discord.length, 1);
-  assert.match(discord[0].embeds[0].title, /ABC\/USDT 價格到了/);
+  assert.match(discord[0].embeds[0].title, /ABC\/USDT 【1h】價格到了/);
+});
+
+test('推播寫清楚去 App 對照要看的週期、資料源、分析時間（台灣時間）', async () => {
+  const discord = [];
+  const r = row({
+    provider: 'bybit', htfInterval: '1d',
+    updatedAt: Date.UTC(2026, 8, 29, 3, 0),          // 11:00 台灣時間開盤的 1h K 棒 → 12:00 收盤
+    scannedAt: new Date(Date.UTC(2026, 8, 29, 4, 2)).toISOString(),
+  });
+  stubFetch({ market: makeMarket([r]), prices: { ABCUSDT: 99.9 }, discord });
+  await runWorker(makeEnv());
+  const field = discord[0].embeds[0].fields.find((f) => f.name.includes('App'));
+  assert.match(field.value, /週期 \*\*1h\*\*/);
+  assert.match(field.value, /資料源 \*\*Bybit\*\*/);
+  assert.match(field.value, /高週期 1d/);
+  assert.match(field.value, /分析於 09-29 12:02（台灣時間），用到 09-29 12:00 收盤的 K 棒/);
+  assert.match(discord[0].embeds[0].footer.text, /09-29 12:02 台灣時間/);
 });
 
 test('SMC_SYMBOLS：只盯清單上的幣，其他幣價格到了也不推播', async () => {
@@ -405,6 +422,46 @@ test('還沒輪到下一批時，直接沿用累積結果，不會真的重新�
   const after = JSON.parse(await env.SMC_KV.get('worker-scan:meta'));
   assert.equal(after['1h'].provider, 'CACHED-FAKE-MARKER', '還沒到批次間隔就不該被覆寫');
   assert.equal(await env.SMC_KV.get('worker-scan:cursor'), null, '沒有真的掃描，游標也不該被動到');
+});
+
+/** 最近一根 1h K 棒收盤後「可以重掃」的時間點（收盤 + 1 分鐘），跟 worker 的 scanDueAt 同一個算法 */
+const lastHourReadyAt = (now = Date.now()) => Math.floor((now - 60_000) / 3_600_000) * 3_600_000 + 60_000;
+
+test('候選池一批裝得下：同一根 K 棒收盤後已經掃過，就算批次間隔到了也不重掃', async () => {
+  const env = makeEnv({
+    WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_PROVIDERS: 'demo', WORKER_SCAN_INTERVAL: '1h',
+    WORKER_SCAN_BATCH_SIZE: '20', WORKER_SCAN_BATCH_INTERVAL_MIN: '0',
+  });
+  const meta = {
+    '1h': {
+      provider: 'CACHED-FAKE-MARKER', interval: '1h', htfInterval: '1d', poolTotal: 10, lastBatchErrors: 0,
+      lastBatchAt: new Date(Math.max(lastHourReadyAt(), Date.now() - 1000)).toISOString(),
+    },
+  };
+  await env.SMC_KV.put('worker-scan:meta', JSON.stringify(meta));
+  await env.SMC_KV.put('worker-scan:rows', JSON.stringify({}));
+  globalThis.fetch = async (url) => { throw new Error('這根 K 棒收盤後已經掃過，不該再打外部 API：' + url); };
+  await runWorker(env);
+  const after = JSON.parse(await env.SMC_KV.get('worker-scan:meta'));
+  assert.equal(after['1h'].provider, 'CACHED-FAKE-MARKER');
+});
+
+test('候選池一批裝得下：有新的 K 棒收盤就重掃，不用等批次間隔', async () => {
+  const env = makeEnv({
+    WORKER_SCAN_ENABLED: 'true', WORKER_SCAN_PROVIDERS: 'demo', WORKER_SCAN_INTERVAL: '1h', WORKER_SCAN_TOP: '5',
+    WORKER_SCAN_BATCH_SIZE: '20', WORKER_SCAN_BATCH_INTERVAL_MIN: '999', MIN_SCORE: '999',
+  });
+  const meta = {
+    '1h': {
+      provider: 'STALE-FAKE-MARKER', interval: '1h', htfInterval: '1d', poolTotal: 5, lastBatchErrors: 0,
+      lastBatchAt: new Date(lastHourReadyAt() - 1000).toISOString(), // 上一根收盤之前掃的
+    },
+  };
+  await env.SMC_KV.put('worker-scan:meta', JSON.stringify(meta));
+  await env.SMC_KV.put('worker-scan:rows', JSON.stringify({}));
+  await runWorker(env);
+  const after = JSON.parse(await env.SMC_KV.get('worker-scan:meta'));
+  assert.equal(after['1h'].provider, 'demo', '新 K 棒收盤了，應該真的重新掃描');
 });
 
 test('輪到下一批時，真的重新掃描那一批，並把結果累積進去、游標往前推', async () => {

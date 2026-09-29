@@ -10,7 +10,8 @@ import { Feed } from './data/feed.js';
 import { PROVIDERS } from './data/providers.js';
 import { analyze } from './smc/engine.js';
 import { positionSize } from './smc/setups.js';
-import { aggregateBias, narrative, TF_WEIGHT } from './smc/mtf.js';
+import { aggregateBias, narrative, TF_WEIGHT, tfSuite } from './smc/mtf.js';
+import { SCAN_HTF_BARS } from './market/scan.js';
 import { fetchDerivatives } from './data/derivatives.js';
 import { derivativesVerdict, oiChangePct, fundingCountdown } from './smc/derivatives.js';
 import { backtest } from './smc/backtest.js';
@@ -21,7 +22,7 @@ import { fetchMarket, fetchStats, renderMarket } from './ui/market.js';
 import { AlertEngine, createAlert, renderAlerts } from './ui/alerts.js';
 import { renderGlossary } from './ui/glossary.js';
 import { createTradePanel } from './ui/trade.js';
-import { fmtPrice, fmtNum, fmtTime, fmtAgo, debounce, throttle, escapeHtml } from './core/utils.js';
+import { fmtPrice, fmtNum, fmtTime, fmtAgo, debounce, throttle, escapeHtml, intervalToMs } from './core/utils.js';
 
 /* ------------------------------------------------------------------ 狀態 */
 
@@ -37,6 +38,7 @@ let ticker = null;
 let mtfRows = [];
 let mtfAgg = null;
 let htfBias = null;
+let htfKey = '';          // 目前 htfBias 對應哪個「幣種／週期／最後收盤 K 棒」，換了才重抓
 let symbols = [];
 let lastUpdated = 0;
 let scanRows = [];
@@ -537,9 +539,13 @@ async function loadData(force = false) {
     $('#replayRange').max = candles.length;
     $('#replayRange').min = Math.min(80, candles.length);
     $('#replayRange').value = candles.length;
+    // 換了幣種或週期，舊的高週期偏向不能拿來用（方向可能完全相反），先清掉等 loadHtfBias 抓新的
+    if (!htfKey.startsWith(`${state.symbol}:${state.interval}:`)) htfBias = null;
+    htfKey = '';
     recompute({ keepView: false });
     if (state.live && !replay.active) startStream();
     loadTicker();
+    loadHtfBias({ force });
     loadMtf();
     derivatives = null;      // 換幣種時先清掉舊的，免得短暫顯示上一個幣的數字
     loadDerivatives();
@@ -574,20 +580,65 @@ const throttledRecompute = throttle(() => recompute({ keepView: true }), 800);
 
 /** 依目前（或回放）資料重新計算並渲染 */
 function recompute({ keepView = true } = {}) {
-  const view = replay.active ? candles.slice(0, Math.max(60, replay.index)) : candles;
+  let view = replay.active ? candles.slice(0, Math.max(60, replay.index)) : candles;
+  // 即時串流會一直往後接新 K 棒，K 棒數會越來越多；裁回設定的根數，
+  // 才會跟重新整理後（以及 Discord 通知的 Worker 掃描）看到的範圍一樣
+  if (!replay.active && view.length > state.candleCount) view = view.slice(-state.candleCount);
   if (!view.length) return;
-  analysis = analyze(view, { ...state.smc, htfBias });
+  // 跟 Discord 通知（Worker 掃描）用同一套算法：只分析「已收盤」的 K 棒，
+  // 盤中還在跳的那根不算，不然計畫會隨盤中價格一直變，跟通知對不上。
+  // 圖上照樣畫出盤中那根；只拿掉最後一根，前面 K 棒的索引不變，圖層位置不受影響。
+  const closed = closedCandles(view, state.interval);
+  analysis = analyze(closed, { ...state.smc, htfBias });
   chart.setData(view, analysis, { keepView });
   renderAll();
-  if (!replay.active) alerts.check(state.symbol, state.interval, analysis, state.lang);
+  // 價格警報要看即時價，不能用已收盤 K 棒的收盤價
+  if (!replay.active) alerts.check(state.symbol, state.interval, { ...analysis, price: view[view.length - 1].close }, state.lang);
+  // 新的一根 K 棒收盤了：高週期偏向也可能跟著變，重抓一次（跟 Worker 每次重掃一樣）
+  if (!replay.active && htfKey && htfKey !== htfKeyFor(closed)) loadHtfBias({ force: true });
   if (replay.active) {
     $('#replayLabel').textContent = `${replay.index}/${candles.length} · ${fmtTime(view[view.length - 1].time, { tz: state.timezone })}`;
   }
 }
 
+/** 去掉還沒收盤的最後一根（K 棒開盤時間 + 週期長度還沒到現在，就是盤中那根） */
+function closedCandles(list, interval) {
+  const last = list[list.length - 1];
+  return last && last.time + intervalToMs(interval) > Date.now() ? list.slice(0, -1) : list;
+}
+
+function htfKeyFor(closed) {
+  return `${state.symbol}:${state.interval}:${closed[closed.length - 1]?.time ?? ''}`;
+}
+
+/**
+ * 高週期偏向：跟 Worker 掃描（src/market/scan.js）完全同一套——只看
+ * tfSuite(週期).htf 這「一個」高週期（15m／30m→4h、1h／2h／4h→1d、6h／1d→1w），
+ * 抓 SCAN_HTF_BARS 根、去掉還沒收盤的那根再分析。高週期偏向會影響計畫的
+ * 多空方向跟評分；以前 App 拿的是多週期面板裡所有較高週期的加權平均，
+ * 所以同一個幣、同一個週期，App 跟 Discord 通知可能連多空方向都不一樣。
+ */
+async function loadHtfBias({ force = false } = {}) {
+  const symbol = state.symbol;
+  const interval = state.interval;
+  const htfInterval = tfSuite(interval).htf;
+  const view = candles.length > state.candleCount ? candles.slice(-state.candleCount) : candles;
+  htfKey = htfKeyFor(closedCandles(view, interval));
+  try {
+    const h = await feed.getCandles(symbol, htfInterval, SCAN_HTF_BARS, { force });
+    if (symbol !== state.symbol || interval !== state.interval) return;
+    const ha = analyze(closedCandles(h, htfInterval), state.smc);
+    htfBias = ha.empty ? null : aggregateBias([{ interval: htfInterval, bias: ha.bias }]);
+  } catch (e) {
+    console.warn('htf', e);
+    htfBias = null;
+  }
+  recompute({ keepView: true });
+}
+
 async function loadMtf() {
   const list = [...state.mtfList].sort((a, b) => (TF_WEIGHT[a] ?? 1) - (TF_WEIGHT[b] ?? 1));
-  if (!list.length) { mtfRows = []; mtfAgg = null; htfBias = null; renderMtfPanel(); return; }
+  if (!list.length) { mtfRows = []; mtfAgg = null; renderMtfPanel(); return; }
   try {
     const data = await feed.getMulti(state.symbol, list, 320);
     mtfRows = list
@@ -600,9 +651,6 @@ async function loadMtf() {
       })
       .filter(Boolean);
     mtfAgg = aggregateBias(mtfRows);
-    const higher = mtfRows.filter((r) => (TF_WEIGHT[r.interval] ?? 1) > (TF_WEIGHT[state.interval] ?? 1));
-    htfBias = higher.length ? aggregateBias(higher) : mtfAgg;
-    recompute({ keepView: true });
     renderMtfPanel();
   } catch (e) {
     console.warn('mtf', e);
@@ -1196,7 +1244,7 @@ function bindSettings() {
   };
 }
 
-const debouncedRecompute = debounce(() => { recompute({ keepView: true }); loadMtf(); }, 250);
+const debouncedRecompute = debounce(() => { loadHtfBias(); loadMtf(); }, 250);
 
 function syncSettingLabels() {
   $('#valInternal').textContent = state.smc.internalStrength;
