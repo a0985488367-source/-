@@ -75,26 +75,32 @@ AUTO_TRADE_BTC_TREND_EMA = "200"
 #   每月約 +12～29%，最大回撤 63%（每單 3%、最多 3 張是回撤 31%、每月 +10～20%）
 # 每個策略只在 <前綴>_TF 的週期判斷；同一個幣已經有部位就不開。幣種清單留空＝內建 74 檔
 #   唐奇安 55 突破（src/strategies/breakout.js）6h：停損 2 ATR、止盈 1R（BREAKOUT_TP_R），之後不動
-BREAKOUT_ENABLED = "false"
+BREAKOUT_ENABLED = "true"
 BREAKOUT_TF = "6h"
 BREAKOUT_RISK_PCT = "3"
 BREAKOUT_TP_R = "1"
 #   EMA20／50 交叉（src/strategies/ema-cross.js）6h：停損 2 ATR，賺 1R 移到成本、1.5R 後追蹤，不設止盈
-EMA_CROSS_ENABLED = "false"
+EMA_CROSS_ENABLED = "true"
 EMA_CROSS_TF = "6h"
 #   MACD 穿零軸（src/strategies/macd-zero.js）6h：出場跟 EMA 交叉一樣（保本＋追蹤）
-MACD_ZERO_ENABLED = "false"
+MACD_ZERO_ENABLED = "true"
 MACD_ZERO_TF = "6h"
 #   放量突破（src/strategies/trend-extra.js）6h：量 > 均量 2 倍＋突破近 20 根高低點；停損 2 ATR、止盈 2R
-VOL_BREAK_ENABLED = "false"
+VOL_BREAK_ENABLED = "true"
 VOL_BREAK_TF = "6h"
 VOL_BREAK_TP_R = "2"
 #   超級趨勢翻多／翻空（src/strategies/trend-extra.js）4h：停損 2 ATR、保本＋追蹤
-SUPERTREND_ENABLED = "false"
+SUPERTREND_ENABLED = "true"
 SUPERTREND_TF = "4h"
 #   黃金／死亡交叉 SMA50／200（src/strategies/trend-extra.js）6h：停損 3 ATR、保本＋追蹤
-GOLDEN_CROSS_ENABLED = "false"
+GOLDEN_CROSS_ENABLED = "true"
 GOLDEN_CROSS_TF = "6h"
+# 2026-09-30 使用者要考自營商兩步挑戰（10000 USDT，在考試平台手動下單）：6 個策略打開但「只推播、不下單」
+# （ALT_SIGNAL_ONLY="true" 時完全不碰 Executor），推播附考試帳戶每筆 0.5% 的建議數量（槓桿上限 5 倍）
+ALT_SIGNAL_ONLY = "true"
+PROP_ACCOUNT_SIZE = "10000"
+PROP_RISK_PCT = "0.5"
+PROP_MAX_LEVERAGE = "5"
 # 假突破反手（src/strategies/fakeout.js）：組合模擬最近 75 天虧，2026-09-28 關掉
 FAKEOUT_ENABLED = "false"
 BREAKOUT_INTERVALS = "4h,6h"

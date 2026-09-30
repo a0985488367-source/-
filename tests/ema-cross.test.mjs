@@ -167,6 +167,26 @@ test('Worker EMA 交叉：市價進場、停損 2 ATR、不掛止盈、每單 3%
   assert.ok(discord.some((d) => d.embeds?.[0]?.title.includes('EMA 交叉做多')));
 });
 
+test('ALT_SIGNAL_ONLY：自動下單關著也推訊號到 Discord，附考試帳戶建議數量，完全不碰 Executor', async () => {
+  const discord = [];
+  const executor = { calls: [] };
+  stub({ discord, executor });
+  const env = makeEnv({ 'auto-trade:enabled': 'false' }, { ALT_SIGNAL_ONLY: 'true', PROP_ACCOUNT_SIZE: '10000' });
+  const out = await runWorker(env);
+  assert.equal(out.breakout.signals, 1, JSON.stringify(out.breakout));
+  assert.equal(out.breakout.orders[0].signalOnly, true);
+  assert.equal(executor.calls.length, 0, '只推播模式不能呼叫 Executor');
+  const embed = discord.map((d) => d.embeds?.[0]).find((e) => e?.title.includes('訊號，不自動下單'));
+  assert.ok(embed, JSON.stringify(discord));
+  assert.match(embed.title, /EMA 交叉做多/);
+  const prop = embed.fields.find((f) => f.name.includes('考試帳戶（10000）'));
+  assert.ok(prop, '要有考試帳戶建議數量');
+  assert.match(prop.value, /打到停損約 -5\d\.\d/, '每筆 0.5% ≈ 50（含手續費）');
+  // 同一根 K 棒不會重複推
+  await runWorker(env);
+  assert.equal(discord.filter((d) => d.embeds?.[0]?.title.includes('訊號，不自動下單')).length, 1);
+});
+
 test('Worker EMA 交叉：關掉 EMA_CROSS_ENABLED 就不判斷', async () => {
   const executor = { calls: [] };
   stub({ executor });

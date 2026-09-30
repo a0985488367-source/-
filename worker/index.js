@@ -190,6 +190,7 @@ import { scanMarket } from '../src/market/scan.js';
 import { DEFAULT_MANAGEMENT, buildLadder } from '../src/smc/manage.js';
 import { PROVIDERS } from '../src/data/providers.js';
 import { intervalToMs } from '../src/core/utils.js';
+import { sizePosition } from '../src/prop/rules.js';
 import { ema } from '../src/core/indicators.js';
 import { breakoutSignal } from '../src/strategies/breakout.js';
 import { emaCrossSignal } from '../src/strategies/ema-cross.js';
@@ -230,6 +231,13 @@ const DEFAULTS = {
   BREAKOUT_ENABLED: 'false',
   BREAKOUT_INTERVAL: '4h',
   BREAKOUT_INTERVALS: '',        // 逗號分隔的多個週期（例如 4h,6h）；留空＝只用 BREAKOUT_INTERVAL
+  // 順勢策略「只推播、不下單」：'true' 時訊號推到 Discord 給人手動下單，完全不碰 Executor
+  ALT_SIGNAL_ONLY: 'false',
+  // 自營商考試帳戶（手動下單用）：有設帳戶大小，推播會多一欄「考試帳戶建議數量」
+  PROP_ACCOUNT_SIZE: '',
+  PROP_RISK_PCT: '0.5',
+  PROP_MAX_LEVERAGE: '5',
+  PROP_FEE_PCT: '0.06',
   BREAKOUT_SYMBOLS: '',          // 留空＝BREAKOUT_DEFAULT_SYMBOLS（回測驗證過的 74 檔）
   BREAKOUT_RISK_PCT: '3',        // 每單冒帳戶總額的 %
   BREAKOUT_MAX_OPEN: '5',        // 突破單＋EMA 交叉單加起來最多同時幾張
@@ -676,7 +684,7 @@ async function run(env, { dry = false } = {}) {
       // 跟 Discord 通知共用同一個去重 key：同一個進場區只會下單一次，
       // 不會因為 Worker 每 2 分鐘重跑就對同一個訊號重複下單。
       if (autoTradeOn) autoTrade = await autoTradeOrder(env, hit);
-      await postDiscord(env, buildEmbed(hit, market, autoTrade, autoTrade ? await executorMode(env) : null));
+      await postDiscord(env, buildEmbed(hit, market, autoTrade, autoTrade ? await executorMode(env) : null, env));
       if (env.SMC_KV) await env.SMC_KV.put(key, String(Date.now()), { expirationTtl: Number(cfg(env, 'ALERT_TTL_SEC')) });
     }
     sent.push(`${hit.row.symbol} ${hit.row.dir} @ ${hit.price}${autoTrade?.orderId ? ' 🤖已下單' : ''}`);
@@ -1114,7 +1122,7 @@ function tradingViewUrl(symbol, interval) {
   return `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(`BYBIT:${symbol}.P`)}&interval=${TV_INTERVAL[interval] ?? '60'}`;
 }
 
-function buildEmbed({ row: r, price }, market, autoTrade, mode = null) {
+function buildEmbed({ row: r, price }, market, autoTrade, mode = null, env = {}) {
   const base = r.symbol.replace(/USDT$/, '');
   const long = r.dir === 'long';
   const tps = (r.targets || []).map((t) => `**${t.name}** ${fmt(t.price)} · ${t.rr.toFixed(2)}R`).join('\n');
@@ -1133,6 +1141,7 @@ function buildEmbed({ row: r, price }, market, autoTrade, mode = null) {
         { name: '目標', value: tps || '—' },
         { name: '評分', value: `${r.score}/100（匯流 ${r.checksPassed}/${r.checksTotal}）`, inline: true },
         { name: '區間位置', value: r.pd ? `${r.pd.zone} ${r.pd.pct?.toFixed?.(0) ?? ''}%` : '—', inline: true },
+        ...propField(propSizing(env, r.entry, r.stop)),
         { name: '📱 去 App 對照', value: compareText(r, market) },
         ...(autoTrade ? [{ name: `🤖 自動下單（${modeLabel(mode)}）`, value: autoTradeText(autoTrade) }] : []),
       ],
@@ -1728,7 +1737,8 @@ async function runBreakoutInterval(env, interval, { dry, use, budget }) {
     if (!dry) await env.SMC_KV.put(doneKey, String(barOpen), { expirationTtl: 7 * 86400 });
     return { skipped: 'too-late', bar, delayMin: Math.round(delayMin) };
   }
-  if (!dry && !(await isAutoTradeEnabled(env))) return { skipped: 'auto-trade-off', bar };
+  const signalOnly = cfg(env, 'ALT_SIGNAL_ONLY') === 'true';
+  if (!dry && !signalOnly && !(await isAutoTradeEnabled(env))) return { skipped: 'auto-trade-off', bar };
 
   const opts = { lookback: Number(cfg(env, 'BREAKOUT_LOOKBACK')), stopAtr: Number(cfg(env, 'BREAKOUT_STOP_ATR')) };
   const emaOpts = { fast: Number(cfg(env, 'EMA_CROSS_FAST')), slow: Number(cfg(env, 'EMA_CROSS_SLOW')), stopAtr: Number(cfg(env, 'EMA_CROSS_STOP_ATR')) };
@@ -1788,6 +1798,17 @@ async function runBreakoutInterval(env, interval, { dry, use, budget }) {
   }
 
   const orders = [];
+  if (signalOnly) {
+    // 只推播：用現價算進場／停損／止盈，推到 Discord，絕對不下單
+    const prices = signals.length ? await getPrices(signals.map((x) => x.symbol)).catch(() => ({})) : {};
+    for (const sig of signals) {
+      const plan = altPlan(env, sig, Number(prices[sig.symbol]) || sig.close);
+      orders.push({ symbol: sig.symbol, strategy: sig.strategy, dir: sig.dir, signalOnly: true, ...(plan.skipped || plan.error ? plan : {}) });
+      if (dry || plan.skipped || plan.error) continue;
+      await postDiscord(env, buildAltSignalEmbed(env, sig, plan, interval)).catch(() => {});
+    }
+    return { bar, signals: signals.length, orders, remaining: state.pending.length, gaveUp: state.gaveUp.length, used: batch.length };
+  }
   for (const sig of signals) {
     if (dry) { orders.push({ symbol: sig.symbol, strategy: sig.strategy, dir: sig.dir, dry: true }); continue; }
     const res = await breakoutOrder(env, sig, interval, barOpen);
@@ -1835,17 +1856,9 @@ async function breakoutOrder(env, sig, interval, barOpen) {
     if (!(equity > 0)) return { error: '帳戶餘額為 0' };
 
     const long = sig.dir === 'long';
-    const entry = Number(prices[sig.symbol]) || sig.close;
-    // 假突破反手的停損是固定價格（假突破極值外），其他策略是離進場價固定距離
-    const risk = sig.stopPrice ? (long ? entry - sig.stopPrice : sig.stopPrice - entry) : sig.stopDistance;
-    const stop = sig.stopPrice ?? (long ? entry - risk : entry + risk);
-    if (sig.stopPrice && !(risk > 0)) return { skipped: 'past-stop', entry, stop };
-    // 收盤後價格已經跑到停損附近：停損太近倉位會太大、手續費也吃掉大半 R（回測同樣不做）
-    if (sig.stopPrice && sig.atr > 0 && risk < FAKEOUT_DEFAULTS.minRiskAtr * sig.atr) return { skipped: 'too-close-to-stop', entry, stop };
-    // EMA 交叉單不設止盈，靠保本＋追蹤停損出場
-    const tpR = isEma ? null : Number(cfg(env, sig.strategy === 'vol' ? 'VOL_BREAK_TP_R' : 'BREAKOUT_TP_R'));
-    const tp = isEma ? null : long ? entry + risk * tpR : entry - risk * tpR;
-    if (!(risk > 0) || !(stop > 0)) return { error: '停損距離異常' };
+    const plan = altPlan(env, sig, Number(prices[sig.symbol]) || sig.close);
+    if (plan.skipped || plan.error) return plan;
+    const { entry, stop, tp, tpR, risk } = plan;
 
     const riskPct = Number(cfg(env, 'BREAKOUT_RISK_PCT'));
     const riskAmount = (equity * riskPct) / 100;
@@ -1888,6 +1901,83 @@ async function breakoutOrder(env, sig, interval, barOpen) {
   } catch (e) {
     return { error: e.message };
   }
+}
+
+/**
+ * 順勢策略的進場／停損／止盈（下單跟「只推播」共用）。
+ * 假突破反手的停損是固定價格（假突破極值外），其他策略是離進場價固定距離；
+ * EMA 交叉、MACD 零軸、超級趨勢、黃金交叉不設止盈，靠保本＋追蹤停損出場。
+ */
+function altPlan(env, sig, entry) {
+  const long = sig.dir === 'long';
+  const isEma = TRAIL_STRATEGIES.has(sig.strategy);
+  const risk = sig.stopPrice ? (long ? entry - sig.stopPrice : sig.stopPrice - entry) : sig.stopDistance;
+  const stop = sig.stopPrice ?? (long ? entry - risk : entry + risk);
+  if (sig.stopPrice && !(risk > 0)) return { skipped: 'past-stop', entry, stop };
+  // 收盤後價格已經跑到停損附近：停損太近倉位會太大、手續費也吃掉大半 R（回測同樣不做）
+  if (sig.stopPrice && sig.atr > 0 && risk < FAKEOUT_DEFAULTS.minRiskAtr * sig.atr) return { skipped: 'too-close-to-stop', entry, stop };
+  const tpR = isEma ? null : Number(cfg(env, sig.strategy === 'vol' ? 'VOL_BREAK_TP_R' : 'BREAKOUT_TP_R'));
+  const tp = isEma ? null : long ? entry + risk * tpR : entry - risk * tpR;
+  if (!(risk > 0) || !(stop > 0)) return { error: '停損距離異常' };
+  return { entry, stop, tp, tpR, risk, isEma };
+}
+
+/**
+ * 自營商考試帳戶的建議倉位（PROP_ACCOUNT_SIZE 有設才算）：
+ * 每筆風險 PROP_RISK_PCT %、手續費算進停損、槓桿不超過 PROP_MAX_LEVERAGE。
+ * 考試帳戶在另一個平台手動下單，這裡只給數量，不會幫忙下單。
+ */
+function propSizing(env, entry, stop) {
+  const account = Number(cfg(env, 'PROP_ACCOUNT_SIZE'));
+  if (!(account > 0)) return null;
+  const r = sizePosition({
+    equity: account, entry, stop,
+    riskPct: Number(cfg(env, 'PROP_RISK_PCT')),
+    maxLeverage: Number(cfg(env, 'PROP_MAX_LEVERAGE')),
+    feePct: Number(cfg(env, 'PROP_FEE_PCT')),
+  });
+  return r.error ? null : { account, ...r };
+}
+
+function propField(p) {
+  if (!p) return [];
+  const qty = p.qty >= 100 ? Math.floor(p.qty) : p.qty >= 1 ? Math.floor(p.qty * 100) / 100 : Number(p.qty.toPrecision(3));
+  return [{
+    name: `🎯 考試帳戶（${p.account}）`,
+    value: `數量 **${qty}** 顆 · 倉位 ${fmt(p.notional)} USDT · ${p.leverage.toFixed(2)} 倍\n打到停損約 -${p.lossAtStop.toFixed(1)}（含手續費）`
+      + (p.limitedBy === 'leverage' ? '\n⚠️ 停損太近，已壓到槓桿上限，實際風險比設定小' : '')
+      + `\n下單前先到考試守門員確認今天還能虧多少：${PROP_PAGE_URL}`,
+  }];
+}
+
+const PROP_PAGE_URL = 'https://a0985488367-source.github.io/-/prop/';
+
+/** 只推播、不下單的順勢策略訊號（ALT_SIGNAL_ONLY）：給手動下單（例如考試帳戶）用 */
+function buildAltSignalEmbed(env, sig, plan, interval) {
+  const base = sig.symbol.replace(/USDT$/, '');
+  const long = sig.dir === 'long';
+  const name = STRATEGY_NAME[sig.strategy] ?? '突破';
+  const stopAtr = TREND_EXTRA_STOP_ATR[sig.strategy] ?? 2;
+  const manage = plan.isEma
+    ? '不設止盈：賺到 1R 把停損移到成本，賺到 1.5R 後停損跟著價格走（追蹤停損）。'
+    : `止盈 ${plan.tpR}R，之後不移動停損。`;
+  return {
+    username: 'SMC 即時守門員',
+    embeds: [{
+      title: `📣 ${base}/USDT ${interval} ${name}${long ? '做多' : '做空'}（訊號，不自動下單）`,
+      color: long ? 0x26a69a : 0xef5350,
+      description: `剛收盤出現${name}訊號，建議市價進場。停損 ${sig.stopPrice ? '在假突破極值外' : `${stopAtr} ATR`}；${manage}`,
+      fields: [
+        { name: '進場約', value: fmt(plan.entry), inline: true },
+        { name: '停損', value: `${fmt(plan.stop)}（${((plan.risk / plan.entry) * 100).toFixed(2)}%）`, inline: true },
+        plan.isEma ? { name: '止盈', value: '不設（追蹤停損）', inline: true } : { name: `止盈（${plan.tpR}R）`, value: fmt(plan.tp), inline: true },
+        ...propField(propSizing(env, plan.entry, plan.stop)),
+        { name: '看圖', value: `[在 TradingView 開啟](${tradingViewUrl(sig.symbol, interval)})` },
+      ],
+      footer: { text: '回測有穩定優勢的 6 個順勢策略之一 · 僅供研究，非投資建議' },
+      timestamp: new Date().toISOString(),
+    }],
+  };
 }
 
 function buildBreakoutEmbed(sig, res, interval, mode = null) {
