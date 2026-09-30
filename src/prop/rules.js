@@ -79,7 +79,7 @@ export function dailyBreakdown(rules, snapshots) {
  *   openRisk     目前持倉如果全部打到停損，還會再虧多少（還沒反映在淨值裡的部分）
  *   selfStopPct  自己的每日停手線：虧到每日上限的幾 % 就收工（預設 50%）
  */
-export function challengeStatus({ rules, phase = 0, snapshots = [], now = Date.now(), todayStart = null, openRisk = 0, selfStopPct = 50 }) {
+export function challengeStatus({ rules, phase = 0, snapshots = [], now = Date.now(), todayStart = null, openRisk = 0, selfStopPct = 50, mode = 'guard' }) {
   const list = clean(snapshots);
   const equity = list.length ? list[list.length - 1].equity : rules.account;
   const today = dayKey(now);
@@ -117,7 +117,8 @@ export function challengeStatus({ rules, phase = 0, snapshots = [], now = Date.n
   if (failed.includes('total')) warn('fail', `淨值已經碰到最大損失底線 ${totalFloor}：依規則考試失敗，請到平台確認。`);
   if (!failed.length) {
     if (dailyRoom <= 0) warn('stop', '算上持倉的停損，今天已經沒有虧損空間了：馬上減倉或平倉。');
-    else if (-todayPnl + risk >= selfStop) warn('stop', `今天虧損（含持倉停損）已達 ${Math.round(-todayPnl + risk)}，超過自己的停手線 ${Math.round(selfStop)}：今天收工，不要再開新單。`);
+    // 衝刺模式沒有自己的停手線（回測就是這樣跑的），只守「全部停損也不破每日上限」
+    else if (mode !== 'sprint' && -todayPnl + risk >= selfStop) warn('stop', `今天虧損（含持倉停損）已達 ${Math.round(-todayPnl + risk)}，超過自己的停手線 ${Math.round(selfStop)}：今天收工，不要再開新單。`);
     else if (dailyRoom < rules.dailyLoss * 0.6) warn('warn', `今天只剩 ${Math.round(dailyRoom)} 的虧損空間，下一筆要縮小。`);
     if (totalRoom < rules.maxLoss * 0.4) warn('warn', `離最大損失底線只剩 ${Math.round(totalRoom)}，每筆風險要降到 0.25% 以下。`);
     if (todayProfitable && level === 'ok') warn('info', `今天已經 +${Math.round(todayPnl)}（≥ ${minDayProfit}），這天算獲利日；想穩就今天收工。`);
@@ -151,11 +152,12 @@ export function challengeStatus({ rules, phase = 0, snapshots = [], now = Date.n
 
 /**
  * 下單前的倉位計算。
+ * mode = 'guard'（穩穩考，預設）或 'sprint'（衝刺：每筆固定風險，只要停損不會破每日上限／總額底線就照做）。
  * 風險預算取三者最小：每筆風險 %、今天剩餘空間的一半、總剩餘空間的四分之一
  * ——單一筆停損不會讓你當天或整個考試直接出局。
  * 手續費算進停損虧損（進出場都算）；槓桿超過上限就把數量壓到上限。
  */
-export function sizePosition({ equity, entry, stop, takeProfit = null, riskPct = 0.5, dailyRoom = Infinity, totalRoom = Infinity, maxLeverage = 5, feePct = 0.06 }) {
+export function sizePosition({ equity, entry, stop, takeProfit = null, riskPct = 0.5, dailyRoom = Infinity, totalRoom = Infinity, maxLeverage = 5, feePct = 0.06, mode = 'guard', account = null }) {
   entry = Number(entry);
   stop = Number(stop);
   if (!(entry > 0) || !(stop > 0) || entry === stop || !(equity > 0)) return { error: '請輸入正確的進場價跟停損價' };
@@ -163,10 +165,12 @@ export function sizePosition({ equity, entry, stop, takeProfit = null, riskPct =
   const tp = Number(takeProfit);
   if (tp > 0 && (dir === 'long' ? tp <= entry : tp >= entry)) return { error: '止盈價要在進場價的另一邊（多單比進場高、空單比進場低）' };
 
+  const sprint = mode === 'sprint';
   const budgets = [
-    { key: 'risk', value: (equity * riskPct) / 100 },
-    { key: 'daily', value: dailyRoom * 0.5 },
-    { key: 'total', value: totalRoom * 0.25 },
+    // 衝刺模式每筆風險用起始資金算（跟回測 --prop-fast 一樣），不隨淨值縮小
+    { key: 'risk', value: ((sprint && account > 0 ? account : equity) * riskPct) / 100 },
+    { key: 'daily', value: dailyRoom * (sprint ? 0.95 : 0.5) },
+    { key: 'total', value: totalRoom * (sprint ? 0.95 : 0.25) },
   ];
   const budget = budgets.reduce((a, b) => (b.value < a.value ? b : a));
   if (!(budget.value > 0)) return { error: '已經沒有虧損空間，今天不要再開新單', blocked: true };

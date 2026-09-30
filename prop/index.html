@@ -65,9 +65,15 @@
 <main>
   <header>
     <h1>考試守門員</h1>
-    <div class="seg" id="phaseSeg">
-      <button data-phase="0">階段一</button>
-      <button data-phase="1">階段二</button>
+    <div class="row">
+      <div class="seg" id="modeSeg">
+        <button data-mode="sprint">衝刺（每筆 2%）</button>
+        <button data-mode="guard">穩穩考</button>
+      </div>
+      <div class="seg" id="phaseSeg">
+        <button data-phase="0">階段一</button>
+        <button data-phase="1">階段二</button>
+      </div>
     </div>
   </header>
 
@@ -112,9 +118,11 @@
           <label for="riskIn">每筆風險</label>
           <select id="riskIn">
             <option value="0.25">0.25%（25）保守</option>
-            <option value="0.5" selected>0.5%（50）建議</option>
+            <option value="0.5">0.5%（50）</option>
             <option value="0.75">0.75%（75）</option>
-            <option value="1">1%（100）上限</option>
+            <option value="1">1%（100）穩穩考建議</option>
+            <option value="1.5">1.5%（150）</option>
+            <option value="2" selected>2%（200）衝刺建議</option>
           </select>
         </div>
       </div>
@@ -132,20 +140,13 @@
 
     <section class="card">
       <h2>過關小抄</h2>
-      <ul class="tips">
-        <li><b>沒有時間限制</b>：不用急，只做最好的機會，沒有就空手。</li>
-        <li><b>每筆 0.5%（50）</b>：連虧 9 筆才會碰到每日上限，連虧 19 筆才會碰到最大損失。</li>
-        <li><b>今天虧到 250 就收工</b>（每日上限的一半），隔天再來。</li>
-        <li><b>今天賺到 50 以上可以收工</b>：這天就算 1 個獲利日，要湊滿 3 天。</li>
-        <li><b>停損一定要掛</b>，不要拉停損、不要攤平。</li>
-        <li><b>槓桿上限 5 倍</b>：停損太近時數量會被限制，計算機會提醒。</li>
-      </ul>
+      <ul class="tips" id="tips"></ul>
     </section>
 
     <section class="card">
       <h2>設定</h2>
       <div class="fields">
-        <div><label for="selfStopIn">自己的停手線（每日上限的 %）</label><input id="selfStopIn" type="number" inputmode="decimal" step="5" min="10" max="100" /></div>
+        <div><label for="selfStopIn">停手線（每日上限的 %，穩穩考才用）</label><input id="selfStopIn" type="number" inputmode="decimal" step="5" min="10" max="100" /></div>
         <div><label for="feeIn">手續費（單邊 %）</label><input id="feeIn" type="number" inputmode="decimal" step="0.01" min="0" /></div>
       </div>
       <div class="row" style="margin-top:12px">
@@ -171,8 +172,13 @@ const twTime = (t) => new Date(t + 8 * 3600e3).toISOString().slice(5, 16).replac
 const qtyFmt = (q) => (q >= 100 ? fmt(Math.floor(q), 0) : q >= 1 ? fmt(Math.floor(q * 100) / 100, 2) : String(Number(q.toPrecision(3))));
 
 function load() {
-  try { return { phase: 0, snapshots: [], openRisk: 0, selfStopPct: 50, feePct: 0.06, riskPct: 0.5, startOverride: null, ...JSON.parse(localStorage.getItem(KEY) || '{}') }; }
-  catch { return { phase: 0, snapshots: [], openRisk: 0, selfStopPct: 50, feePct: 0.06, riskPct: 0.5, startOverride: null }; }
+  const base = { v: 2, mode: 'sprint', phase: 0, snapshots: [], openRisk: 0, selfStopPct: 50, feePct: 0.06, riskPct: 2, startOverride: null };
+  try {
+    const saved = JSON.parse(localStorage.getItem(KEY) || '{}');
+    // 舊版（v1）還沒有衝刺模式：使用者選了衝刺（每筆 2%），換成新的預設
+    if ((saved.v ?? 1) < 2) Object.assign(saved, { v: 2, mode: 'sprint', riskPct: 2 });
+    return { ...base, ...saved };
+  } catch { return base; }
 }
 const state = load();
 function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch {} }
@@ -181,7 +187,7 @@ const todayKey = () => new Date(Math.floor(Date.now() / 86400e3) * 86400e3).toIS
 
 function status() {
   const override = state.startOverride && state.startOverride.day === todayKey() ? state.startOverride.value : null;
-  return challengeStatus({ rules, phase: state.phase, snapshots: state.snapshots, now: Date.now(), todayStart: override, openRisk: state.openRisk, selfStopPct: state.selfStopPct });
+  return challengeStatus({ rules, phase: state.phase, snapshots: state.snapshots, now: Date.now(), todayStart: override, openRisk: state.openRisk, selfStopPct: state.selfStopPct, mode: state.mode });
 }
 
 function bar(pct, color) {
@@ -189,9 +195,32 @@ function bar(pct, color) {
   return `<div class="bar"><i style="width:${p}%;background:${color}"></i></div>`;
 }
 
+const TIPS = {
+  sprint: [
+    '<b>衝刺模式（每筆 2% = 200）</b>：回測 30 天內兩階段全過約 1 成、爆掉約 3 成；過不了就重買，平均約 9 次。',
+    '<b>每則訊號都要跟</b>：4 小時／6 小時 K 棒收盤才有訊號，半夜也會有；漏掉好單會拉低過關機率。',
+    '<b>最多同時 5 張</b>，同一個幣只開一張。',
+    '<b>計算機會自動壓數量</b>：全部持倉一起停損也不會超過今天剩下的虧損空間（500 上限）。',
+    '<b>停損一定要掛</b>，不要拉停損、不要攤平：跳空打穿停損是衝刺模式最常見的爆法。',
+    '<b>獲利日</b>：每天要 +50 以上才算，每個階段要 3 天。',
+  ],
+  guard: [
+    '<b>沒有時間限制</b>：不用急，只做最好的機會，沒有就空手。回測每筆 1% 大約 3.5 個月兩階段全過。',
+    '<b>虧越多倉位越小</b>：計算機會取「每筆 %、今天剩餘一半、總剩餘四分之一」最小的。',
+    '<b>今天虧到 250 就收工</b>（每日上限的一半），隔天再來。',
+    '<b>獲利日</b>：每天要 +50 以上才算，每個階段要 3 天。',
+    '<b>停損一定要掛</b>，不要拉停損、不要攤平。',
+    '<b>槓桿上限 5 倍</b>：停損太近時數量會被限制，計算機會提醒。',
+  ],
+};
+
 function render() {
   const s = status();
   document.querySelectorAll('#phaseSeg button').forEach((b) => b.classList.toggle('on', Number(b.dataset.phase) === state.phase));
+  document.querySelectorAll('#modeSeg button').forEach((b) => b.classList.toggle('on', b.dataset.mode === state.mode));
+  $('tips').innerHTML = TIPS[state.mode].map((t) => `<li>${t}</li>`).join('');
+  const first = state.snapshots.length ? Math.min(...state.snapshots.map((x) => x.time)) : null;
+  const dayN = first ? Math.floor((Date.now() - first) / 86400e3) + 1 : 0;
 
   const msgs = s.messages.length ? s.messages : [{ level: 'ok', text: '狀態正常：照計畫做，每筆都要掛停損。' }];
   $('banners').innerHTML = msgs.map((m) => `<div class="banner ${m.level}">${m.text}</div>`).join('');
@@ -208,7 +237,7 @@ function render() {
     <div class="stat"><div class="k">總共還能虧</div><div class="v ${s.totalRoom < rules.maxLoss * 0.3 ? 'down' : ''}">${fmt0(Math.max(0, s.totalRoom))}</div>
       <div class="s">底線 ${fmt0(s.totalFloor)}（固定）· 已用 ${fmt0(Math.max(0, totalUsed))}/${rules.maxLoss}</div>${bar((s.totalRoom / rules.maxLoss) * 100, roomColor(s.totalRoom, rules.maxLoss))}</div>
     <div class="stat"><div class="k">${rules.phases[state.phase].name}目標 ${fmt0(s.target)}</div><div class="v">${s.toTarget > 0 ? '差 ' + fmt0(s.toTarget) : '達成 ✅'}</div>
-      <div class="s">獲利日 ${s.profitableDays}/${rules.minProfitDays}（每天 +${fmt0(s.minDayProfit)} 以上才算）</div>${bar(s.progressPct, 'var(--accent)')}<div class="dots">${dots}</div></div>`;
+      <div class="s">獲利日 ${s.profitableDays}/${rules.minProfitDays}（每天 +${fmt0(s.minDayProfit)} 以上才算）${state.mode === 'sprint' && dayN ? ` · 衝刺第 ${dayN}/30 天` : ''}</div>${bar(s.progressPct, 'var(--accent)')}<div class="dots">${dots}</div></div>`;
 
   const days = [...s.days].reverse();
   $('daysTable').innerHTML = days.length
@@ -234,13 +263,14 @@ function renderSize(s = status()) {
   const r = sizePosition({
     equity: s.equity, entry, stop, takeProfit: parseFloat($('tpIn').value) || null,
     riskPct: state.riskPct, dailyRoom: s.dailyRoom, totalRoom: s.totalRoom, maxLeverage: rules.maxLeverage, feePct: state.feePct,
+    mode: state.mode, account: rules.account,
   });
   out.className = 'result';
   if (r.error) { out.innerHTML = `<span class="down">${r.error}</span>`; return; }
   const why = {
     risk: `每筆風險 ${state.riskPct}%`,
-    daily: '今天剩餘空間的一半（今天虧比較多了）',
-    total: '總剩餘空間的四分之一（離最大損失比較近了）',
+    daily: state.mode === 'sprint' ? '今天剩下的虧損空間（再大就會破每日上限）' : '今天剩餘空間的一半（今天虧比較多了）',
+    total: state.mode === 'sprint' ? '總共剩下的虧損空間（再大就會破 9000 底線）' : '總剩餘空間的四分之一（離最大損失比較近了）',
     leverage: `槓桿上限 ${rules.maxLeverage} 倍（停損太近，實際風險比設定的小）`,
   }[r.limitedBy];
   out.innerHTML = `
@@ -278,6 +308,14 @@ $('riskIn').onchange = () => { state.riskPct = parseFloat($('riskIn').value); sa
 $('selfStopIn').onchange = () => { state.selfStopPct = Math.max(10, Math.min(100, parseFloat($('selfStopIn').value) || 50)); save(); render(); };
 $('feeIn').onchange = () => { state.feePct = Math.max(0, parseFloat($('feeIn').value) || 0); save(); renderSize(); };
 document.querySelectorAll('#phaseSeg button').forEach((b) => { b.onclick = () => { state.phase = Number(b.dataset.phase); save(); render(); }; });
+document.querySelectorAll('#modeSeg button').forEach((b) => {
+  b.onclick = () => {
+    state.mode = b.dataset.mode;
+    state.riskPct = state.mode === 'sprint' ? 2 : 1;
+    $('riskIn').value = String(state.riskPct);
+    save(); render();
+  };
+});
 $('snapTable').onclick = (e) => {
   const i = e.target.dataset?.del;
   if (i == null) return;
