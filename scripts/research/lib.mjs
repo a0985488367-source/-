@@ -286,3 +286,51 @@ export function simulatePortfolio(trades, {
   }
   return { taken, multiple: equity, maxDdPct: maxDd * 100 };
 }
+
+/**
+ * 考試規則下「哪一組訊號過關最快」的比較表（alt-strategies／smc-mix 的 --prop-compare 共用）。
+ * groups：[{ name, trades }]，trades 的 r 要是扣完手續費的 R，照 filledTime 排序。
+ * 每組算：每天幾筆、每筆平均 R、衝刺（每筆 2%、最多 5 張、30 天期限）過關／爆掉機率與平均要買幾次、
+ * 穩穩考（每筆 1%、守門員縮倉位）有結果的開考裡過關要幾天（中位數）。
+ */
+export function propCompare(groups, { log, fee = 59.4, sprintRisk = 2, guardRisk = 1, maxOpen = 5, deadline = 30, stepDays = 2 } = {}) {
+  const DAY = 86_400_000;
+  const rules = { account: 10000, targets: [500, 1000], dailyLoss: 500, maxLoss: 1000, minDayProfit: 50, minProfitDays: 3, maxLeverage: 5 };
+  const rows = [];
+  const json = [];
+  const med = (xs) => (xs.length ? [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)] : NaN);
+  for (const g of groups) {
+    const xs = [...g.trades].filter((t) => Number.isFinite(t.r) && Number.isFinite(t.filledTime)).sort((a, b) => a.filledTime - b.filledTime);
+    if (xs.length < 10) { rows.push([g.name, String(xs.length), '-', '-', '-', '-', '-', '-']); continue; }
+    const first = xs[0].filledTime;
+    const last = Math.max(...xs.map((t) => t.closedTime));
+    const days = (last - first) / DAY;
+    const avgR = xs.reduce((a, t) => a + t.r, 0) / xs.length;
+    let n = 0, pass = 0, fail = 0;
+    for (let st = Math.ceil(first / DAY) * DAY; st + deadline * DAY <= last; st += DAY) {
+      const r = simulateProp(xs, { ...rules, startTime: st, endTime: st + deadline * DAY, riskPct: sprintRisk, maxOpen, aggressive: true });
+      n++;
+      if (r.result === 'pass') pass++;
+      else if (r.result.startsWith('fail')) fail++;
+    }
+    const guardDays = [];
+    let gn = 0, gdone = 0;
+    for (let st = first; st < last - 7 * DAY; st += stepDays * DAY) {
+      const r = simulateProp(xs, { ...rules, startTime: st, riskPct: guardRisk, maxOpen });
+      gn++;
+      if (r.result !== 'open') gdone++;
+      if (r.result === 'pass') guardDays.push(r.days);
+    }
+    const p = n ? pass / n : NaN;
+    json.push({ g: g.name, n: xs.length, perDay: Math.round((xs.length / days) * 10) / 10, avgR: Math.round(avgR * 1000) / 1000,
+      sprint: { n, pass, fail }, guard: { n: gn, done: gdone, pass: guardDays.length, med: Math.round(med(guardDays)) } });
+    rows.push([
+      g.name, String(xs.length), (xs.length / days).toFixed(1), avgR.toFixed(3),
+      n ? pct(p * 100) : '-', n ? pct((fail / n) * 100) : '-',
+      p > 0 ? `${(1 / p).toFixed(1)} 次（${(fee / p).toFixed(0)}U）` : n ? '過不了' : '-',
+      guardDays.length ? `${med(guardDays).toFixed(0)} 天（${gdone}/${gn} 有結果）` : `—（${gdone}/${gn} 有結果）`,
+    ]);
+  }
+  printTable(log, ['訊號組', '筆數', '每天幾筆', '每筆淨 R', `衝刺 ${sprintRisk}% ${deadline} 天內全過`, '衝刺爆掉', '平均要買幾次', `穩穩考 ${guardRisk}% 過關天數（中位）`], rows);
+  return json;
+}

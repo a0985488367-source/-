@@ -170,3 +170,16 @@ test('衝刺模式沒有「虧到 250 收工」的停手線，只在沒空間時
   assert.equal(challengeStatus({ rules: R, snapshots: snaps, now: T(2, 5), mode: 'sprint' }).level, 'warn', '只提醒空間不多，不叫你收工');
   assert.equal(challengeStatus({ rules: R, snapshots: snaps, now: T(2, 5) }).level, 'stop');
 });
+
+import { propCompare } from '../scripts/research/lib.mjs';
+
+test('考試比較表：每組算出每天幾筆、每筆淨 R、衝刺過關率、穩穩考天數，不會因為筆數太少而出錯', () => {
+  const lines = [];
+  const good = seq(Array(120).fill(0).map((_, i) => (i % 3 === 0 ? -1 : 1)));
+  const json = propCompare([{ name: '好', trades: good }, { name: '太少', trades: good.slice(0, 3) }], { log: (x) => lines.push(x) });
+  assert.equal(json.length, 1);
+  assert.equal(json[0].g, '好');
+  assert.ok(Math.abs(json[0].avgR - 1 / 3) < 0.01);
+  assert.ok(json[0].sprint.n > 0 && json[0].guard.n > 0);
+  assert.ok(lines.join('\n').includes('太少'));
+});
