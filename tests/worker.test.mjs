@@ -151,6 +151,16 @@ test('推播寫清楚去 App 對照要看的週期、資料源、分析時間（
   assert.match(field.value, /分析於 09-29 12:02（台灣時間），用到 09-29 12:00 收盤的 K 棒/);
   assert.match(field.value, /https:\/\/www\.tradingview\.com\/chart\/\?symbol=BYBIT%3AABCUSDT\.P&interval=60/);
   assert.match(discord[0].embeds[0].footer.text, /09-29 12:02 台灣時間/);
+  assert.equal(discord[0].embeds[0].fields.some((f) => f.name.includes('考試帳戶')), false, '沒設 PROP_ACCOUNT_SIZE 就不顯示');
+});
+
+test('SMC 推播附考試帳戶建議數量（PROP_ACCOUNT_SIZE）', async () => {
+  const discord = [];
+  stubFetch({ market: makeMarket([row()]), prices: { ABCUSDT: 99.9 }, discord });
+  await runWorker(makeEnv({ PROP_ACCOUNT_SIZE: '10000' }));
+  const f = discord[0].embeds[0].fields.find((x) => x.name.includes('考試帳戶（10000）'));
+  // 進場 100、停損 95：每筆 0.5% = 50，每顆虧 5 + 來回手續費約 0.12 → 約 9.77 顆
+  assert.match(f.value, /數量 \*\*9\.77\*\* 顆/);
 });
 
 test('SMC_SYMBOLS：只盯清單上的幣，其他幣價格到了也不推播', async () => {
