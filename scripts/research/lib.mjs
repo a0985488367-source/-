@@ -156,6 +156,86 @@ export function printTable(log, head, body) {
  *   skip              (t) => true 的單不開
  * 回撤用平倉後的帳戶計算（持倉中的浮動虧損不算），所以實際會再大一點。
  */
+/**
+ * 自營商考試模擬（兩步挑戰）：從 startTime 開始考，照「考試守門員」的做法一筆一筆接交易。
+ *   - 每筆風險 = min(淨值 × riskPct%、今天剩餘空間的一半、總剩餘空間的四分之一)，槓桿不超過 maxLeverage
+ *   - 今天虧到 selfStop（每日上限的比例，含持倉停損）就不再開新單；lockProfitDay 時當天賺到獲利日門檻也收工
+ *   - 一天從 UTC 0 點開始；碰到每日虧損上限或最大損失底線就失敗（只看平倉後的淨值，持倉中的浮虧看不到）
+ *   - 達到目標而且獲利日夠了就過關（手上的單當作平掉），接著從起始資金開始考下一階段
+ * trades：{ filledTime, closedTime, r（扣完手續費的 R）, stopPct（停損距離占進場價比例）, symbol, dir }，照 filledTime 排序
+ * 回傳 { result: 'pass' | 'fail-daily' | 'fail-total' | 'open', phase（卡在第幾階段，0 起算）, days, phaseDays: [] }
+ */
+export function simulateProp(trades, {
+  startTime, account = 10000, targets = [500, 1000], dailyLoss = 500, maxLoss = 1000,
+  minDayProfit = 50, minProfitDays = 3, riskPct = 0.5, maxOpen = 5, maxLeverage = 5,
+  selfStop = 0.5, lockProfitDay = false,
+} = {}) {
+  const DAY = 86_400_000;
+  const ev = [];
+  trades.forEach((t, i) => {
+    if (t.filledTime < startTime) return;
+    ev.push({ time: t.filledTime, kind: 1, i });
+    ev.push({ time: Math.max(t.closedTime, t.filledTime + 1), kind: 0, i });
+  });
+  ev.sort((a, b) => a.time - b.time || a.kind - b.kind);
+
+  let phase = 0;
+  let phaseStart = startTime;
+  const phaseDays = [];
+  let equity = account;
+  let day = Math.floor(startTime / DAY);
+  let dayStart = account;
+  let profitDays = 0;
+  let open = new Map();
+  const result = (r, time) => ({ result: r, phase, days: (time - startTime) / DAY, phaseDays });
+
+  const rollDay = (time) => {
+    const d = Math.floor(time / DAY);
+    if (d === day) return;
+    if (equity - dayStart >= minDayProfit) profitDays += 1;
+    day = d;
+    dayStart = equity;
+  };
+  const passed = () => equity >= account + targets[phase]
+    && profitDays + (equity - dayStart >= minDayProfit ? 1 : 0) >= minProfitDays;
+
+  for (const e of ev) {
+    rollDay(e.time);
+    const t = trades[e.i];
+    if (e.kind === 0) {
+      const p = open.get(e.i);
+      if (!p) continue;
+      open.delete(e.i);
+      equity += p.risk * t.r;
+      if (equity <= account - maxLoss) return result('fail-total', e.time);
+      if (equity <= dayStart - dailyLoss) return result('fail-daily', e.time);
+      if (passed()) {
+        phaseDays.push((e.time - phaseStart) / DAY);
+        if (phase === targets.length - 1) return result('pass', e.time);
+        phase += 1;
+        phaseStart = e.time;
+        equity = account;
+        dayStart = account;
+        profitDays = 0;
+        open = new Map();
+      }
+      continue;
+    }
+    const positions = [...open.values()];
+    if (positions.length >= maxOpen || positions.some((p) => p.symbol === t.symbol)) continue;
+    const openRisk = positions.reduce((a, p) => a + p.risk, 0);
+    if (dayStart - equity + openRisk >= dailyLoss * selfStop) continue;
+    if (lockProfitDay && equity - dayStart >= minDayProfit) continue;
+    const dailyRoom = equity - (dayStart - dailyLoss) - openRisk;
+    const totalRoom = equity - (account - maxLoss) - openRisk;
+    let risk = Math.min((equity * riskPct) / 100, dailyRoom * 0.5, totalRoom * 0.25);
+    if (t.stopPct > 0) risk = Math.min(risk, maxLeverage * equity * t.stopPct);
+    if (!(risk > account * 0.0005)) continue;
+    open.set(e.i, { risk, symbol: t.symbol });
+  }
+  return result('open', ev.length ? ev[ev.length - 1].time : startTime);
+}
+
 export function simulatePortfolio(trades, {
   riskPct = 5, maxAtRisk = Infinity, oneBySymbol = false, maxSameDirAtRisk = Infinity,
   maxNewPerHour = Infinity, stackScale = 1, dailyStopPct = 0, skip = null,

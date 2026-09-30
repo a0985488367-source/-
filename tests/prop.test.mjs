@@ -100,3 +100,47 @@ test('倉位：空單、止盈的風報比；止盈放錯邊會提醒', () => {
   assert.match(sizePosition({ equity: 10000, entry: 100, stop: 102, takeProfit: 105 }).error, /止盈/);
   assert.ok(sizePosition({ equity: 10000, entry: 100, stop: 98, dailyRoom: 0 }).blocked);
 });
+
+/* ------------------------------------------------------------ 考試模擬（scripts/research/lib.mjs） */
+
+import { simulateProp } from '../scripts/research/lib.mjs';
+
+const H = 3_600_000;
+const D0 = Date.UTC(2026, 0, 1);
+// 一天一筆、每筆 12 小時結束；r 用陣列指定
+const seq = (rs, sym = (i) => `S${i}USDT`) => rs.map((r, i) => ({
+  filledTime: D0 + i * 24 * H + 2 * H, closedTime: D0 + i * 24 * H + 14 * H, r, stopPct: 0.02, symbol: sym(i), dir: 'long',
+}));
+
+test('考試模擬：每天賺 +1R（1% = 100），5 天過階段一、再 10 天過階段二', () => {
+  const r = simulateProp(seq(Array(40).fill(1)), { startTime: D0, riskPct: 1 });
+  assert.equal(r.result, 'pass');
+  assert.equal(r.phaseDays.length, 2);
+  assert.ok(r.phaseDays[0] >= 4 && r.phaseDays[0] <= 5, JSON.stringify(r));
+});
+
+test('考試模擬：目標到了但獲利日不夠不算過關（一天賺 +600 只算 1 個獲利日）', () => {
+  const r = simulateProp(seq([6, 0, 0, 0]), { startTime: D0, riskPct: 1, maxOpen: 1 });
+  // 風險 1% = 100，+6R = +600 → 目標 10500 到了，但獲利日只有 1 天
+  assert.equal(r.result, 'open');
+  assert.equal(r.phase, 0);
+});
+
+test('考試模擬：連續虧損會碰到最大損失；倉位隨剩餘空間縮小，所以要虧很多筆才會出局', () => {
+  const r = simulateProp(seq(Array(200).fill(-1)), { startTime: D0, riskPct: 1 });
+  // 風險 = min(1%、今天剩一半、總剩四分之一)：剩餘空間越少倉位越小，淨值只會無限接近底線
+  assert.equal(r.result, 'open');
+  const gap = simulateProp(seq([-1, -1, -1, -8]), { startTime: D0, riskPct: 1 });
+  assert.equal(gap.result, 'fail-total', '跳空打穿停損（一筆 -8R ≈ -776）才會一次出局');
+  const daily = simulateProp(seq([-8]), { startTime: D0, riskPct: 1 });
+  assert.equal(daily.result, 'fail-total'.replace('total', 'daily'), '第一天就 -8R（-800）先碰到每日上限');
+});
+
+test('考試模擬：今天虧到每日上限一半（250）就不再開新單', () => {
+  const trades = Array.from({ length: 6 }, (_, i) => ({
+    filledTime: D0 + i * H, closedTime: D0 + i * H + H / 2, r: -1, stopPct: 0.02, symbol: `S${i}USDT`, dir: 'long',
+  }));
+  const r = simulateProp(trades, { startTime: D0, riskPct: 1 });
+  assert.equal(r.result, 'open');
+  // 100 + 100 + 50（剩餘一半的上限）→ 250 之後停手：6 筆只做了 3 筆
+});

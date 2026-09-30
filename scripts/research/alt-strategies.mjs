@@ -12,7 +12,7 @@
  * 用法：node scripts/research/alt-strategies.mjs --symbols=BTCUSDT,ETHUSDT --intervals=1h,4h --limit=5000 --sub=5m --sub-days=150
  */
 
-import { opt as optFrom, klines, runSignals, r2, pct, printTable, simulatePortfolio } from './lib.mjs';
+import { opt as optFrom, klines, runSignals, r2, pct, printTable, simulatePortfolio, simulateProp } from './lib.mjs';
 import { ema, atr, rsi } from '../../src/core/indicators.js';
 import { breakoutSignal } from '../../src/strategies/breakout.js';
 import { fakeoutEvents, FAKEOUT_DEFAULTS } from '../../src/strategies/fakeout.js';
@@ -299,6 +299,10 @@ function runCombo(candlesBy, mid, netR) {
       const days = sorted.length ? (Math.max(...sorted.map((t) => t.closedTime)) - sorted[0].filledTime) / DAY : 0;
       return { n, xs: sorted, days };
     });
+    if (PROP) {
+      if (g === groups.at(-1)) runPropSim(g.map((p) => p.label).join(' ＋ '), periods);
+      continue;
+    }
     const rows = [];
     for (const risk of RISKS) for (const cap of CAPS) for (const dir of DIRS) {
       if (dir !== Infinity && dir >= cap) continue;
@@ -327,6 +331,69 @@ function runCombo(candlesBy, mid, netR) {
     printTable(log, ['每單風險', '最多同時', '同方向最多', '原週期 前半', '原週期 後半', '5M 前半', '5M 後半', '原週期 全段', '最大回撤', '每月（最差段）', '每月（全段）', '滾 10 倍（月）'], rows);
   }
   log('\nCOMBO_JSON ' + JSON.stringify(json));
+}
+
+/**
+ * --prop：自營商兩步挑戰模擬（規則見 lib.mjs simulateProp；預設是使用者的 10000 USDT 兩步挑戰）。
+ * 每隔 --prop-step 天換一個開考日，照「考試守門員」的倉位規則接組合裡的交易，
+ * 統計過關率、失敗率、要考幾天，以及平均要買幾次考試（報名費 --prop-fee）。
+ */
+const PROP = opt('prop', '') !== '';
+function runPropSim(names, periods) {
+  const DAY = 86_400_000;
+  const list = (k, d) => opt(k, d).split(',').map(Number);
+  const RISKS = list('prop-risks', '0.25,0.5,0.75,1,1.5,2');
+  const CAPS = list('prop-caps', '3,5');
+  const STEP = Number(opt('prop-step', 2));
+  const FEE_USDT = Number(opt('prop-fee', 59.4));
+  const rules = {
+    account: Number(opt('prop-account', 10000)),
+    targets: list('prop-targets', '500,1000'),
+    dailyLoss: Number(opt('prop-daily', 500)),
+    maxLoss: Number(opt('prop-max', 1000)),
+    minDayProfit: Number(opt('prop-day-profit', 50)),
+    minProfitDays: Number(opt('prop-days', 3)),
+    maxLeverage: Number(opt('prop-leverage', 5)),
+  };
+  const q = (xs, p) => (xs.length ? [...xs].sort((a, b) => a - b)[Math.min(xs.length - 1, Math.floor(xs.length * p))] : NaN);
+  const json = [];
+  log(`\n■ 自營商兩步挑戰模擬：${names}`);
+  log(`  規則：帳戶 ${rules.account}、目標 ${rules.targets.join('／')}、每日虧損 ${rules.dailyLoss}、最大損失 ${rules.maxLoss}、`
+    + `獲利日 ${rules.minProfitDays} 天（每天 +${rules.minDayProfit}）、槓桿 ${rules.maxLeverage} 倍；每 ${STEP} 天換一個開考日`);
+  log('  倉位照考試守門員：每筆 min(風險%、今天剩餘一半、總剩餘四分之一)；今天虧到每日上限一半就收工；只看平倉淨值（浮虧看不到）');
+  for (const per of periods) {
+    if (!per.xs.length) continue;
+    const first = per.xs[0].filledTime;
+    const last = Math.max(...per.xs.map((t) => t.closedTime));
+    const rows = [];
+    for (const risk of RISKS) for (const cap of CAPS) for (const lock of [false, true]) {
+      const res = [];
+      for (let st = first; st < last - 7 * DAY; st += STEP * DAY) {
+        res.push(simulateProp(per.xs, { ...rules, startTime: st, riskPct: risk, maxOpen: cap, lockProfitDay: lock }));
+      }
+      const done = res.filter((r) => r.result !== 'open');
+      const pass = done.filter((r) => r.result === 'pass');
+      const failD = done.filter((r) => r.result === 'fail-daily').length;
+      const failT = done.filter((r) => r.result === 'fail-total').length;
+      const p1 = done.filter((r) => r.result === 'pass' || r.phase > 0).length;
+      const passRate = done.length ? pass.length / done.length : NaN;
+      const days = pass.map((r) => r.days);
+      json.push({ per: per.n, risk, cap, lock, n: res.length, done: done.length, pass: pass.length, p1, failD, failT,
+        med: Math.round(q(days, 0.5)), p80: Math.round(q(days, 0.8)) });
+      rows.push([
+        `${risk}%`, String(cap), lock ? '收工' : '繼續',
+        `${res.length}／${done.length}`,
+        done.length ? pct((p1 / done.length) * 100) : '-',
+        done.length ? pct(passRate * 100) : '-',
+        done.length ? `${pct((failD / done.length) * 100)}／${pct((failT / done.length) * 100)}` : '-',
+        days.length ? `${q(days, 0.5).toFixed(0)}／${q(days, 0.8).toFixed(0)}` : '-',
+        passRate > 0 ? `${(1 / passRate).toFixed(1)} 次（${(FEE_USDT / passRate).toFixed(0)}U）` : '-',
+      ]);
+    }
+    log(`\n  ▸ ${per.n}（${per.days.toFixed(0)} 天、${per.xs.length} 筆交易）`);
+    printTable(log, ['每筆風險', '最多同時', '當天賺到獲利日', '開考次數／有結果', '過階段一', '兩階段都過', '失敗（每日／總額）', '過關天數（中位／80%）', '平均要買幾次'], rows);
+  }
+  log('\nPROP_JSON ' + JSON.stringify(json));
 }
 
 /** 一進一出的手續費（占倉位價值） */
