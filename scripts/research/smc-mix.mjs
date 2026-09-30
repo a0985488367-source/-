@@ -18,7 +18,7 @@
 
 import { analyze } from '../../src/smc/engine.js';
 import { ema } from '../../src/core/indicators.js';
-import { opt as optFrom, klines, runSignals, r2, pct, printTable } from './lib.mjs';
+import { opt as optFrom, klines, runSignals, r2, pct, printTable, propCompare } from './lib.mjs';
 
 const ARGS = process.argv.slice(2);
 const opt = (n, d) => optFrom(ARGS, n, d);
@@ -167,6 +167,25 @@ const LIVE = (t) => t.score >= LIVE_MIN_SCORE && t.tp1R >= 1.5 && !(t.dir === 's
   if (!signals.length) process.exit(1);
 
   const weeks = SUB_DAYS / 7;
+  // --prop-compare：SMC 訊號在考試規則下多快過關（線上規則、各週期、全部），跟 alt-strategies 同一張表
+  if (opt('prop-compare', '') !== '') {
+    const traded = (xs) => xs.filter((t) => !(t.status === 'expired' && t.exitReason === 'timeout'));
+    const net = (xs) => xs.map((t) => ({ ...t, r: netR(t), filledTime: t.filledTime ?? t.time }));
+    const out = [];
+    for (const [pn, cfg] of [['原週期 全段', {}], ['5M 精準版', { subBars: true, fillBarPath: true }]]) {
+      if (cfg.subBars && !SUB) continue;
+      const all = net(traded(runSignals(signals, candlesBy, cfg)));
+      const groups = [
+        { name: `SMC 全部（分數 ≥${MIN_SCORE}）`, trades: all },
+        { name: 'SMC 線上規則', trades: all.filter(LIVE) },
+        ...INTERVALS.map((iv) => ({ name: `SMC 線上規則 ${iv}`, trades: all.filter((t) => LIVE(t) && t.interval === iv) })),
+      ];
+      log(`\n■ 考試規則下誰過關最快（${pn}；${SYMBOLS.length} 檔）`);
+      out.push({ period: pn, rows: propCompare(groups, { log }) });
+    }
+    log('\nPROP_COMPARE_JSON ' + JSON.stringify(out));
+    return;
+  }
   const summary = [];
   for (const [variant, map] of [['EDGE', (s) => s], ['MID', midEntry]]) {
     const sigs = signals.map(map);

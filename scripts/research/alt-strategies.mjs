@@ -12,7 +12,7 @@
  * 用法：node scripts/research/alt-strategies.mjs --symbols=BTCUSDT,ETHUSDT --intervals=1h,4h --limit=5000 --sub=5m --sub-days=150
  */
 
-import { opt as optFrom, klines, runSignals, r2, pct, printTable, simulatePortfolio, simulateProp } from './lib.mjs';
+import { opt as optFrom, klines, runSignals, r2, pct, printTable, simulatePortfolio, simulateProp, propCompare } from './lib.mjs';
 import { ema, atr, rsi } from '../../src/core/indicators.js';
 import { breakoutSignal } from '../../src/strategies/breakout.js';
 import { fakeoutEvents, FAKEOUT_DEFAULTS } from '../../src/strategies/fakeout.js';
@@ -280,6 +280,19 @@ function runCombo(candlesBy, mid, netR) {
   const CAPS = list('caps', '3,5,8,10,12,inf');
   const DIRS = list('dirs', 'inf,3,4,5,6');
   const [sRisk, sCap, sDir] = list('single', '3,5,3');
+  if (PROP_COMPARE) {
+    const out = [];
+    for (const [pn, key] of [['原週期 全段', 'coarse'], ['5M 精準版', 'fine']]) {
+      const groups = [
+        ...per.map((p) => ({ name: p.label, trades: p[key] })),
+        { name: `全部 ${per.length} 個合起來`, trades: per.flatMap((p) => p[key]) },
+      ];
+      log(`\n■ 考試規則下誰過關最快（${pn}；${SYMBOLS.length} 檔）`);
+      out.push({ period: pn, rows: propCompare(groups, { log }) });
+    }
+    log('\nPROP_COMPARE_JSON ' + JSON.stringify(out));
+    return;
+  }
   const json = [];
   // 原週期用時間切前後半（不同週期的 K 棒涵蓋的天數不一樣），只取每一組都有資料的那段
   const cStart = Math.max(...per.map((p) => Math.min(...p.coarse.map((t) => t.filledTime))));
@@ -340,6 +353,7 @@ function runCombo(candlesBy, mid, netR) {
  */
 const PROP = opt('prop', '') !== '';
 const PROP_FAST = opt('prop-fast', '') !== '';
+const PROP_COMPARE = opt('prop-compare', '') !== '';
 function runPropSim(names, periods) {
   const DAY = 86_400_000;
   const list = (k, d) => opt(k, d).split(',').map(Number);
