@@ -220,10 +220,11 @@ export function renderMtfPlan(plan, lang) {
   const rows = [
     step(htf ? !!htf.dir : undefined, '日線方向', htf ? `${dirTxt(htf.dir)}（偏向 ${htf.biasScore}）` : '—'),
     step(undefined, '日線成交量分布（出場）', prof),
-    step(plan.poi ? true : plan.stage === 'poi' ? false : undefined, '4h 進場區', plan.poi ? `${escapeHtml(plan.poi.type)} ${fmtPrice(plan.poi.bottom)}–${fmtPrice(plan.poi.top)}` : (plan.poi4h?.length ? `${plan.poi4h.length} 個候選，還沒被操縱掃到` : '—')),
-    step(po3?.mss ? true : plan.stage === 'po3' ? false : undefined, 'PO3／造市者模型', po3 ? escapeHtml(po3.phase) : '—'),
+    step(plan.poi ? true : plan.stage === 'poi' ? false : undefined, '4h 進場區（價格回來了嗎）', plan.poi ? `${escapeHtml(plan.poi.type)} ${fmtPrice(plan.poi.bottom)}–${fmtPrice(plan.poi.top)}` : (plan.poi4h?.length ? `${plan.poi4h.length} 個候選，價格還沒回來` : '—')),
+    step(plan.structure ? true : plan.stage === 'h1' ? false : undefined, '1h 結構同向', plan.structure ? `${plan.structure.h1.type} ${fmtPrice(plan.structure.h1.price)}` : '—'),
+    step(plan.structure ? true : plan.stage === 'm15' ? false : undefined, '15m 結構也轉向', plan.structure ? `${plan.structure.m15.type} ${fmtPrice(plan.structure.m15.price)}` : '—'),
+    step(po3?.po3 || po3?.mmxm ? true : undefined, '加分：PO3／造市者模型', po3 ? `${po3.po3 ? 'PO3 ✓ ' : ''}${po3.mmxm ? 'MMXM ✓ ' : ''}${escapeHtml(po3.phase)}` : '—'),
     po3?.accumulation ? step(true, '吸籌區間 → 操縱極值', `${fmtPrice(po3.accumulation.low)}–${fmtPrice(po3.accumulation.high)} → ${fmtPrice(po3.extreme)}`) : '',
-    po3?.mss ? step(true, '結構轉向（1h）', `${po3.mss.type} ${fmtPrice(po3.mss.price)}（${po3.mss.barsAgo} 根前）`) : '',
     plan.ltf ? step(true, '15m 成交量分布（進場）', `POC ${fmtPrice(plan.ltf.poc)} · VAH ${fmtPrice(plan.ltf.vah)} · VAL ${fmtPrice(plan.ltf.val)}`) : '',
   ].join('');
   const result = plan.none
@@ -237,7 +238,7 @@ export function renderMtfPlan(plan, lang) {
       </div>`;
   return `<section class="card"><header class="card__head"><h3>多週期計畫（新版，回測中）</h3></header>
     <div class="pad">${rows}</div>${result}
-    <p class="dim pad" style="margin:0;font-size:11px">日線 → 4h → 1h → 15m 一路往下看；PO3（吸籌→操縱→派發）成立才給進場點。還在回測，Discord 通知仍是舊版。</p></section>`;
+    <p class="dim pad" style="margin:0;font-size:11px">日線定方向 → 回到 4h 進場區 → 1h、15m 結構都同向才給進場點；PO3／造市者模型有的話加分。還在回測，Discord 通知仍是舊版。</p></section>`;
 }
 
 export function renderMtf(rows, agg, lang) {

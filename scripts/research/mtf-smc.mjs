@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 多週期 SMC（src/smc/mtf-plan.js：日線 → 4h → 1h → 15m、PO3／MMXM 當進場條件、成交量分布抓進出場）回測。
+ * 多週期 SMC（src/smc/mtf-plan.js：日線 → 4h → 1h → 15m 四層同向才進場、PO3／MMXM 加分、成交量分布抓進出場）回測。
  *
  *   node scripts/research/mtf-smc.mjs --symbols=BTCUSDT,ETHUSDT --days=365 --sub=5m --sub-days=150
  *
@@ -89,7 +89,7 @@ const netR = (t) => t.r - feeOf(t) / t.stopPct;
         dir: plan.dir, entry: plan.entry, stop: plan.stop, entryType: plan.entryType,
         targets: plan.targets.map((x) => ({ name: x.name, price: x.price, rr: x.rr, label: x.label })),
         stopPct: plan.risk / plan.entry, grade: plan.grade, score: plan.score, poiType: plan.poi.type,
-        entryNode: plan.entryNode, expansion: plan.po3.expansion,
+        entryNode: plan.entryNode, po3Hit: !!plan.po3.po3, mmxmHit: !!plan.po3.mmxm,
       });
     }
     if (SUB) {
@@ -129,8 +129,9 @@ const netR = (t) => t.r - feeOf(t) / t.stopPct;
     ['市價', (t) => t.entryType === 'market'],
     ['A+／A 級', (t) => t.grade === 'A+' || t.grade === 'A'],
     ['B 級以下', (t) => !(t.grade === 'A+' || t.grade === 'A')],
-    ['已擴張才進', (t) => t.expansion],
-    ['還在吸籌區間內', (t) => !t.expansion],
+    ['有 PO3', (t) => t.po3Hit],
+    ['有造市者模型（MMXM）', (t) => t.mmxmHit],
+    ['PO3／MMXM 都沒有', (t) => !t.po3Hit && !t.mmxmHit],
   ];
   const rows = [];
   const json = [];
