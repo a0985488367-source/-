@@ -144,3 +144,13 @@ test('考試模擬：今天虧到每日上限一半（250）就不再開新單',
   assert.equal(r.result, 'open');
   // 100 + 100 + 50（剩餘一半的上限）→ 250 之後停手：6 筆只做了 3 筆
 });
+
+test('考試模擬（衝刺）：有期限，時間到還沒過就算沒過；每筆固定風險不縮倉位', () => {
+  const r = simulateProp(seq(Array(40).fill(1)), { startTime: D0, endTime: D0 + 3 * 24 * H, riskPct: 1, aggressive: true });
+  assert.equal(r.result, 'open', '3 天只賺 +300，還沒到 +500');
+  const fast = simulateProp(seq(Array(40).fill(1)), { startTime: D0, endTime: D0 + 7 * 24 * H, riskPct: 4, aggressive: true });
+  assert.equal(fast.result, 'pass', '每天 +4%：第 3 天過階段一、再 3 天過階段二');
+  // 衝刺模式只守「停損不破每日上限」：照停損出場不會爆，停損被跳空打穿（-1.5R）才會碰到上限
+  assert.equal(simulateProp(seq([-1, -1]), { startTime: D0, riskPct: 5, aggressive: true }).result, 'open');
+  assert.equal(simulateProp(seq([-1.5]), { startTime: D0, riskPct: 5, aggressive: true }).result, 'fail-daily');
+});

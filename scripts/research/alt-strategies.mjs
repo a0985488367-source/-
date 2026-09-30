@@ -339,6 +339,7 @@ function runCombo(candlesBy, mid, netR) {
  * 統計過關率、失敗率、要考幾天，以及平均要買幾次考試（報名費 --prop-fee）。
  */
 const PROP = opt('prop', '') !== '';
+const PROP_FAST = opt('prop-fast', '') !== '';
 function runPropSim(names, periods) {
   const DAY = 86_400_000;
   const list = (k, d) => opt(k, d).split(',').map(Number);
@@ -361,6 +362,7 @@ function runPropSim(names, periods) {
   log(`  規則：帳戶 ${rules.account}、目標 ${rules.targets.join('／')}、每日虧損 ${rules.dailyLoss}、最大損失 ${rules.maxLoss}、`
     + `獲利日 ${rules.minProfitDays} 天（每天 +${rules.minDayProfit}）、槓桿 ${rules.maxLeverage} 倍；每 ${STEP} 天換一個開考日`);
   log('  倉位照考試守門員：每筆 min(風險%、今天剩餘一半、總剩餘四分之一)；今天虧到每日上限一半就收工；只看平倉淨值（浮虧看不到）');
+  if (PROP_FAST) { runPropFast(rules, periods, FEE_USDT); return; }
   for (const per of periods) {
     if (!per.xs.length) continue;
     const first = per.xs[0].filledTime;
@@ -394,6 +396,46 @@ function runPropSim(names, periods) {
     printTable(log, ['每筆風險', '最多同時', '當天賺到獲利日', '開考次數／有結果', '過階段一', '兩階段都過', '失敗（每日／總額）', '過關天數（中位／80%）', '平均要買幾次'], rows);
   }
   log('\nPROP_JSON ' + JSON.stringify(json));
+}
+
+/**
+ * --prop-fast：有期限的衝刺——每筆固定風險（不縮倉位，只守「全部停損也不破每日上限／總額底線」），
+ * 從每天 UTC 0 點開考，看 N 天內兩階段全過的機率、被判失敗的機率、平均要買幾次考試。
+ */
+function runPropFast(rules, periods, feeUsdt) {
+  const DAY = 86_400_000;
+  const list = (k, d) => opt(k, d).split(',').map(Number);
+  const RISKS = list('prop-risks', '1,2,3,4,5');
+  const CAPS = list('prop-caps', '3,5');
+  const DEADLINES = list('prop-deadlines', '6,14,30');
+  const json = [];
+  log('  衝刺模式：每筆固定風險（占起始資金），不自動縮倉位；持倉全部停損也不會超過今天剩餘額度才開新單；每天台灣 8 點開考');
+  for (const per of periods) {
+    if (!per.xs.length) continue;
+    const first = Math.ceil(per.xs[0].filledTime / DAY) * DAY;
+    const last = Math.max(...per.xs.map((t) => t.closedTime));
+    const rows = [];
+    for (const risk of RISKS) for (const cap of CAPS) {
+      const cells = [];
+      for (const dl of DEADLINES) {
+        let n = 0, pass = 0, p1 = 0, fail = 0;
+        for (let st = first; st + dl * DAY <= last; st += DAY) {
+          const r = simulateProp(per.xs, { ...rules, startTime: st, endTime: st + dl * DAY, riskPct: risk, maxOpen: cap, aggressive: true });
+          n++;
+          if (r.result === 'pass') pass++;
+          if (r.result === 'pass' || r.phase > 0) p1++;
+          if (r.result.startsWith('fail')) fail++;
+        }
+        json.push({ per: per.n, risk, cap, dl, n, pass, p1, fail });
+        cells.push(n ? `${pct((pass / n) * 100)}（階段一 ${pct((p1 / n) * 100)}，爆 ${pct((fail / n) * 100)}）` : '-');
+        if (dl === DEADLINES.at(-1)) cells.push(n && pass ? `${(n / pass).toFixed(1)} 次（${((feeUsdt * n) / pass).toFixed(0)}U）` : n ? '沒有過關' : '-');
+      }
+      rows.push([`${risk}%`, String(cap), ...cells]);
+    }
+    log(`\n  ▸ ${per.n}（${per.days.toFixed(0)} 天、${per.xs.length} 筆交易）`);
+    printTable(log, ['每筆風險', '最多同時', ...DEADLINES.map((d) => `${d} 天內全過`), `平均要買幾次（${DEADLINES.at(-1)} 天期限）`], rows);
+  }
+  log('\nPROP_FAST_JSON ' + JSON.stringify(json));
 }
 
 /** 一進一出的手續費（占倉位價值） */
