@@ -96,10 +96,11 @@ SUPERTREND_TF = "4h"
 GOLDEN_CROSS_ENABLED = "true"
 GOLDEN_CROSS_TF = "6h"
 # 2026-09-30 使用者要考自營商兩步挑戰（10000 USDT，在考試平台手動下單）：6 個策略打開但「只推播、不下單」
-# （ALT_SIGNAL_ONLY="true" 時完全不碰 Executor），推播附考試帳戶每筆 0.5% 的建議數量（槓桿上限 5 倍）
+# （ALT_SIGNAL_ONLY="true" 時完全不碰 Executor），推播附考試帳戶的建議數量（槓桿上限 5 倍）
 ALT_SIGNAL_ONLY = "true"
 PROP_ACCOUNT_SIZE = "10000"
-PROP_RISK_PCT = "0.5"
+# 2026-09-30 使用者選衝刺：每筆 2%（回測 30 天內兩階段全過約 1 成、爆約 3 成，平均要買約 9 次）
+PROP_RISK_PCT = "2"
 PROP_MAX_LEVERAGE = "5"
 # 假突破反手（src/strategies/fakeout.js）：組合模擬最近 75 天虧，2026-09-28 關掉
 FAKEOUT_ENABLED = "false"

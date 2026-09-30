@@ -154,3 +154,19 @@ test('考試模擬（衝刺）：有期限，時間到還沒過就算沒過；�
   assert.equal(simulateProp(seq([-1, -1]), { startTime: D0, riskPct: 5, aggressive: true }).result, 'open');
   assert.equal(simulateProp(seq([-1.5]), { startTime: D0, riskPct: 5, aggressive: true }).result, 'fail-daily');
 });
+
+test('衝刺模式：每筆照起始資金 2% 算，不因剩餘空間打對折；但停損還是不能破今天剩下的空間', () => {
+  const full = sizePosition({ equity: 9800, entry: 100, stop: 98, riskPct: 2, mode: 'sprint', account: 10000, dailyRoom: 400, totalRoom: 800, feePct: 0 });
+  // 穩穩考會是 min(196, 200, 200)；衝刺是 min(200, 380, 760) = 200
+  assert.equal(full.limitedBy, 'risk');
+  assert.ok(Math.abs(full.lossAtStop - 200) < 1e-9);
+  const tight = sizePosition({ equity: 9800, entry: 100, stop: 98, riskPct: 2, mode: 'sprint', account: 10000, dailyRoom: 150, totalRoom: 800, feePct: 0 });
+  assert.equal(tight.limitedBy, 'daily');
+  assert.ok(Math.abs(tight.lossAtStop - 142.5) < 1e-9);
+});
+
+test('衝刺模式沒有「虧到 250 收工」的停手線，只在沒空間時叫停', () => {
+  const snaps = [{ time: T(2, 3), equity: 9700 }];
+  assert.equal(challengeStatus({ rules: R, snapshots: snaps, now: T(2, 5), mode: 'sprint' }).level, 'warn', '只提醒空間不多，不叫你收工');
+  assert.equal(challengeStatus({ rules: R, snapshots: snaps, now: T(2, 5) }).level, 'stop');
+});
