@@ -169,11 +169,14 @@ export function simulateProp(trades, {
   startTime, account = 10000, targets = [500, 1000], dailyLoss = 500, maxLoss = 1000,
   minDayProfit = 50, minProfitDays = 3, riskPct = 0.5, maxOpen = 5, maxLeverage = 5,
   selfStop = 0.5, lockProfitDay = false,
+  // endTime：到這個時間還沒過關就算沒過（有期限的衝刺）
+  // aggressive：不照守門員縮倉位，每筆固定 riskPct；只守一條硬規則——所有持倉一起停損也不會超過今天的虧損上限跟總額底線
+  endTime = Infinity, aggressive = false,
 } = {}) {
   const DAY = 86_400_000;
   const ev = [];
   trades.forEach((t, i) => {
-    if (t.filledTime < startTime) return;
+    if (t.filledTime < startTime || t.filledTime >= endTime) return;
     ev.push({ time: t.filledTime, kind: 1, i });
     ev.push({ time: Math.max(t.closedTime, t.filledTime + 1), kind: 0, i });
   });
@@ -200,6 +203,7 @@ export function simulateProp(trades, {
     && profitDays + (equity - dayStart >= minDayProfit ? 1 : 0) >= minProfitDays;
 
   for (const e of ev) {
+    if (e.time >= endTime) break;
     rollDay(e.time);
     const t = trades[e.i];
     if (e.kind === 0) {
@@ -224,16 +228,18 @@ export function simulateProp(trades, {
     const positions = [...open.values()];
     if (positions.length >= maxOpen || positions.some((p) => p.symbol === t.symbol)) continue;
     const openRisk = positions.reduce((a, p) => a + p.risk, 0);
-    if (dayStart - equity + openRisk >= dailyLoss * selfStop) continue;
+    if (!aggressive && dayStart - equity + openRisk >= dailyLoss * selfStop) continue;
     if (lockProfitDay && equity - dayStart >= minDayProfit) continue;
     const dailyRoom = equity - (dayStart - dailyLoss) - openRisk;
     const totalRoom = equity - (account - maxLoss) - openRisk;
-    let risk = Math.min((equity * riskPct) / 100, dailyRoom * 0.5, totalRoom * 0.25);
+    let risk = aggressive
+      ? Math.min((account * riskPct) / 100, dailyRoom * 0.95, totalRoom * 0.95)
+      : Math.min((equity * riskPct) / 100, dailyRoom * 0.5, totalRoom * 0.25);
     if (t.stopPct > 0) risk = Math.min(risk, maxLeverage * equity * t.stopPct);
     if (!(risk > account * 0.0005)) continue;
     open.set(e.i, { risk, symbol: t.symbol });
   }
-  return result('open', ev.length ? ev[ev.length - 1].time : startTime);
+  return result('open', Number.isFinite(endTime) ? endTime : ev.length ? ev[ev.length - 1].time : startTime);
 }
 
 export function simulatePortfolio(trades, {
