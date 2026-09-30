@@ -12,6 +12,7 @@ import { analyze } from './smc/engine.js';
 import { positionSize } from './smc/setups.js';
 import { aggregateBias, narrative, TF_WEIGHT, tfSuite } from './smc/mtf.js';
 import { SCAN_HTF_BARS } from './market/scan.js';
+import { buildMtfPlan } from './smc/mtf-plan.js';
 import { fetchDerivatives } from './data/derivatives.js';
 import { derivativesVerdict, oiChangePct, fundingCountdown } from './smc/derivatives.js';
 import { backtest } from './smc/backtest.js';
@@ -38,6 +39,8 @@ let ticker = null;
 let mtfRows = [];
 let mtfAgg = null;
 let htfBias = null;
+let mtfPlan = null;       // 多週期計畫（新版）：日線 → 4h → 1h → 15m
+let mtfPlanFor = '';
 let htfKey = '';          // 目前 htfBias 對應哪個「幣種／週期／最後收盤 K 棒」，換了才重抓
 let symbols = [];
 let lastUpdated = 0;
@@ -546,6 +549,7 @@ async function loadData(force = false) {
     if (state.live && !replay.active) startStream();
     loadTicker();
     loadHtfBias({ force });
+    loadMtfPlan({ force });
     loadMtf();
     derivatives = null;      // 換幣種時先清掉舊的，免得短暫顯示上一個幣的數字
     loadDerivatives();
@@ -590,6 +594,7 @@ function recompute({ keepView = true } = {}) {
   // 圖上照樣畫出盤中那根；只拿掉最後一根，前面 K 棒的索引不變，圖層位置不受影響。
   const closed = closedCandles(view, state.interval);
   analysis = analyze(closed, { ...state.smc, htfBias });
+  if (mtfPlanFor === state.symbol) analysis.mtfPlan = mtfPlan;
   chart.setData(view, analysis, { keepView });
   renderAll();
   // 價格警報要看即時價，不能用已收盤 K 棒的收盤價
@@ -743,8 +748,35 @@ function copyPlan() {
   );
 }
 
+/**
+ * 多週期計畫（新版）：抓日線／4h／1h／15m（去掉還沒收盤的那根），算出一個進場點。
+ * 每 5 分鐘重算一次（15m 收盤後就會更新）。
+ */
+async function loadMtfPlan({ force = false } = {}) {
+  const symbol = state.symbol;
+  if (mtfPlanFor !== symbol) mtfPlan = null;
+  try {
+    const [d1, h4, h1, m15] = await Promise.all([
+      feed.getCandles(symbol, '1d', 420, { force }),
+      feed.getCandles(symbol, '4h', 520, { force }),
+      feed.getCandles(symbol, '1h', 520, { force }),
+      feed.getCandles(symbol, '15m', 420, { force }),
+    ]);
+    if (symbol !== state.symbol) return;
+    mtfPlan = buildMtfPlan({
+      d1: closedCandles(d1, '1d'), h4: closedCandles(h4, '4h'), h1: closedCandles(h1, '1h'), m15: closedCandles(m15, '15m'),
+    });
+    mtfPlanFor = symbol;
+  } catch (e) {
+    console.warn('mtf-plan', e);
+  }
+  renderMtfPanel();
+  recompute({ keepView: true });
+}
+setInterval(() => { if (state.live) loadMtfPlan({ force: true }); }, 5 * 60_000);
+
 function renderMtfPanel() {
-  const html = P.renderMtf(mtfRows, mtfAgg, state.lang)
+  const html = P.renderMtfPlan(mtfPlanFor === state.symbol ? mtfPlan : null, state.lang) + P.renderMtf(mtfRows, mtfAgg, state.lang)
     + (mtfAgg ? `<section class="card"><header class="card__head"><h3>${isZh() ? '由上而下敘事' : 'Top-down narrative'}</h3></header>
         <p class="pad" style="white-space:pre-line;line-height:1.75;font-size:11.5px">${escapeHtml(narrative(mtfRows, mtfAgg, state.lang))}</p></section>` : '');
   setHTML('#panelMtf', html || `<p class="dim pad">${isZh() ? '請於設定中選擇週期。' : 'Pick timeframes in settings.'}</p>`);

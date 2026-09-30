@@ -209,6 +209,37 @@ export function renderSetup(a, lang, risk) {
 
 /* ------------------------------------------------------------- MTF 表格 */
 
+/** 多週期計畫（新版）：日線 → 4h → 1h → 15m 每一步的結果 */
+export function renderMtfPlan(plan, lang) {
+  if (!plan) return `<section class="card"><header class="card__head"><h3>多週期計畫（新版，回測中）</h3></header><p class="dim pad">載入日線／4h／1h／15m 中…</p></section>`;
+  const dirTxt = (d) => (d === 'long' ? '做多' : d === 'short' ? '做空' : '不做');
+  const htf = plan.htf;
+  const step = (ok, title, body) => `<div class="row"><span>${ok === true ? '✅' : ok === false ? '⛔' : '⏳'} ${title}</span><b class="mono">${body}</b></div>`;
+  const prof = htf?.profile ? `POC ${fmtPrice(htf.profile.poc)} · VAH ${fmtPrice(htf.profile.vah)} · VAL ${fmtPrice(htf.profile.val)}` : '—';
+  const po3 = plan.po3;
+  const rows = [
+    step(htf ? !!htf.dir : undefined, '日線方向', htf ? `${dirTxt(htf.dir)}（偏向 ${htf.biasScore}）` : '—'),
+    step(undefined, '日線成交量分布（出場）', prof),
+    step(plan.poi ? true : plan.stage === 'poi' ? false : undefined, '4h 進場區', plan.poi ? `${escapeHtml(plan.poi.type)} ${fmtPrice(plan.poi.bottom)}–${fmtPrice(plan.poi.top)}` : (plan.poi4h?.length ? `${plan.poi4h.length} 個候選，還沒被操縱掃到` : '—')),
+    step(po3?.mss ? true : plan.stage === 'po3' ? false : undefined, 'PO3／造市者模型', po3 ? escapeHtml(po3.phase) : '—'),
+    po3?.accumulation ? step(true, '吸籌區間 → 操縱極值', `${fmtPrice(po3.accumulation.low)}–${fmtPrice(po3.accumulation.high)} → ${fmtPrice(po3.extreme)}`) : '',
+    po3?.mss ? step(true, '結構轉向（1h）', `${po3.mss.type} ${fmtPrice(po3.mss.price)}（${po3.mss.barsAgo} 根前）`) : '',
+    plan.ltf ? step(true, '15m 成交量分布（進場）', `POC ${fmtPrice(plan.ltf.poc)} · VAH ${fmtPrice(plan.ltf.vah)} · VAL ${fmtPrice(plan.ltf.val)}`) : '',
+  ].join('');
+  const result = plan.none
+    ? `<p class="pad dim" style="margin:0">${escapeHtml(plan.reasonZh || '目前沒有計畫')}</p>`
+    : `<div class="pad">
+        <div class="row"><span><b class="${plan.dir === 'long' ? 'up' : 'down'}">${dirTxt(plan.dir)} · ${plan.grade} 級 · ${plan.score} 分</b>${plan.valid ? '' : ' <em class="dim">（無效）</em>'}</span><b class="mono">${plan.entryType === 'limit' ? `掛單（15m ${plan.entryNode}）` : '市價'}</b></div>
+        <div class="row"><span>進場</span><b class="mono">${fmtPrice(plan.entry)}</b></div>
+        <div class="row"><span>停損</span><b class="mono down">${fmtPrice(plan.stop)}（${plan.riskPct.toFixed(2)}%）</b></div>
+        ${plan.targets.map((t) => `<div class="row"><span>${t.name} ${escapeHtml(t.label)}</span><b class="mono up">${fmtPrice(t.price)} · ${t.rr.toFixed(2)}R</b></div>`).join('')}
+        ${plan.checklist.map((c) => `<div class="row"><span class="${c.ok ? '' : 'dim'}">${c.ok ? '✅' : '⬜'} ${escapeHtml(c.zh)}</span><b class="mono dim">+${c.weight}</b></div>`).join('')}
+      </div>`;
+  return `<section class="card"><header class="card__head"><h3>多週期計畫（新版，回測中）</h3></header>
+    <div class="pad">${rows}</div>${result}
+    <p class="dim pad" style="margin:0;font-size:11px">日線 → 4h → 1h → 15m 一路往下看；PO3（吸籌→操縱→派發）成立才給進場點。還在回測，Discord 通知仍是舊版。</p></section>`;
+}
+
 export function renderMtf(rows, agg, lang) {
   if (!rows?.length) return '';
   const body = rows.map((r) => `

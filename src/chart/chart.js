@@ -221,6 +221,7 @@ export class Chart {
         extras.push(a.setup.entry, a.setup.stop, ...a.setup.targets.map((t) => t.price));
       }
       if (this.layers.premiumDiscount && a.range) extras.push(a.range.high, a.range.low);
+      if (this.layers.mtfPlan !== false && a.mtfPlan?.valid) extras.push(a.mtfPlan.entry, a.mtfPlan.stop);
     }
     const { min, max } = autoRange(this.candles, from, this.rightIndex, extras);
     return createScales({
@@ -280,6 +281,7 @@ export class Chart {
       if (this.layers.sweeps) L.drawSweeps(env);
       if (this.layers.inducement) L.drawInducement(env);
       if (this.layers.setup) L.drawSetup(env);
+      if (this.layers.mtfPlan !== false) L.drawMtfPlan(env);
     }
 
     this._priceAxis(ctx, t, s, layout);
