@@ -44,6 +44,7 @@ export const DEFAULT_STATE = {
     vwap: false,
     volumeProfile: false,
     setup: true,
+    mtfPlan: true,
     inducement: true,
   },
   smc: {

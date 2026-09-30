@@ -407,6 +407,43 @@ export function drawVolumeProfile(env) {
   ctx.restore();
 }
 
+/* ------------------------------------------------------------ 多週期計畫（新版）疊圖 */
+
+/**
+ * 日線固定範圍成交量分布（POC／VAH／VAL，出場參考）畫成紫色長虛線；
+ * 有計畫時再畫 15m 成交量分布的進場線、停損、目標（青色，跟單一週期的計畫分開）。
+ */
+export function drawMtfPlan(env) {
+  const { ctx, s, a, candles } = env;
+  const plan = a.mtfPlan;
+  if (!plan) return;
+  clipPlot(env);
+  const xL = s.x(Math.max(0, candles.length - 120));
+  const x2 = s.x(candles.length - 1 + RIGHT_EXTEND);
+  const t = env.t;
+  const prof = plan.htf?.profile;
+  if (prof) {
+    for (const [name, p] of [['日 VAH', prof.vah], ['日 POC', prof.poc], ['日 VAL', prof.val]]) {
+      const y = s.y(p);
+      dashLine(ctx, xL, y, x2, y, [8, 5], '#b06ce8', name === '日 POC' ? 1.4 : 1);
+      tag(env, x2 - 4, y, `${name} ${fmtPrice(p)}`, { bg: t.tagBg, color: '#b06ce8', align: 'right', size: 9 });
+    }
+  }
+  if (!plan.none && plan.valid) {
+    const x1 = s.x(candles.length - 24);
+    const col = '#22c3d6';
+    dashLine(ctx, x1, s.y(plan.entry), x2, s.y(plan.entry), [], col, 1.6);
+    tag(env, x1 + 3, s.y(plan.entry), `多週期進場 ${fmtPrice(plan.entry)}${plan.entryNode ? `（15m ${plan.entryNode}）` : '（市價）'}`, { bg: t.tagBg, color: col, size: 9 });
+    dashLine(ctx, x1, s.y(plan.stop), x2, s.y(plan.stop), [4, 3], t.stop, 1.2);
+    tag(env, x1 + 3, s.y(plan.stop), `多週期停損 ${fmtPrice(plan.stop)}`, { bg: t.tagBg, color: t.stop, size: 9 });
+    for (const tp of plan.targets) {
+      const y = s.y(tp.price);
+      tag(env, x1 + 3, y, `${tp.name} ${tp.label} · ${tp.rr.toFixed(1)}R`, { bg: t.tagBg, color: col, size: 9 });
+    }
+  }
+  ctx.restore();
+}
+
 /* ------------------------------------------------------------ 交易計畫疊圖 */
 
 export function drawSetup(env) {
