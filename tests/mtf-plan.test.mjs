@@ -66,8 +66,10 @@ test('多週期計畫的基本規則：多單停損在進場下方、目標在�
         valid++;
         assert.ok(p.checklist.filter((c) => c.gate).every((c) => c.ok));
         assert.ok(p.rrFinal >= 2);
-        // 操縱極值要碰到 4h 進場區、而且真的掃掉了吸籌區間
-        assert.ok(long ? p.po3.extreme < p.po3.accumulation.low : p.po3.extreme > p.po3.accumulation.high);
+        // 四層都同向：1h、15m 最近的結構突破都跟日線同方向；PO3／MMXM 只是加分
+        assert.ok(p.structure.h1 && p.structure.m15);
+        if (p.po3.po3) assert.ok(long ? p.po3.extreme < p.po3.accumulation.low : p.po3.extreme > p.po3.accumulation.high);
+        assert.equal(p.checklist.find((c) => c.key === 'po3').ok, !!p.po3.po3);
       }
       assert.ok(p.htf.profile, '日線固定範圍成交量分布有算出來');
     }
