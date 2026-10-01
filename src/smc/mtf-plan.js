@@ -170,6 +170,13 @@ export function buildMtfPlan(tf, opts = {}) {
   const extremeTime = model?.po3 ? model.extremeTime : touchBar?.time ?? h1[h1.length - 1].time;
   const legStart = lastIndexBefore(m15, extremeTime);
   const leg = m15.slice(Math.max(0, legStart));
+  // 「轉向」要發生在碰到進場區的極值之後：15m 找出極值那根（極值所在 1h 裡最低／最高的 15m），1h 用極值那根 1h
+  let ext15 = Math.max(0, legStart);
+  for (let i = ext15; i < m15.length && m15[i].time < extremeTime + 3_600_000; i++) {
+    if (long ? m15[i].low < m15[ext15].low : m15[i].high > m15[ext15].high) ext15 = i;
+  }
+  const ext1 = lastIndexBefore(h1, extremeTime);
+  const fresh = { h1: last1.breakIndex > ext1, m15: last15.breakIndex > ext15 };
   const vpL = volumeProfile(leg.length >= 8 ? leg : m15.slice(-32), { bins: 32 });
   const buffer = atr1 * o.stopBufferAtr;
   const stop = long ? Math.min(extreme, poi.bottom) - buffer : Math.max(extreme, poi.top) + buffer;
@@ -225,7 +232,9 @@ export function buildMtfPlan(tf, opts = {}) {
     poi: { type: poi.type, top: poi.top, bottom: poi.bottom, state: poi.state },
     structure: { h1: { type: last1.type, price: last1.price }, m15: { type: last15.type, price: last15.price } },
     ltf: vpL ? { poc: vpL.poc, vah: vpL.vah, val: vpL.val, from: leg[0]?.time ?? null } : null,
-    // 同一次「回到 4h 進場區」（同一個區塊、同一個極值）只算一個計畫（回測去重、推播去重用）
-    id: `${dir}:${poi.type}:${poi.bottom.toPrecision(8)}:${extremeTime}`,
+    fresh,
+    // 同一個 4h 進場區只做一次（回測去重、推播去重用）；touchId 是舊的「同一個極值」去重（極值一更新就又算新訊號，太多）
+    id: `${dir}:${poi.type}:${poi.bottom.toPrecision(8)}:${poi.top.toPrecision(8)}`,
+    touchId: `${dir}:${poi.type}:${poi.bottom.toPrecision(8)}:${extremeTime}`,
   };
 }
