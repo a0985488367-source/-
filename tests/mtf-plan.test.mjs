@@ -70,6 +70,10 @@ test('多週期計畫的基本規則：多單停損在進場下方、目標在�
         assert.ok(p.structure.h1 && p.structure.m15);
         if (p.po3.po3) assert.ok(long ? p.po3.extreme < p.po3.accumulation.low : p.po3.extreme > p.po3.accumulation.high);
         assert.equal(p.checklist.find((c) => c.key === 'po3').ok, !!p.po3.po3);
+        // 去重：同一個 4h 區只有一個 id；轉向是不是發生在碰到進場區之後
+        assert.ok(p.id.startsWith(`${p.dir}:${p.poi.type}:`) && p.touchId !== p.id);
+        assert.equal(typeof p.fresh.h1, 'boolean');
+        assert.equal(typeof p.fresh.m15, 'boolean');
       }
       assert.ok(p.htf.profile, '日線固定範圍成交量分布有算出來');
     }
