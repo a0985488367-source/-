@@ -24,9 +24,9 @@
       "status": "active",
       "filledTime": 1790427600000,
       "openTime": 1790427600000,
-      "lastCheckedTime": 1790906400000,
-      "barsSinceOpen": 133,
-      "barsSinceFill": 133,
+      "lastCheckedTime": 1790924400000,
+      "barsSinceOpen": 138,
+      "barsSinceFill": 138,
       "hitTargets": [],
       "remaining": 1,
       "realizedR": 0,
@@ -72,109 +72,14 @@
       "status": "active",
       "filledTime": 1790694000000,
       "openTime": 1790690400000,
-      "lastCheckedTime": 1790906400000,
-      "barsSinceOpen": 60,
-      "barsSinceFill": 60,
+      "lastCheckedTime": 1790924400000,
+      "barsSinceOpen": 65,
+      "barsSinceFill": 65,
       "hitTargets": [],
       "remaining": 1,
       "realizedR": 0,
       "maxFavorableR": 0.06010381851598813,
       "maxAdverseR": -0.8151580386231053,
-      "events": []
-    },
-    {
-      "id": "market:SHIBUSDT:1h:long:0.0000058",
-      "symbol": "SHIBUSDT",
-      "interval": "1h",
-      "dir": "long",
-      "entry": 0.0000058,
-      "stop": 0.0000056761162,
-      "initialStop": 0.0000056761162,
-      "targets": [
-        {
-          "name": "TP1",
-          "price": 0.000006,
-          "rr": 1.61,
-          "label": "前日高（PDH）",
-          "fraction": 0.3333333333333333
-        },
-        {
-          "name": "TP2",
-          "price": 0.00000601,
-          "rr": 1.7,
-          "label": "等高流動性",
-          "fraction": 0.3333333333333333
-        },
-        {
-          "name": "TP3",
-          "price": 0.00000607,
-          "rr": 2.18,
-          "label": "等高流動性",
-          "fraction": 0
-        }
-      ],
-      "grade": "A+",
-      "score": 89,
-      "poiType": "Inversion FVG",
-      "status": "active",
-      "filledTime": 1790827200000,
-      "openTime": 1790827200000,
-      "lastCheckedTime": 1790906400000,
-      "barsSinceOpen": 22,
-      "barsSinceFill": 22,
-      "hitTargets": [],
-      "remaining": 1,
-      "realizedR": 0,
-      "maxFavorableR": 0.32288321798329983,
-      "maxAdverseR": -0.9686496539499131,
-      "source": "market",
-      "events": []
-    },
-    {
-      "id": "plan:ETHUSDT:1h:long:t1790514000000",
-      "symbol": "ETHUSDT",
-      "interval": "1h",
-      "dir": "long",
-      "entry": 2707.57,
-      "stop": 2673.0138823108937,
-      "initialStop": 2673.0138823108937,
-      "targets": [
-        {
-          "name": "TP1",
-          "price": 2738.51,
-          "rr": 0.8953552097015116,
-          "label": "等高流動性",
-          "fraction": 0.3333333333333333
-        },
-        {
-          "name": "TP2",
-          "price": 2749.98,
-          "rr": 1.2272790705701653,
-          "label": "等高流動性",
-          "fraction": 0.3333333333333333
-        },
-        {
-          "name": "TP3",
-          "price": 2811.2383530673196,
-          "rr": 3,
-          "label": "1:3 延伸目標",
-          "fraction": 0
-        }
-      ],
-      "grade": "A",
-      "score": 68,
-      "poiType": "Breaker",
-      "status": "active",
-      "filledTime": 1790827200000,
-      "openTime": 1790827200000,
-      "lastCheckedTime": 1790906400000,
-      "barsSinceOpen": 22,
-      "barsSinceFill": 22,
-      "hitTargets": [],
-      "remaining": 1,
-      "realizedR": 0,
-      "maxFavorableR": 0.44652006741092937,
-      "maxAdverseR": -0.9966397356858454,
       "events": []
     },
     {
@@ -214,13 +119,13 @@
       "status": "active",
       "filledTime": 1790852400000,
       "openTime": 1790852400000,
-      "lastCheckedTime": 1790906400000,
-      "barsSinceOpen": 15,
-      "barsSinceFill": 15,
+      "lastCheckedTime": 1790924400000,
+      "barsSinceOpen": 20,
+      "barsSinceFill": 20,
       "hitTargets": [],
       "remaining": 1,
       "realizedR": 0,
-      "maxFavorableR": 0.07661171903929219,
+      "maxFavorableR": 0.40859583487620993,
       "maxAdverseR": -0.6895054713536014,
       "source": "market",
       "events": []
@@ -231,7 +136,7 @@
       "interval": "1h",
       "dir": "long",
       "entry": 0.2489,
-      "stop": 0.24011908,
+      "stop": 0.249339046,
       "initialStop": 0.24011908,
       "targets": [
         {
@@ -262,16 +167,33 @@
       "status": "active",
       "filledTime": 1790852400000,
       "openTime": 1790852400000,
-      "lastCheckedTime": 1790906400000,
-      "barsSinceOpen": 15,
-      "barsSinceFill": 15,
-      "hitTargets": [],
-      "remaining": 1,
-      "realizedR": 0,
-      "maxFavorableR": 0.341649849901833,
+      "lastCheckedTime": 1790924400000,
+      "barsSinceOpen": 20,
+      "barsSinceFill": 20,
+      "hitTargets": [
+        "TP1"
+      ],
+      "remaining": 0.6666666666666667,
+      "realizedR": 0.303688755468296,
+      "maxFavorableR": 0.9566195797251273,
       "maxAdverseR": -0.6719113714736061,
       "source": "market",
-      "events": []
+      "events": [
+        {
+          "type": "breakeven",
+          "time": 1790913600000,
+          "price": 0.249339046
+        },
+        {
+          "type": "target",
+          "name": "TP1",
+          "time": 1790917200000,
+          "price": 0.2569,
+          "rr": 0.91,
+          "partial": 0.3333333333333333
+        }
+      ],
+      "beMoved": true
     },
     {
       "id": "market:WLFIUSDT:1h:short:0.0555",
@@ -296,71 +218,16 @@
       "status": "active",
       "filledTime": 1790874000000,
       "openTime": 1790874000000,
-      "lastCheckedTime": 1790906400000,
-      "barsSinceOpen": 9,
-      "barsSinceFill": 9,
+      "lastCheckedTime": 1790924400000,
+      "barsSinceOpen": 14,
+      "barsSinceFill": 14,
       "hitTargets": [],
       "remaining": 1,
       "realizedR": 0,
       "maxFavorableR": 0,
-      "maxAdverseR": -0.352404633013367,
+      "maxAdverseR": -0.5537787090210042,
       "source": "market",
       "events": []
-    },
-    {
-      "id": "market:AUDIOUSDT:1h:long:0.01677",
-      "symbol": "AUDIOUSDT",
-      "interval": "1h",
-      "dir": "long",
-      "entry": 0.01677,
-      "stop": 0.01682545665,
-      "initialStop": 0.015660867,
-      "targets": [
-        {
-          "name": "TP1",
-          "price": 0.0194,
-          "rr": 2.37,
-          "label": "區間極值",
-          "fraction": 0.3333333333333333
-        },
-        {
-          "name": "TP2",
-          "price": 0.01951,
-          "rr": 2.47,
-          "label": "等高流動性",
-          "fraction": 0.3333333333333333
-        },
-        {
-          "name": "TP3",
-          "price": 0.0200974,
-          "rr": 3,
-          "label": "1:3 延伸目標",
-          "fraction": 0
-        }
-      ],
-      "grade": "A",
-      "score": 76,
-      "poiType": "FVG",
-      "status": "active",
-      "filledTime": 1790888400000,
-      "openTime": 1790888400000,
-      "lastCheckedTime": 1790906400000,
-      "barsSinceOpen": 5,
-      "barsSinceFill": 5,
-      "hitTargets": [],
-      "remaining": 1,
-      "realizedR": 0,
-      "maxFavorableR": 0.6852198969825973,
-      "maxAdverseR": -0.12622471786521636,
-      "source": "market",
-      "events": [
-        {
-          "type": "breakeven",
-          "time": 1790906400000,
-          "price": 0.01682545665
-        }
-      ],
-      "beMoved": true
     },
     {
       "id": "market:SKHYBUSDT:1h:long:191.9",
@@ -385,184 +252,240 @@
       "status": "active",
       "filledTime": 1790888400000,
       "openTime": 1790888400000,
-      "lastCheckedTime": 1790906400000,
-      "barsSinceOpen": 5,
-      "barsSinceFill": 5,
+      "lastCheckedTime": 1790924400000,
+      "barsSinceOpen": 10,
+      "barsSinceFill": 10,
       "hitTargets": [],
       "remaining": 1,
       "realizedR": 0,
-      "maxFavorableR": 0.05124982959431653,
+      "maxFavorableR": 0.14144952968031316,
       "maxAdverseR": -0.14144952968031316,
       "source": "market",
       "events": []
     },
     {
-      "id": "plan:BNBUSDT:1h:long:t1790841600000",
-      "symbol": "BNBUSDT",
+      "id": "market:ETCUSDT:1h:long:9.15",
+      "symbol": "ETCUSDT",
       "interval": "1h",
       "dir": "long",
-      "entry": 770.32,
-      "stop": 770.6877579041761,
-      "initialStop": 762.9648419164782,
+      "entry": 9.15,
+      "stop": 8.8450754,
+      "initialStop": 8.8450754,
       "targets": [
         {
           "name": "TP1",
-          "price": 779.42,
-          "rr": 1.237226976859568,
-          "label": "前日高（PDH）",
-          "fraction": 0.3333333333333333
+          "price": 10.064774,
+          "rr": 3,
+          "label": "1:3 延伸目標",
+          "fraction": 0.5
         },
         {
           "name": "TP2",
-          "price": 780.08,
-          "rr": 1.3269599224340103,
-          "label": "等高流動性",
-          "fraction": 0.3333333333333333
-        },
-        {
-          "name": "TP3",
-          "price": 792.3854742505655,
-          "rr": 3,
-          "label": "1:3 延伸目標",
-          "fraction": 0
-        }
-      ],
-      "grade": "A+",
-      "score": 85,
-      "poiType": "Inversion FVG",
-      "status": "active",
-      "filledTime": 1790888400000,
-      "openTime": 1790888400000,
-      "lastCheckedTime": 1790906400000,
-      "barsSinceOpen": 5,
-      "barsSinceFill": 5,
-      "hitTargets": [],
-      "remaining": 1,
-      "realizedR": 0,
-      "maxFavorableR": 0.5479148040378105,
-      "maxAdverseR": -0.27463719706115064,
-      "events": [
-        {
-          "type": "breakeven",
-          "time": 1790906400000,
-          "price": 770.6877579041761
-        }
-      ],
-      "beMoved": true
-    },
-    {
-      "id": "market:WLDUSDT:1h:long:0.5059",
-      "symbol": "WLDUSDT",
-      "interval": "1h",
-      "dir": "long",
-      "entry": 0.5059,
-      "stop": 0.48675754,
-      "initialStop": 0.48675754,
-      "targets": [
-        {
-          "name": "TP1",
-          "price": 0.5481,
-          "rr": 2.2,
-          "label": "等高流動性",
-          "fraction": 0.3333333333333333
-        },
-        {
-          "name": "TP2",
-          "price": 0.56332739,
-          "rr": 3,
-          "label": "1:3 延伸目標",
-          "fraction": 0.3333333333333333
-        },
-        {
-          "name": "TP3",
-          "price": 0.5712,
-          "rr": 3.41,
-          "label": "等高流動性",
+          "price": 10.42,
+          "rr": 4.16,
+          "label": "前週高（PWH）",
           "fraction": 0
         }
       ],
       "grade": "A",
-      "score": 73,
-      "poiType": "Breaker",
+      "score": 79,
+      "poiType": "Inversion FVG",
       "status": "active",
-      "filledTime": 1790899200000,
-      "openTime": 1790899200000,
-      "lastCheckedTime": 1790906400000,
-      "barsSinceOpen": 2,
-      "barsSinceFill": 2,
+      "filledTime": 1790924400000,
+      "openTime": 1790924400000,
+      "lastCheckedTime": 1790924400000,
+      "barsSinceOpen": 0,
+      "barsSinceFill": 0,
       "hitTargets": [],
       "remaining": 1,
       "realizedR": 0,
-      "maxFavorableR": 0.46493501880113663,
-      "maxAdverseR": -0.2611994487646832,
-      "source": "market",
-      "events": []
+      "maxFavorableR": 0,
+      "maxAdverseR": 0,
+      "source": "market"
     },
     {
-      "id": "market:BCHUSDT:1h:long:304.6",
-      "symbol": "BCHUSDT",
+      "id": "plan:BNBUSDT:1h:long:t1790550000000",
+      "symbol": "BNBUSDT",
       "interval": "1h",
       "dir": "long",
-      "entry": 304.6,
-      "stop": 308.22108000000003,
-      "initialStop": 302.44216,
+      "entry": 776.31,
+      "stop": 765.5157649248326,
+      "initialStop": 765.5157649248326,
       "targets": [
         {
           "name": "TP1",
-          "price": 309.3,
-          "rr": 2.18,
-          "label": "今日開盤（DO）",
+          "price": 784.96,
+          "rr": 0.8013536799749582,
+          "label": "等高流動性",
           "fraction": 0.3333333333333333
         },
         {
           "name": "TP2",
-          "price": 310.8,
-          "rr": 2.87,
+          "price": 807.49,
+          "rr": 2.8885789296669344,
+          "label": "前週高（PWH）",
+          "fraction": 0.3333333333333333
+        },
+        {
+          "name": "TP3",
+          "price": 808.6927052255019,
+          "rr": 3,
+          "label": "1:3 延伸目標",
+          "fraction": 0
+        }
+      ],
+      "grade": "A",
+      "score": 79,
+      "poiType": "Breaker",
+      "status": "active",
+      "filledTime": 1790924400000,
+      "openTime": 1790924400000,
+      "lastCheckedTime": 1790924400000,
+      "barsSinceOpen": 0,
+      "barsSinceFill": 0,
+      "hitTargets": [],
+      "remaining": 1,
+      "realizedR": 0,
+      "maxFavorableR": 0,
+      "maxAdverseR": 0
+    },
+    {
+      "id": "plan:XRPUSDT:15m:long:t1790775900000",
+      "symbol": "XRPUSDT",
+      "interval": "15m",
+      "dir": "long",
+      "entry": 1.5226,
+      "stop": 1.5120349616318054,
+      "initialStop": 1.5120349616318054,
+      "targets": [
+        {
+          "name": "TP1",
+          "price": 1.5344,
+          "rr": 1.1168913532319256,
           "label": "區間極值",
           "fraction": 0.3333333333333333
         },
         {
-          "name": "TP3",
-          "price": 311,
-          "rr": 2.97,
+          "name": "TP2",
+          "price": 1.5443,
+          "rr": 2.053944268231591,
           "label": "等高流動性",
+          "fraction": 0.3333333333333333
+        },
+        {
+          "name": "TP3",
+          "price": 1.5542951151045836,
+          "rr": 3,
+          "label": "1:3 延伸目標",
           "fraction": 0
         }
       ],
       "grade": "A",
-      "score": 73,
-      "poiType": "OTE",
-      "status": "active",
-      "filledTime": 1790899200000,
-      "openTime": 1790899200000,
-      "lastCheckedTime": 1790906400000,
-      "barsSinceOpen": 2,
-      "barsSinceFill": 2,
-      "hitTargets": [
-        "TP1"
-      ],
-      "remaining": 0.6666666666666667,
-      "realizedR": 0.7260346766519516,
-      "maxFavorableR": 2.178104029955855,
-      "maxAdverseR": -0.3707411114818538,
-      "source": "market",
-      "events": [
+      "score": 68,
+      "poiType": "Breaker",
+      "status": "pending",
+      "filledTime": null,
+      "openTime": 1790927100000,
+      "lastCheckedTime": 1790927100000,
+      "barsSinceOpen": 0,
+      "barsSinceFill": 0,
+      "hitTargets": [],
+      "remaining": 1,
+      "realizedR": 0,
+      "maxFavorableR": 0,
+      "maxAdverseR": 0
+    },
+    {
+      "id": "plan:DOGEUSDT:15m:long:t1790915400000",
+      "symbol": "DOGEUSDT",
+      "interval": "15m",
+      "dir": "long",
+      "entry": 0.09596,
+      "stop": 0.09482811078966764,
+      "initialStop": 0.09482811078966764,
+      "targets": [
         {
-          "type": "breakeven",
-          "time": 1790902800000,
-          "price": 304.707892
+          "name": "TP1",
+          "price": 0.09706,
+          "rr": 0.9718265621394111,
+          "label": "等高流動性",
+          "fraction": 0.3333333333333333
         },
         {
-          "type": "target",
-          "name": "TP1",
-          "time": 1790906400000,
-          "price": 309.3,
-          "rr": 2.18,
-          "partial": 0.3333333333333333
+          "name": "TP2",
+          "price": 0.09819,
+          "rr": 1.970157485064457,
+          "label": "等高流動性",
+          "fraction": 0.3333333333333333
+        },
+        {
+          "name": "TP3",
+          "price": 0.09935566763099708,
+          "rr": 3,
+          "label": "1:3 延伸目標",
+          "fraction": 0
         }
       ],
-      "beMoved": true,
-      "trailing": true
+      "grade": "A",
+      "score": 79,
+      "poiType": "FVG",
+      "status": "pending",
+      "filledTime": null,
+      "openTime": 1790927100000,
+      "lastCheckedTime": 1790927100000,
+      "barsSinceOpen": 0,
+      "barsSinceFill": 0,
+      "hitTargets": [],
+      "remaining": 1,
+      "realizedR": 0,
+      "maxFavorableR": 0,
+      "maxAdverseR": 0
+    },
+    {
+      "id": "plan:DOGEUSDT:1h:long:t1790902800000",
+      "symbol": "DOGEUSDT",
+      "interval": "1h",
+      "dir": "long",
+      "entry": 0.0941,
+      "stop": 0.09282093810774744,
+      "initialStop": 0.09282093810774744,
+      "targets": [
+        {
+          "name": "TP1",
+          "price": 0.09706,
+          "rr": 2.3141960666087247,
+          "label": "等高流動性",
+          "fraction": 0.3333333333333333
+        },
+        {
+          "name": "TP2",
+          "price": 0.09793718567675769,
+          "rr": 3,
+          "label": "1:3 延伸目標",
+          "fraction": 0.3333333333333333
+        },
+        {
+          "name": "TP3",
+          "price": 0.09824,
+          "rr": 3.2367472012703145,
+          "label": "等高流動性",
+          "fraction": 0
+        }
+      ],
+      "grade": "A+",
+      "score": 80,
+      "poiType": "Order Block",
+      "status": "pending",
+      "filledTime": null,
+      "openTime": 1790924400000,
+      "lastCheckedTime": 1790924400000,
+      "barsSinceOpen": 0,
+      "barsSinceFill": 0,
+      "hitTargets": [],
+      "remaining": 1,
+      "realizedR": 0,
+      "maxFavorableR": 0,
+      "maxAdverseR": 0
     }
   ],
   "closed": [
@@ -16196,36 +16119,445 @@
       "closedTime": 1790908200000,
       "exitPrice": 0.09391361868460686,
       "r": 0.8944935146534295
+    },
+    {
+      "id": "market:SHIBUSDT:1h:long:0.0000058",
+      "symbol": "SHIBUSDT",
+      "interval": "1h",
+      "dir": "long",
+      "entry": 0.0000058,
+      "stop": 0.0000058680581,
+      "initialStop": 0.0000056761162,
+      "targets": [
+        {
+          "name": "TP1",
+          "price": 0.000006,
+          "rr": 1.61,
+          "label": "前日高（PDH）",
+          "fraction": 0.3333333333333333
+        },
+        {
+          "name": "TP2",
+          "price": 0.00000601,
+          "rr": 1.7,
+          "label": "等高流動性",
+          "fraction": 0.3333333333333333
+        },
+        {
+          "name": "TP3",
+          "price": 0.00000607,
+          "rr": 2.18,
+          "label": "等高流動性",
+          "fraction": 0
+        }
+      ],
+      "grade": "A+",
+      "score": 89,
+      "poiType": "Inversion FVG",
+      "status": "stop",
+      "filledTime": 1790827200000,
+      "openTime": 1790827200000,
+      "lastCheckedTime": 1790917200000,
+      "barsSinceOpen": 25,
+      "barsSinceFill": 25,
+      "hitTargets": [],
+      "remaining": 0,
+      "realizedR": 0.5493704584457313,
+      "maxFavorableR": 1.0493704584457313,
+      "maxAdverseR": -0.9686496539499131,
+      "source": "market",
+      "events": [
+        {
+          "type": "breakeven",
+          "time": 1790913600000,
+          "price": 0.000005806194190000001
+        },
+        {
+          "type": "stop",
+          "time": 1790917200000,
+          "price": 0.0000058680581,
+          "reason": "trail"
+        }
+      ],
+      "beMoved": true,
+      "trailing": true,
+      "exitReason": "trail",
+      "closedTime": 1790917200000,
+      "exitPrice": 0.0000058680581,
+      "r": 0.5493704584457313
+    },
+    {
+      "id": "plan:ETHUSDT:1h:long:t1790514000000",
+      "symbol": "ETHUSDT",
+      "interval": "1h",
+      "dir": "long",
+      "entry": 2707.57,
+      "stop": 2730.721941155447,
+      "initialStop": 2673.0138823108937,
+      "targets": [
+        {
+          "name": "TP1",
+          "price": 2738.51,
+          "rr": 0.8953552097015116,
+          "label": "等高流動性",
+          "fraction": 0.3333333333333333
+        },
+        {
+          "name": "TP2",
+          "price": 2749.98,
+          "rr": 1.2272790705701653,
+          "label": "等高流動性",
+          "fraction": 0.3333333333333333
+        },
+        {
+          "name": "TP3",
+          "price": 2811.2383530673196,
+          "rr": 3,
+          "label": "1:3 延伸目標",
+          "fraction": 0
+        }
+      ],
+      "grade": "A",
+      "score": 68,
+      "poiType": "Breaker",
+      "status": "stop",
+      "filledTime": 1790827200000,
+      "openTime": 1790827200000,
+      "lastCheckedTime": 1790917200000,
+      "barsSinceOpen": 25,
+      "barsSinceFill": 25,
+      "hitTargets": [
+        "TP1"
+      ],
+      "remaining": 0,
+      "realizedR": 0.7451057147665265,
+      "maxFavorableR": 1.1699809672990273,
+      "maxAdverseR": -0.9966397356858454,
+      "events": [
+        {
+          "type": "breakeven",
+          "time": 1790910000000,
+          "price": 2709.2978058844556
+        },
+        {
+          "type": "target",
+          "name": "TP1",
+          "time": 1790913600000,
+          "price": 2738.51,
+          "rr": 0.8953552097015116,
+          "partial": 0.3333333333333333
+        },
+        {
+          "type": "stop",
+          "time": 1790917200000,
+          "price": 2730.721941155447,
+          "reason": "trail"
+        }
+      ],
+      "beMoved": true,
+      "trailing": true,
+      "exitReason": "trail",
+      "closedTime": 1790917200000,
+      "exitPrice": 2730.721941155447,
+      "r": 0.7451057147665265
+    },
+    {
+      "id": "market:AUDIOUSDT:1h:long:0.01677",
+      "symbol": "AUDIOUSDT",
+      "interval": "1h",
+      "dir": "long",
+      "entry": 0.01677,
+      "stop": 0.01682545665,
+      "initialStop": 0.015660867,
+      "targets": [
+        {
+          "name": "TP1",
+          "price": 0.0194,
+          "rr": 2.37,
+          "label": "區間極值",
+          "fraction": 0.3333333333333333
+        },
+        {
+          "name": "TP2",
+          "price": 0.01951,
+          "rr": 2.47,
+          "label": "等高流動性",
+          "fraction": 0.3333333333333333
+        },
+        {
+          "name": "TP3",
+          "price": 0.0200974,
+          "rr": 3,
+          "label": "1:3 延伸目標",
+          "fraction": 0
+        }
+      ],
+      "grade": "A",
+      "score": 76,
+      "poiType": "FVG",
+      "status": "stop",
+      "filledTime": 1790888400000,
+      "openTime": 1790888400000,
+      "lastCheckedTime": 1790910000000,
+      "barsSinceOpen": 6,
+      "barsSinceFill": 6,
+      "hitTargets": [],
+      "remaining": 0,
+      "realizedR": 0.05000000000000047,
+      "maxFavorableR": 0.6852198969825973,
+      "maxAdverseR": -0.12622471786521636,
+      "source": "market",
+      "events": [
+        {
+          "type": "stop",
+          "time": 1790910000000,
+          "price": 0.01682545665,
+          "reason": "breakeven"
+        }
+      ],
+      "beMoved": true,
+      "exitReason": "breakeven",
+      "closedTime": 1790910000000,
+      "exitPrice": 0.01682545665,
+      "r": 0.05000000000000047
+    },
+    {
+      "id": "plan:BNBUSDT:1h:long:t1790841600000",
+      "symbol": "BNBUSDT",
+      "interval": "1h",
+      "dir": "long",
+      "entry": 770.32,
+      "stop": 779.612420958239,
+      "initialStop": 762.9648419164782,
+      "targets": [
+        {
+          "name": "TP1",
+          "price": 779.42,
+          "rr": 1.237226976859568,
+          "label": "前日高（PDH）",
+          "fraction": 0.3333333333333333
+        },
+        {
+          "name": "TP2",
+          "price": 780.08,
+          "rr": 1.3269599224340103,
+          "label": "等高流動性",
+          "fraction": 0.3333333333333333
+        },
+        {
+          "name": "TP3",
+          "price": 792.3854742505655,
+          "rr": 3,
+          "label": "1:3 延伸目標",
+          "fraction": 0
+        }
+      ],
+      "grade": "A+",
+      "score": 85,
+      "poiType": "Inversion FVG",
+      "status": "stop",
+      "filledTime": 1790888400000,
+      "openTime": 1790888400000,
+      "lastCheckedTime": 1790917200000,
+      "barsSinceOpen": 8,
+      "barsSinceFill": 8,
+      "hitTargets": [
+        "TP1",
+        "TP2"
+      ],
+      "remaining": 0,
+      "realizedR": 1.2758584129465256,
+      "maxFavorableR": 1.7633883395460057,
+      "maxAdverseR": -0.27463719706115064,
+      "events": [
+        {
+          "type": "target",
+          "name": "TP1",
+          "time": 1790913600000,
+          "price": 779.42,
+          "rr": 1.237226976859568,
+          "partial": 0.3333333333333333
+        },
+        {
+          "type": "target",
+          "name": "TP2",
+          "time": 1790913600000,
+          "price": 780.08,
+          "rr": 1.3269599224340103,
+          "partial": 0.3333333333333333
+        },
+        {
+          "type": "stop",
+          "time": 1790917200000,
+          "price": 779.612420958239,
+          "reason": "trail"
+        }
+      ],
+      "beMoved": true,
+      "trailing": true,
+      "exitReason": "trail",
+      "closedTime": 1790917200000,
+      "exitPrice": 779.612420958239,
+      "r": 1.2758584129465256
+    },
+    {
+      "id": "market:WLDUSDT:1h:long:0.5059",
+      "symbol": "WLDUSDT",
+      "interval": "1h",
+      "dir": "long",
+      "entry": 0.5059,
+      "stop": 0.52072877,
+      "initialStop": 0.48675754,
+      "targets": [
+        {
+          "name": "TP1",
+          "price": 0.5481,
+          "rr": 2.2,
+          "label": "等高流動性",
+          "fraction": 0.3333333333333333
+        },
+        {
+          "name": "TP2",
+          "price": 0.56332739,
+          "rr": 3,
+          "label": "1:3 延伸目標",
+          "fraction": 0.3333333333333333
+        },
+        {
+          "name": "TP3",
+          "price": 0.5712,
+          "rr": 3.41,
+          "label": "等高流動性",
+          "fraction": 0
+        }
+      ],
+      "grade": "A",
+      "score": 73,
+      "poiType": "Breaker",
+      "status": "stop",
+      "filledTime": 1790899200000,
+      "openTime": 1790899200000,
+      "lastCheckedTime": 1790917200000,
+      "barsSinceOpen": 5,
+      "barsSinceFill": 5,
+      "hitTargets": [],
+      "remaining": 0,
+      "realizedR": 0.7746533099716502,
+      "maxFavorableR": 1.2746533099716515,
+      "maxAdverseR": -0.2611994487646832,
+      "source": "market",
+      "events": [
+        {
+          "type": "breakeven",
+          "time": 1790910000000,
+          "price": 0.506857123
+        },
+        {
+          "type": "stop",
+          "time": 1790917200000,
+          "price": 0.52072877,
+          "reason": "trail"
+        }
+      ],
+      "beMoved": true,
+      "trailing": true,
+      "exitReason": "trail",
+      "closedTime": 1790917200000,
+      "exitPrice": 0.52072877,
+      "r": 0.7746533099716502
+    },
+    {
+      "id": "market:BCHUSDT:1h:long:304.6",
+      "symbol": "BCHUSDT",
+      "interval": "1h",
+      "dir": "long",
+      "entry": 304.6,
+      "stop": 308.22108000000003,
+      "initialStop": 302.44216,
+      "targets": [
+        {
+          "name": "TP1",
+          "price": 309.3,
+          "rr": 2.18,
+          "label": "今日開盤（DO）",
+          "fraction": 0.3333333333333333
+        },
+        {
+          "name": "TP2",
+          "price": 310.8,
+          "rr": 2.87,
+          "label": "區間極值",
+          "fraction": 0.3333333333333333
+        },
+        {
+          "name": "TP3",
+          "price": 311,
+          "rr": 2.97,
+          "label": "等高流動性",
+          "fraction": 0
+        }
+      ],
+      "grade": "A",
+      "score": 73,
+      "poiType": "OTE",
+      "status": "stop",
+      "filledTime": 1790899200000,
+      "openTime": 1790899200000,
+      "lastCheckedTime": 1790910000000,
+      "barsSinceOpen": 3,
+      "barsSinceFill": 3,
+      "hitTargets": [
+        "TP1"
+      ],
+      "remaining": 0,
+      "realizedR": 1.8447706966225306,
+      "maxFavorableR": 2.4561598635672253,
+      "maxAdverseR": -0.3707411114818538,
+      "source": "market",
+      "events": [
+        {
+          "type": "stop",
+          "time": 1790910000000,
+          "price": 308.22108000000003,
+          "reason": "trail"
+        }
+      ],
+      "beMoved": true,
+      "trailing": true,
+      "exitReason": "trail",
+      "closedTime": 1790910000000,
+      "exitPrice": 308.22108000000003,
+      "r": 1.8447706966225306
     }
   ],
-  "updatedAt": "2026-10-02T03:20:52.464Z",
+  "updatedAt": "2026-10-02T08:07:07.136Z",
   "stats": {
-    "count": 188,
+    "count": 194,
     "expired": 64,
-    "wins": 124,
+    "wins": 130,
     "losses": 64,
-    "winRate": 65.95744680851064,
-    "totalR": 23.2810504628235,
-    "expectancy": 0.12383537480225267,
-    "avgWin": 0.698739513966901,
+    "winRate": 67.0103092783505,
+    "totalR": 28.520809055576468,
+    "expectancy": 0.14701447966791995,
+    "avgWin": 0.7067958332665284,
     "avgLoss": -0.9900413948292548,
-    "profitFactor": 1.3674254585530254,
+    "profitFactor": 1.4501202109536409,
     "maxDrawdownR": 19.564536001013302,
     "maxLossStreak": 19,
     "byGrade": [
       {
         "key": "A",
-        "count": 132,
-        "winRate": 68.18181818181817,
-        "avgR": 0.20419833793523143,
-        "totalR": 26.95418060745055
+        "count": 136,
+        "winRate": 69.11764705882352,
+        "avgR": 0.22329934065302395,
+        "totalR": 30.368710328811257
       },
       {
         "key": "A+",
-        "count": 56,
-        "winRate": 60.71428571428571,
-        "avgR": -0.06559160972548314,
-        "totalR": -3.6731301446270557
+        "count": 58,
+        "winRate": 62.06896551724138,
+        "avgR": -0.031860366779910325,
+        "totalR": -1.8479012732347988
       }
     ],
     "bySymbol": [
@@ -16238,10 +16570,10 @@
       },
       {
         "key": "ETHUSDT",
-        "count": 16,
-        "winRate": 81.25,
-        "avgR": 0.5252371602804746,
-        "totalR": 8.403794564487594
+        "count": 17,
+        "winRate": 82.35294117647058,
+        "avgR": 0.5381706046620072,
+        "totalR": 9.148900279254121
       },
       {
         "key": "DOGEUSDT",
@@ -16286,6 +16618,13 @@
         "totalR": 2.011928136779123
       },
       {
+        "key": "BCHUSDT",
+        "count": 2,
+        "winRate": 100,
+        "avgR": 0.9473853483112635,
+        "totalR": 1.894770696622527
+      },
+      {
         "key": "NVDABUSDT",
         "count": 3,
         "winRate": 100,
@@ -16319,6 +16658,13 @@
         "winRate": 100,
         "avgR": 1.0872322190748231,
         "totalR": 1.0872322190748231
+      },
+      {
+        "key": "WLDUSDT",
+        "count": 1,
+        "winRate": 100,
+        "avgR": 0.7746533099716502,
+        "totalR": 0.7746533099716502
       },
       {
         "key": "PAXGUSDT",
@@ -16361,6 +16707,20 @@
         "winRate": 50,
         "avgR": 0.341013643895024,
         "totalR": 0.682027287790048
+      },
+      {
+        "key": "SHIBUSDT",
+        "count": 3,
+        "winRate": 100,
+        "avgR": 0.21645681948190995,
+        "totalR": 0.6493704584457298
+      },
+      {
+        "key": "BNBUSDT",
+        "count": 23,
+        "winRate": 60.86956521739131,
+        "avgR": 0.028168441432509576,
+        "totalR": 0.6478741529477202
       },
       {
         "key": "WLFIUSDT",
@@ -16419,13 +16779,6 @@
         "totalR": 0.20101960298866506
       },
       {
-        "key": "SHIBUSDT",
-        "count": 2,
-        "winRate": 100,
-        "avgR": 0.04999999999999924,
-        "totalR": 0.09999999999999848
-      },
-      {
         "key": "TRUMPUSDT",
         "count": 2,
         "winRate": 100,
@@ -16459,6 +16812,13 @@
         "winRate": 100,
         "avgR": 0.05000000000000061,
         "totalR": 0.05000000000000061
+      },
+      {
+        "key": "AUDIOUSDT",
+        "count": 1,
+        "winRate": 100,
+        "avgR": 0.05000000000000047,
+        "totalR": 0.05000000000000047
       },
       {
         "key": "NEIROUSDT",
@@ -16510,13 +16870,6 @@
         "totalR": 0.049999999999997075
       },
       {
-        "key": "BCHUSDT",
-        "count": 1,
-        "winRate": 100,
-        "avgR": 0.04999999999999658,
-        "totalR": 0.04999999999999658
-      },
-      {
         "key": "VTHOUSDT",
         "count": 2,
         "winRate": 50,
@@ -16557,13 +16910,6 @@
         "winRate": 50,
         "avgR": -0.26749999999999996,
         "totalR": -0.5349999999999999
-      },
-      {
-        "key": "BNBUSDT",
-        "count": 22,
-        "winRate": 59.09090909090909,
-        "avgR": -0.02854473909085479,
-        "totalR": -0.6279842599988054
       },
       {
         "key": "SEIUSDT",
@@ -16723,10 +17069,10 @@
     "byDir": [
       {
         "key": "long",
-        "count": 167,
-        "winRate": 66.46706586826348,
-        "avgR": 0.128828178449104,
-        "totalR": 21.514305801000365
+        "count": 173,
+        "winRate": 67.63005780346822,
+        "avgR": 0.154647771062158,
+        "totalR": 26.754064393753332
       },
       {
         "key": "short",
@@ -16738,114 +17084,6 @@
     ]
   },
   "bests": [
-    {
-      "time": 1790832600000,
-      "symbol": "BTCUSDT",
-      "interval": "15m",
-      "score": 89,
-      "grade": "A+",
-      "dir": "long",
-      "rr": 6.089253966447352
-    },
-    {
-      "time": 1790827200000,
-      "symbol": "BTCUSDT",
-      "interval": "1h",
-      "score": 89,
-      "grade": "A+",
-      "dir": "long",
-      "rr": 3
-    },
-    {
-      "time": 1790832600000,
-      "symbol": "ETHUSDT",
-      "interval": "15m",
-      "score": 79,
-      "grade": "A",
-      "dir": "long",
-      "rr": 2.4080273543640534
-    },
-    {
-      "time": 1790827200000,
-      "symbol": "ETHUSDT",
-      "interval": "1h",
-      "score": 68,
-      "grade": "A",
-      "dir": "long",
-      "rr": 3
-    },
-    {
-      "time": 1790832600000,
-      "symbol": "SOLUSDT",
-      "interval": "15m",
-      "score": 79,
-      "grade": "A",
-      "dir": "long",
-      "rr": 3
-    },
-    {
-      "time": 1790827200000,
-      "symbol": "SOLUSDT",
-      "interval": "1h",
-      "score": 80,
-      "grade": "A+",
-      "dir": "long",
-      "rr": 2.212113861362373
-    },
-    {
-      "time": 1790832600000,
-      "symbol": "BNBUSDT",
-      "interval": "15m",
-      "score": 52,
-      "grade": "C",
-      "dir": "long",
-      "rr": 2.8433884300182983
-    },
-    {
-      "time": 1790827200000,
-      "symbol": "BNBUSDT",
-      "interval": "1h",
-      "score": 59,
-      "grade": "B",
-      "dir": "long",
-      "rr": 3
-    },
-    {
-      "time": 1790832600000,
-      "symbol": "XRPUSDT",
-      "interval": "15m",
-      "score": 79,
-      "grade": "A",
-      "dir": "long",
-      "rr": 3
-    },
-    {
-      "time": 1790827200000,
-      "symbol": "XRPUSDT",
-      "interval": "1h",
-      "score": 76,
-      "grade": "A",
-      "dir": "long",
-      "rr": 2.379989347262833
-    },
-    {
-      "time": 1790832600000,
-      "symbol": "DOGEUSDT",
-      "interval": "15m",
-      "score": 59,
-      "grade": "B",
-      "dir": "long",
-      "rr": 4.1282512548296815
-    },
-    {
-      "time": 1790827200000,
-      "symbol": "DOGEUSDT",
-      "interval": "1h",
-      "score": 70,
-      "grade": "A",
-      "dir": "long",
-      "rr": 5.1059453756636985
-    },
     {
       "time": 1790856000000,
       "symbol": "BTCUSDT",
@@ -17385,6 +17623,114 @@
       "grade": "A",
       "dir": "long",
       "rr": 3
+    },
+    {
+      "time": 1790927100000,
+      "symbol": "BTCUSDT",
+      "interval": "15m",
+      "score": 65,
+      "grade": "B",
+      "dir": "long",
+      "rr": 6.149735063059121
+    },
+    {
+      "time": 1790924400000,
+      "symbol": "BTCUSDT",
+      "interval": "1h",
+      "score": 68,
+      "grade": "A",
+      "dir": "long",
+      "rr": 2.998729157043053
+    },
+    {
+      "time": 1790927100000,
+      "symbol": "ETHUSDT",
+      "interval": "15m",
+      "score": 80,
+      "grade": "A+",
+      "dir": "long",
+      "rr": 4.131594328736077
+    },
+    {
+      "time": 1790924400000,
+      "symbol": "ETHUSDT",
+      "interval": "1h",
+      "score": 68,
+      "grade": "A",
+      "dir": "long",
+      "rr": 2.2514576846361694
+    },
+    {
+      "time": 1790927100000,
+      "symbol": "SOLUSDT",
+      "interval": "15m",
+      "score": 56,
+      "grade": "B",
+      "dir": "long",
+      "rr": 4.141215007462645
+    },
+    {
+      "time": 1790924400000,
+      "symbol": "SOLUSDT",
+      "interval": "1h",
+      "score": 59,
+      "grade": "B",
+      "dir": "long",
+      "rr": 3
+    },
+    {
+      "time": 1790927100000,
+      "symbol": "BNBUSDT",
+      "interval": "15m",
+      "score": 49,
+      "grade": "C",
+      "dir": "long",
+      "rr": 3
+    },
+    {
+      "time": 1790924400000,
+      "symbol": "BNBUSDT",
+      "interval": "1h",
+      "score": 79,
+      "grade": "A",
+      "dir": "long",
+      "rr": 3
+    },
+    {
+      "time": 1790927100000,
+      "symbol": "XRPUSDT",
+      "interval": "15m",
+      "score": 68,
+      "grade": "A",
+      "dir": "long",
+      "rr": 3
+    },
+    {
+      "time": 1790924400000,
+      "symbol": "XRPUSDT",
+      "interval": "1h",
+      "score": 59,
+      "grade": "B",
+      "dir": "long",
+      "rr": 3
+    },
+    {
+      "time": 1790927100000,
+      "symbol": "DOGEUSDT",
+      "interval": "15m",
+      "score": 79,
+      "grade": "A",
+      "dir": "long",
+      "rr": 3
+    },
+    {
+      "time": 1790924400000,
+      "symbol": "DOGEUSDT",
+      "interval": "1h",
+      "score": 80,
+      "grade": "A+",
+      "dir": "long",
+      "rr": 3.2367472012703145
     }
   ]
 }
