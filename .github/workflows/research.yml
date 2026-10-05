@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       study:
-        description: '要跑哪個研究：ab-test（部位管理規則）、confluence（斐波那契／成交量分布匯流）、alt（別種做法：突破、回檔、RSI2）、fakeout（假突破 MSS 反手／延續後 OTE 回調進場）、smc-mix（SMC 條件單項＋兩兩組合，例如 FVG＋斐波那契）或 mtf-smc（多週期 SMC：日線→4h→1h→15m、PO3、成交量分布；天數用 extra 的 --days=）'
+        description: '要跑哪個研究：ab-test（部位管理規則）、confluence（斐波那契／成交量分布匯流）、alt（別種做法：突破、回檔、RSI2）、fakeout（假突破 MSS 反手／延續後 OTE 回調進場）、smc-mix（SMC 條件單項＋兩兩組合，例如 FVG＋斐波那契）、mtf-smc（多週期 SMC：日線→4h→1h→15m、PO3、成交量分布；天數用 extra 的 --days=）或 recent（最近幾天線上 SMC 推播＋6 個順勢策略逐筆賺虧；天數用 extra 的 --days=，幣種／週期用線上設定，symbols 欄位不用填）'
         type: choice
-        options: [ab-test, confluence, alt, fakeout, smc-mix, mtf-smc]
+        options: [ab-test, confluence, alt, fakeout, smc-mix, mtf-smc, recent]
         default: ab-test
       symbols:
         description: '要測的幣種（逗號分隔）'
@@ -74,7 +74,7 @@ jobs:
           EXTRA: ${{ inputs.extra }}
         run: |
           set -o pipefail
-          if [ "$STUDY" = confluence ]; then SCRIPT=confluence-study; DEF_INT=30m,1h,4h; elif [ "$STUDY" = alt ]; then SCRIPT=alt-strategies; DEF_INT=1h,4h; elif [ "$STUDY" = fakeout ]; then SCRIPT=fakeout-ote; DEF_INT=15m,1h,4h,6h; elif [ "$STUDY" = smc-mix ]; then SCRIPT=smc-mix; DEF_INT=30m,1h,4h; elif [ "$STUDY" = mtf-smc ]; then SCRIPT=mtf-smc; DEF_INT=1d,4h,1h,15m; else SCRIPT=ab-test; DEF_INT=15m,1h; fi
+          if [ "$STUDY" = confluence ]; then SCRIPT=confluence-study; DEF_INT=30m,1h,4h; elif [ "$STUDY" = alt ]; then SCRIPT=alt-strategies; DEF_INT=1h,4h; elif [ "$STUDY" = fakeout ]; then SCRIPT=fakeout-ote; DEF_INT=15m,1h,4h,6h; elif [ "$STUDY" = smc-mix ]; then SCRIPT=smc-mix; DEF_INT=30m,1h,4h; elif [ "$STUDY" = mtf-smc ]; then SCRIPT=mtf-smc; DEF_INT=1d,4h,1h,15m; elif [ "$STUDY" = recent ]; then SCRIPT=recent-signals; DEF_INT=15m; else SCRIPT=ab-test; DEF_INT=15m,1h; fi
           node "scripts/research/$SCRIPT.mjs" \
             --symbols="$SYMBOLS" \
             --intervals="${INTERVALS:-$DEF_INT}" \
