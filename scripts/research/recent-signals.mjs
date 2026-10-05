@@ -121,7 +121,6 @@ function exitZh(t) {
       } catch (e) { log(`  SMC ${symbol} ${interval}: 取得資料失敗（${e.message}）`); continue; }
       candlesBy.set(`${symbol}|${interval}`, c);
       const htfCache = new Map();
-      const seen = new Set();
       let n = 0;
       for (let i = 498; i < c.length; i++) {
         const closeAt = c[i].time + ms;
@@ -140,10 +139,8 @@ function exitZh(t) {
         try { a = analyze(c.slice(i - 498, i + 1), { htfBias: htf }); } catch { continue; }
         const s = a.setup;
         if (!s || s.none || !s.valid || s.score < MIN_SCORE || s.entryType === 'market' || !s.targets?.length) continue;
-        // Worker 的去重 key：幣＋週期＋方向＋進場價
-        const key = `${s.dir}:${s.entry}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
+        // 這根收盤算出的計畫只活到下一根收盤（Worker 下一次重掃就換成新計畫）：
+        // 下一根碰到進場價才會推播＋進場（entryWindowBars＝1），去重放到成交之後做（跟 Worker 的 KV key 一樣）
         n++;
         smcSignals.push({
           kind: 'smc', strategy: 'SMC 計畫', symbol, interval, index: i, time: closeAt,
@@ -152,7 +149,7 @@ function exitZh(t) {
           stopPct: Math.abs(s.entry - s.stop) / s.entry, grade: s.grade, score: s.score, poiType: s.poi?.type,
         });
       }
-      log(`  SMC ${symbol} ${interval}：${n} 個推播`);
+      log(`  SMC ${symbol} ${interval}：${n} 根收盤有可推播的計畫`);
     }
     await loadSub(symbol);
   }
@@ -205,26 +202,42 @@ function exitZh(t) {
     const coarse = runSignals(sigs.filter((s) => !done.has(`${s.symbol}|${s.interval}|${s.time}|${s.strategy}|${s.dir}`)), candlesBy, { ...cfg, fillBarPath: true });
     return [...fine.map((t) => ({ ...t, precise: true })), ...coarse.map((t) => ({ ...t, precise: false }))];
   };
-  const smcTrades = run(smcSignals, {});
-  const unfilledSmc = smcTrades.filter((t) => t.status === 'expired' && t.exitReason === 'timeout');
-  const smcDone = smcTrades.filter((t) => !(t.status === 'expired' && t.exitReason === 'timeout'));
+  const smcTrades = run(smcSignals, { entryWindowBars: 1 });
+  // Worker 的去重：同一個幣／週期／方向／進場價推播過，ALERT_TTL（6 小時）內不再推
+  const ALERT_TTL = Number(opt('alert-ttl-h', 6)) * 3_600_000;
+  const lastAlert = new Map();
+  const smcDone = smcTrades
+    .filter((t) => !(t.status === 'expired' && t.exitReason === 'timeout'))
+    .sort((a, b) => a.filledTime - b.filledTime)
+    .filter((t) => {
+      const k = `${t.symbol}|${t.interval}|${t.dir}|${t.entry}`;
+      if (t.filledTime - (lastAlert.get(k) ?? -Infinity) < ALERT_TTL) return false;
+      lastAlert.set(k, t.filledTime);
+      return true;
+    });
   const trendRaw = [...run(trendSignals.filter((s) => s.trail), TRAIL_CFG), ...run(trendSignals.filter((s) => !s.trail), FIXED_CFG)]
     .sort((a, b) => a.time - b.time || order[a.key] - order[b.key]);
   // 同一個幣同時只抱一張、全部最多同時 TREND_MAX_OPEN 張（還沒平倉的部位也佔位子）
   const open = [];
   const trendDone = [];
   const trendSkipped = [];
-  for (const t of trendRaw) {
+  // 還沒平倉的單也要佔位子（一直佔到現在）
+  const rawKeys = new Set(trendRaw.map((t) => `${t.symbol}|${t.interval}|${t.time}|${t.strategy}|${t.dir}`));
+  const trendOpenSigs = trendSignals.filter((s) => !rawKeys.has(`${s.symbol}|${s.interval}|${s.time}|${s.strategy}|${s.dir}`))
+    .map((s) => ({ ...s, closedTime: Infinity, stillOpen: true }));
+  const trendAll = [...trendRaw, ...trendOpenSigs].sort((a, b) => a.time - b.time || order[a.key] - order[b.key]);
+  const trendOpenTaken = [];
+  for (const t of trendAll) {
     for (let k = open.length - 1; k >= 0; k--) if (open[k].closedTime <= t.filledTime) open.splice(k, 1);
     if (open.some((o) => o.symbol === t.symbol)) { trendSkipped.push({ ...t, skip: '同一個幣已經有單' }); continue; }
     if (open.length >= TREND_MAX_OPEN) { trendSkipped.push({ ...t, skip: `已經 ${TREND_MAX_OPEN} 張` }); continue; }
     open.push(t);
-    trendDone.push(t);
+    (t.stillOpen ? trendOpenTaken : trendDone).push(t);
   }
-  // 還沒平倉的單（runSignals 不回傳）另外列出來
+  // 還沒結束的：SMC＝已經進場還抱著的（或最後一根的計畫還在等），順勢＝實際會下單、還沒平倉的
   const key = (t) => `${t.symbol}|${t.interval}|${t.time}|${t.strategy}|${t.dir}`;
-  const closedKeys = new Set([...smcTrades, ...trendRaw].map(key));
-  const stillOpen = [...smcSignals, ...trendSignals].filter((s) => !closedKeys.has(key(s)));
+  const smcKeys = new Set(smcTrades.map(key));
+  const stillOpen = [...smcSignals.filter((s) => !smcKeys.has(key(s))), ...trendOpenTaken];
 
   // ── 摘要
   const rowOf = (name, xs) => {
@@ -236,7 +249,7 @@ function exitZh(t) {
   };
   const head = ['分組', '筆數', '勝率', '合計 R', '每筆 R', '最好', '最差'];
   log(`\n■ 最近 ${DAYS} 天（${new Date(start).toISOString().slice(0, 10)} ～ ${new Date(now).toISOString().slice(0, 10)}），每筆 R 已扣手續費`);
-  log(`\n● SMC 計畫（${SMC_SYMBOLS.length} 檔 × ${SMC_INTERVALS.join('/')}；推播 ${smcSignals.length} 次，價格沒回到進場價作廢 ${unfilledSmc.length} 次，還沒結束 ${stillOpen.filter((s) => s.kind === 'smc').length} 筆）`);
+  log(`\n● SMC 計畫（${SMC_SYMBOLS.length} 檔 × ${SMC_INTERVALS.join('/')}；有計畫的收盤 ${smcSignals.length} 次，價格碰到進場價＝推播＋進場 ${smcDone.length} 筆，還沒結束 ${stillOpen.filter((s) => s.kind === 'smc').length} 筆）`);
   printTable(log, head, [
     rowOf('全部', smcDone),
     ...SMC_INTERVALS.map((iv) => rowOf(iv, smcDone.filter((t) => t.interval === iv))),
@@ -250,7 +263,7 @@ function exitZh(t) {
     ...TREND.map((s) => rowOf(`${s.zh} ${s.tf}`, trendDone.filter((t) => t.key === s.key))),
     rowOf('多單', trendDone.filter((t) => t.dir === 'long')),
     rowOf('空單', trendDone.filter((t) => t.dir === 'short')),
-    rowOf('（沒下單的訊號）', trendSkipped),
+    rowOf('（沒下單的訊號，已結束的）', trendSkipped.filter((t) => !t.stillOpen)),
   ]);
 
   // 每 30 天
@@ -271,7 +284,7 @@ function exitZh(t) {
   });
   const out = {
     generatedAt: new Date(now).toISOString(), days: DAYS, from: start, to: now, sub: SUB,
-    smc: { symbols: SMC_SYMBOLS, intervals: SMC_INTERVALS, minScore: MIN_SCORE, signals: smcSignals.length, unfilled: unfilledSmc.length },
+    smc: { symbols: SMC_SYMBOLS, intervals: SMC_INTERVALS, minScore: MIN_SCORE, plans: smcSignals.length },
     trend: { symbols: TREND_SYMBOLS.length, maxOpen: TREND_MAX_OPEN, signals: trendSignals.length },
     trades: [...smcDone.map((t) => pack(t)), ...trendDone.map((t) => pack(t))].sort((a, b) => a.fill - b.fill),
     skipped: trendSkipped.map((t) => pack(t, { skip: t.skip })),
