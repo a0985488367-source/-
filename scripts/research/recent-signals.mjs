@@ -160,9 +160,12 @@ function exitZh(t) {
   for (const symbol of TREND_SYMBOLS) {
     for (const tf of [...new Set(TREND.map((s) => s.tf))]) {
       const ms = MS[tf];
-      let c;
-      try { c = await klines(symbol, tf, barsFor(tf, TREND_WINDOW + 5)); } catch (e) { log(`  順勢 ${symbol} ${tf}: 取得資料失敗（${e.message}）`); continue; }
-      candlesBy.set(`${symbol}|${tf}`, c);
+      // SMC 那段已經抓過同一個幣／週期的就共用同一份（runSignals 用 index 對 K 棒，兩份長度不同會對錯根）
+      let c = candlesBy.get(`${symbol}|${tf}`);
+      if (!c) {
+        try { c = await klines(symbol, tf, barsFor(tf, TREND_WINDOW + 5)); } catch (e) { log(`  順勢 ${symbol} ${tf}: 取得資料失敗（${e.message}）`); continue; }
+        candlesBy.set(`${symbol}|${tf}`, c);
+      }
       for (let i = TREND_WINDOW - 1; i < c.length - 1; i++) {
         const closeAt = c[i].time + ms;
         if (closeAt < start || closeAt > now) continue;
