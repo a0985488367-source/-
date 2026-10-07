@@ -66,6 +66,8 @@
   .tag.bear { background: var(--down-bg); color: var(--down); }
   .tag.plan { background: rgba(108, 92, 231, .18); color: #a99cf5; }
   .tag.liqd { background: rgba(239, 83, 80, .08); color: #d98a88; }
+  .tag.wallb { background: var(--up); color: #06110f; font-weight: 700; }
+  .tag.walla { background: var(--down); color: #1a0606; font-weight: 700; }
   details.tf { background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
   details.tf > summary { cursor: pointer; padding: 12px 16px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; list-style: none; }
   details.tf > summary::-webkit-details-marker { display: none; }
@@ -111,7 +113,7 @@
   <div id="out"><p class="loading">輸入幣種開始分析（Bybit USDT 永續，15m～週線）</p></div>
 
   <p class="note">資料：Bybit USDT 永續（K 棒、多空比），資金費率／未平倉量依序試 Binance、Bybit、OKX。SMC 計畫跟 App、TradingView 指標、Discord 推播同一套算法（每個週期最近 499 根已收盤 K 棒）。
-    爆倉密集區是用成交量和常見槓桿推估的，不是交易所公布的數字。回測顯示 SMC 計畫照單全收是虧的，只當參考；Demo 自動下單用的是 4h／6h 順勢策略。</p>
+    大單牆、大額成交來自 Bybit 和 Binance 永續的公開掛單簿／成交，大戶多空比來自 Binance；交易所不公開下單者身分，「大戶」只是指金額特別大。爆倉密集區是用成交量和常見槓桿推估的，不是交易所公布的數字。回測顯示 SMC 計畫照單全收是虧的，只當參考；Demo 自動下單用的是 4h／6h 順勢策略。</p>
 </main>
 <script type="module" src="./app.js"></script>
 </body>
