@@ -27,6 +27,12 @@ let fullTimer = null;
 let tickTimer = null;
 let loadSeq = 0;
 let changes = []; // 最近幾次重算各自變了什麼 [{ time, items }]
+const MODE_KEY = 'coin-radar:mode';
+let mode = (() => { try { return localStorage.getItem(MODE_KEY) || 'live'; } catch { return 'live'; } })(); // live＝含盤中 K 棒、closed＝只用收盤
+let rawTf = null; // 最近一次抓的各週期 K 棒（含盤中那根）
+let lastLiveCalc = 0;
+const LIVE_CALC_MS = 5_000;
+const TFMS = { '15m': 9e5, '30m': 18e5, '1h': 36e5, '2h': 72e5, '4h': 144e5, '6h': 216e5, '1d': 864e5, '1w': 6048e5 };
 let lastCalc = null;
 const openTfs = new Set(['4h']);
 
@@ -97,23 +103,83 @@ async function loadAll(symbol, { quiet = false } = {}) {
     deriv = dv;
     ls = lr;
     setDecimals(livePrice);
-    const prevReport = report && report.symbol === symbol ? report : null;
-    report = buildCoinReport(closed, { daily: raw[REPORT_TFS.indexOf('1d')], h1: closed['1h'], price: livePrice, derivatives: dv, lsRatio: lr });
-    if (report.empty) throw new Error('資料不夠，沒辦法分析');
-    report.symbol = symbol;
-    lastCalc = Date.now();
-    if (!prevReport) changes = [];
-    else {
-      const items = diffReports(prevReport, report);
-      if (items.length) changes = [{ time: lastCalc, items }, ...changes].slice(0, 8);
-    }
-    render();
-    $('status').textContent = `分析於 ${tw(Date.now())}（每分鐘重算、價格每 3 秒更新）`;
+    rawTf = Object.fromEntries(REPORT_TFS.map((tf, k) => [tf, raw[k]]));
+    computeReport(symbol);
+    if (quiet && $('summary')) { renderHead(); rerenderAnalysis(); renderDeriv(); } else render();
+    setStatus();
   } catch (e) {
     if (seq !== loadSeq) return;
+    if (quiet && report) { $('status').textContent = `更新失敗（${e.message || e}），稍後自動重試`; return; }
     $('out').innerHTML = `<p class="err">${esc(symbol)}：${esc(e.message || e)}。確認是 Bybit 上有的 USDT 永續合約（例如 BTCUSDT）。</p>`;
     $('status').textContent = '';
   }
+}
+
+/** 盤中那根用最新價格補上（換到下一根了就新開一根），給即時模式用 */
+function withLivePrice(tf, list, price, now = Date.now()) {
+  const ms = TFMS[tf];
+  const xs = list.slice();
+  const last = xs[xs.length - 1];
+  if (!last || !Number.isFinite(price)) return xs;
+  if (now >= last.time + ms) {
+    const t = Math.floor(now / ms) * ms;
+    xs.push({ time: t, open: last.close, high: Math.max(last.close, price), low: Math.min(last.close, price), close: price, volume: 0 });
+  } else {
+    xs[xs.length - 1] = { ...last, high: Math.max(last.high, price), low: Math.min(last.low, price), close: price };
+  }
+  return xs;
+}
+
+/** 用目前的 K 棒（依模式含不含盤中那根）重算報告，跟上一次比出變化 */
+function computeReport(symbol) {
+  if (!rawTf) return;
+  const now = Date.now();
+  const use = {};
+  for (const tf of REPORT_TFS) use[tf] = mode === 'live' ? withLivePrice(tf, rawTf[tf], livePrice, now) : rawTf[tf].slice(0, -1);
+  const daily = withLivePrice('1d', rawTf['1d'], livePrice, now);
+  const prevReport = report && report.symbol === symbol && report.mode === mode ? report : null;
+  const next = buildCoinReport(use, { daily, h1: rawTf['1h'].slice(0, -1), price: livePrice, derivatives: deriv, lsRatio: ls });
+  if (next.empty) throw new Error('資料不夠，沒辦法分析');
+  next.symbol = symbol;
+  next.mode = mode;
+  report = next;
+  lastCalc = now;
+  if (prevReport) {
+    const items = diffReports(prevReport, report);
+    if (items.length) changes = [{ time: lastCalc, items }, ...changes].slice(0, 12);
+  }
+}
+
+function setStatus() {
+  $('status').textContent = mode === 'live'
+    ? `即時模式：含盤中 K 棒，每 5 秒重算（${tw(lastCalc ?? Date.now())}）`
+    : `收盤確認模式：只用收盤 K 棒，每分鐘重算（${tw(lastCalc ?? Date.now())}）`;
+}
+
+/** 即時模式下只重畫會變的區塊，不整頁重建（避免捲動位置跳掉） */
+function rerenderAnalysis() {
+  renderSummary();
+  renderBest();
+  renderLadder();
+  renderSweeps();
+  renderMatrix();
+  renderTfs();
+}
+
+function setMode(next) {
+  mode = next;
+  try { localStorage.setItem(MODE_KEY, mode); } catch { /* 無痕模式 */ }
+  renderModeSwitch();
+  if (!sym || !rawTf) return;
+  changes = [];
+  report = null;
+  computeReport(sym);
+  render();
+  setStatus();
+}
+
+function renderModeSwitch() {
+  for (const [id, m] of [['mode-live', 'live'], ['mode-closed', 'closed']]) $(id)?.setAttribute('aria-pressed', String(mode === m));
 }
 
 async function tick() {
@@ -123,9 +189,16 @@ async function tick() {
     ticker = tk;
     livePrice = tk.price;
     renderHead();
-    renderSummary();
-    renderLadder();
-    renderBest();
+    if (mode === 'live' && rawTf && Date.now() - lastLiveCalc >= LIVE_CALC_MS) {
+      lastLiveCalc = Date.now();
+      computeReport(sym);
+      rerenderAnalysis();
+      setStatus();
+    } else {
+      renderSummary();
+      renderLadder();
+      renderBest();
+    }
   } catch { /* 下一次再試 */ }
 }
 
@@ -232,6 +305,7 @@ function start(symbol) {
   clearInterval(tickTimer);
   resetWhales(symbol);
   report = null;
+  rawTf = null;
   changes = [];
   loadAll(symbol);
   fullTimer = setInterval(() => loadAll(symbol, { quiet: true }), FULL_REFRESH_MS);
@@ -302,11 +376,13 @@ function renderSummary() {
       <span class="num">分數 ${a.score > 0 ? '+' : ''}${a.score}／方向一致 ${a.alignment}%（多 ${a.bulls}、空 ${a.bears}、中性 ${a.neutrals}）</span>
     </div>
     <div class="chips">${report.tfs.map((t) => `<span class="chip ${biasCls(t.bias.score)}" title="下一根 K 棒收盤後這個週期才會重算">${t.interval} ${BIAS[biasCls(t.bias.score)]} <span class="num">${t.bias.score > 0 ? '+' : ''}${t.bias.score}</span> <span class="num muted">⏱${left(nextCloseTime(t.interval) - Date.now())}</span></span>`).join('')}</div>
-    <p class="note" style="margin:6px 0 0">⏱＝那個週期下一根 K 棒還有多久收盤；只用收盤的 K 棒算，收盤前數字不會變（價格和距離每 3 秒更新）。</p>
+    <p class="note" style="margin:6px 0 0">${mode === 'live'
+      ? '即時模式：含盤中那根 K 棒，每 5 秒重算。⏱＝那根還有多久收盤，收盤前看到的訊號都還沒確認，可能會變回去。'
+      : '收盤確認模式：只用收盤的 K 棒（跟 Discord、TV 一樣），⏱ 走完那個週期才會變。'}</p>
     <ul class="narr">${liveNarrative().map((s) => `<li class="${s.startsWith('⚠') ? 'warn' : ''}">${esc(s)}</li>`).join('')}</ul>
-    <div class="sec" style="margin-top:12px"><h3>最近變化（每分鐘重算一次，有變才列）</h3>${changes.length
+    <div class="sec" style="margin-top:12px"><h3>最近變化（${mode === 'live' ? '每 5 秒' : '每分鐘'}重算一次，有變才列）</h3>${changes.length
       ? `<ul>${changes.map((c) => `<li><span class="num muted">${tw(c.time).slice(6)}</span> ${c.items.map((i) => `<span class="tag ${i.kind === 'best' || i.kind === 'conflict' ? 'liq' : i.kind === 'sweep' ? 'key' : ''}">${esc(i.zh)}</span>`).join(' ')}</li>`).join('')}</ul>`
-      : `<p class="muted" style="margin:0">打開之後還沒有變化。上次重算 ${lastCalc ? tw(lastCalc).slice(6) : '-'}；最快會變的是 15m，還有 ${left(nextCloseTime('15m') - Date.now())}。</p>`}</div>`;
+      : `<p class="muted" style="margin:0">打開之後還沒有變化。上次重算 ${lastCalc ? tw(lastCalc).slice(6) : '-'}；${mode === 'live' ? '價格一動、計畫或偏向有變就會列在這裡' : `最快會變的是 15m，還有 ${left(nextCloseTime('15m') - Date.now())}`}。</p>`}</div>`;
 }
 
 function planTable(p) {
@@ -556,6 +632,9 @@ function renderTfs() {
 }
 
 /* ───────────── 初始化 ───────────── */
+$('mode-live')?.addEventListener('click', () => setMode('live'));
+$('mode-closed')?.addEventListener('click', () => setMode('closed'));
+renderModeSwitch();
 $('quick').innerHTML = QUICK.map((b) => `<button type="button" data-s="${b}">${b}</button>`).join('');
 $('quick').addEventListener('click', (e) => { const b = e.target.closest('button[data-s]'); if (b) start(b.dataset.s); });
 $('form').addEventListener('submit', (e) => { e.preventDefault(); start($('q').value); });
