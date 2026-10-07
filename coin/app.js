@@ -8,6 +8,7 @@ import { PROVIDERS } from '../src/data/providers.js';
 import { fetchDerivatives } from '../src/data/derivatives.js';
 import { oiChangePct, annualizeFunding, fundingCountdown } from '../src/smc/derivatives.js';
 import { buildCoinReport, REPORT_TFS } from '../src/radar/coin-report.js';
+import { bigTradeThreshold, detectWalls, trackWalls, tradeStats, whaleVsCrowd } from '../src/radar/whales.js';
 
 const bybit = PROVIDERS.bybit;
 const $ = (id) => document.getElementById(id);
@@ -27,6 +28,11 @@ let tickTimer = null;
 let loadSeq = 0;
 const openTfs = new Set(['4h']);
 
+/* 大戶動向的即時狀態（換幣時清空） */
+const BOOK_MS = 5_000;
+const TRADE_KEEP_MS = 60 * 60_000;
+const whale = { trackers: { Bybit: new Map(), Binance: new Map() }, walls: [], trades: [], threshold: 100_000, top: null, crowd: null, sockets: [], bookTimer: null, drawTimer: null, dirty: false };
+
 /* ───────────── 格式 ───────────── */
 let decimals = 2;
 const setDecimals = (p) => { decimals = p >= 1000 ? 1 : p >= 100 ? 2 : p >= 1 ? 4 : p >= 0.01 ? 5 : 8; };
@@ -45,6 +51,8 @@ const TREND = { bullish: '多頭', bearish: '空頭', ranging: '盤整' };
 const DIRZ = { long: '做多', short: '做空', bull: '多', bear: '空' };
 const POI_ZH = { 'Order Block': 'OB', Breaker: 'Breaker', FVG: 'FVG', 'Inversion FVG': '反轉 FVG', 'Volume Imbalance': '量能缺口' };
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const fu = (n) => (!Number.isFinite(n) ? '-' : n >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(0)}K` : n.toFixed(0));
+const ago = (ms) => { const s = Math.max(0, Math.round((Date.now() - ms) / 1000)); return s < 60 ? `${s} 秒` : s < 3600 ? `${Math.floor(s / 60)} 分` : `${Math.floor(s / 3600)} 小時`; };
 const biasCls = (score) => (score > 10 ? 'bullish' : score < -10 ? 'bearish' : 'neutral');
 
 /* ───────────── 資料 ───────────── */
@@ -76,6 +84,8 @@ async function loadAll(symbol, { quiet = false } = {}) {
     if (!(closed['1h']?.length > 100)) throw new Error('這個幣的 K 棒太少（可能剛上線），沒辦法分析');
     ticker = tk;
     livePrice = tk.price;
+    whale.threshold = bigTradeThreshold(symbol, tk.quoteVolume);
+    if (quiet) loadWhaleRatios(symbol);
     deriv = dv;
     ls = lr;
     setDecimals(livePrice);
@@ -102,6 +112,97 @@ async function tick() {
   } catch { /* 下一次再試 */ }
 }
 
+/* ───────────── 大戶動向資料 ───────────── */
+const getJson = (url) => fetch(url).then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); });
+
+function pushTrades(list) {
+  if (!list.length) return;
+  whale.trades.push(...list);
+  const cut = Date.now() - TRADE_KEEP_MS;
+  if (whale.trades.length > 30_000 || whale.trades[0]?.time < cut) whale.trades = whale.trades.filter((t) => t.time >= cut).slice(-30_000);
+  whale.dirty = true;
+}
+
+async function loadTradeHistory(symbol) {
+  const [by, bn] = await Promise.all([
+    getJson(`https://api.bybit.com/v5/market/recent-trade?category=linear&symbol=${symbol}&limit=1000`)
+      .then((r) => r.result.list.map((x) => ({ time: Number(x.time), price: Number(x.price), qty: Number(x.size), side: x.side === 'Buy' ? 'buy' : 'sell', ex: 'Bybit' }))).catch(() => []),
+    getJson(`https://fapi.binance.com/fapi/v1/aggTrades?symbol=${symbol}&limit=1000`)
+      .then((r) => r.map((x) => ({ time: Number(x.T), price: Number(x.p), qty: Number(x.q), side: x.m ? 'sell' : 'buy', ex: 'Binance' }))).catch(() => []),
+  ]);
+  if (symbol !== sym) return;
+  pushTrades([...by, ...bn]);
+}
+
+function openTradeStreams(symbol) {
+  try {
+    const ws = new WebSocket('wss://stream.bybit.com/v5/public/linear');
+    ws.onopen = () => ws.send(JSON.stringify({ op: 'subscribe', args: [`publicTrade.${symbol}`] }));
+    ws.onmessage = (ev) => {
+      const d = JSON.parse(ev.data);
+      if (!d.topic?.startsWith('publicTrade') || !Array.isArray(d.data)) return;
+      pushTrades(d.data.map((x) => ({ time: Number(x.T), price: Number(x.p), qty: Number(x.v), side: x.S === 'Buy' ? 'buy' : 'sell', ex: 'Bybit' })));
+    };
+    // Bybit 公開頻道 20 秒沒心跳會斷
+    const ping = setInterval(() => { if (ws.readyState === 1) ws.send('{"op":"ping"}'); }, 18_000);
+    ws.onclose = () => clearInterval(ping);
+    whale.sockets.push(ws);
+  } catch { /* 連不上就只用歷史成交 */ }
+  try {
+    const ws = new WebSocket(`wss://fstream.binance.com/ws/${symbol.toLowerCase()}@aggTrade`);
+    ws.onmessage = (ev) => {
+      const x = JSON.parse(ev.data);
+      if (x.e !== 'aggTrade') return;
+      pushTrades([{ time: Number(x.T), price: Number(x.p), qty: Number(x.q), side: x.m ? 'sell' : 'buy', ex: 'Binance' }]);
+    };
+    whale.sockets.push(ws);
+  } catch { /* 同上 */ }
+}
+
+async function pollBooks() {
+  const symbol = sym;
+  if (!symbol || !livePrice) return;
+  const [by, bn] = await Promise.all([
+    getJson(`https://api.bybit.com/v5/market/orderbook?category=linear&symbol=${symbol}&limit=500`).then((r) => ({ bids: r.result.b, asks: r.result.a })).catch(() => null),
+    getJson(`https://fapi.binance.com/fapi/v1/depth?symbol=${symbol}&limit=1000`).then((r) => ({ bids: r.bids, asks: r.asks })).catch(() => null),
+  ]);
+  if (symbol !== sym) return;
+  const now = Date.now();
+  const walls = [];
+  for (const [ex, book] of [['Bybit', by], ['Binance', bn]]) {
+    if (!book) continue;
+    const found = detectWalls(book, livePrice, { binPct: 0.05, ratio: 5, minNotional: whale.threshold, maxPerSide: 5 }).map((w) => ({ ...w, ex }));
+    walls.push(...trackWalls(whale.trackers[ex], found, now));
+  }
+  whale.walls = walls;
+  whale.booksOk = { Bybit: !!by, Binance: !!bn };
+  whale.dirty = true;
+}
+
+async function loadWhaleRatios(symbol) {
+  const conv = (r) => (Array.isArray(r) ? r.map((x) => ({ time: Number(x.timestamp), long: Number(x.longAccount), short: Number(x.shortAccount) })).sort((a, b) => a.time - b.time) : null);
+  const [top, crowd] = await Promise.all([
+    getJson(`https://fapi.binance.com/futures/data/topLongShortPositionRatio?symbol=${symbol}&period=5m&limit=48`).then(conv).catch(() => null),
+    getJson(`https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=${symbol}&period=5m&limit=48`).then(conv).catch(() => null),
+  ]);
+  if (symbol !== sym) return;
+  whale.top = top;
+  whale.crowd = crowd;
+  whale.dirty = true;
+}
+
+function resetWhales(symbol) {
+  for (const ws of whale.sockets) { try { ws.close(); } catch { /* 已經關了 */ } }
+  clearInterval(whale.bookTimer);
+  clearInterval(whale.drawTimer);
+  Object.assign(whale, { trackers: { Bybit: new Map(), Binance: new Map() }, walls: [], trades: [], top: null, crowd: null, sockets: [], dirty: false });
+  loadTradeHistory(symbol);
+  openTradeStreams(symbol);
+  loadWhaleRatios(symbol);
+  whale.bookTimer = setInterval(pollBooks, BOOK_MS);
+  whale.drawTimer = setInterval(() => { if (whale.dirty && report) { whale.dirty = false; renderWhales(); renderLadder(); } }, 2_000);
+}
+
 function start(symbol) {
   symbol = symbol.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
   if (!symbol) return;
@@ -112,6 +213,7 @@ function start(symbol) {
   $('q').value = symbol.replace(/USDT$/, '');
   clearInterval(fullTimer);
   clearInterval(tickTimer);
+  resetWhales(symbol);
   loadAll(symbol);
   fullTimer = setInterval(() => loadAll(symbol, { quiet: true }), FULL_REFRESH_MS);
   tickTimer = setInterval(tick, TICK_MS);
@@ -131,6 +233,7 @@ function render() {
         <section class="card" id="deriv"></section>
       </div>
     </div>
+    <section class="card" id="whales"></section>
     <section class="card"><h2>各週期一覽</h2><div class="scroll" id="matrix"></div></section>
     <section style="display:grid;gap:10px" id="tfs"></section>`;
   renderHead();
@@ -139,6 +242,7 @@ function render() {
   renderLadder();
   renderSweeps();
   renderDeriv();
+  renderWhales();
   renderMatrix();
   renderTfs();
 }
@@ -224,6 +328,7 @@ function ladderItems() {
     }
   }
   for (const p of report.plans.filter((x) => x.valid)) add(p.entry, 'plan', `${p.tf} ${DIRZ[p.dir]}進場（${p.grade}）`);
+  for (const w of whale.walls) add(w.price, w.side === 'bid' ? 'wallb' : 'walla', `${w.side === 'bid' ? '買牆' : '賣牆'} ${w.ex} ${fu(w.notional)}${w.seenCount > 1 ? `（掛 ${ago(w.firstSeen)}）` : ''}`);
   if (report.liquidation) {
     for (const x of report.liquidation.longs) add(x.price, 'liqd', `多單爆倉區 估 ${x.strength}`);
     for (const x of report.liquidation.shorts) add(x.price, 'liqd', `空單爆倉區 估 ${x.strength}`);
@@ -296,6 +401,50 @@ function renderDeriv() {
       </tbody></table></div>`);
   }
   $('deriv').innerHTML = parts.join('');
+}
+
+/** 大戶動向：大單牆、大額成交、大戶 vs 散戶多空比 */
+function renderWhales() {
+  const el = $('whales');
+  if (!el) return;
+  const now = Date.now();
+  const st = tradeStats(whale.trades, whale.threshold, now);
+  const asks = whale.walls.filter((w) => w.side === 'ask').sort((a, b) => b.price - a.price);
+  const bids = whale.walls.filter((w) => w.side === 'bid').sort((a, b) => b.price - a.price);
+  const wallRow = (w) => `<tr><td class="num">${fp(w.price)}</td><td class="num ${dcls(dist(w.price))}">${fd(dist(w.price))}</td><td class="num">${fu(w.notional)}</td><td class="num">${w.times}×</td><td>${w.ex}</td><td>${w.seenCount > 1 ? `${ago(w.firstSeen)}${w.seenCount >= 12 ? ' <span class="warn">撐很久</span>' : ''}` : '<span class="muted">剛出現</span>'}</td></tr>`;
+  const walls = whale.walls.length || whale.booksOk
+    ? `<div class="scroll"><table class="tbl"><thead><tr><th>價位</th><th>距離</th><th>金額</th><th>比附近大</th><th>交易所</th><th>掛多久</th></tr></thead><tbody>
+      <tr><td colspan="6" class="muted">上方賣牆（往上會被擋、大戶可能在這裡出貨）</td></tr>${asks.map(wallRow).join('') || '<tr><td colspan="6" class="muted">沒有</td></tr>'}
+      <tr><td colspan="6" class="muted">下方買牆（往下會被接、大戶可能在這裡吸貨）</td></tr>${bids.map(wallRow).join('') || '<tr><td colspan="6" class="muted">沒有</td></tr>'}
+      </tbody></table></div>`
+    : '<p class="muted">正在讀掛單簿…</p>';
+  const winRow = (w) => {
+    const net = w.bigBuy - w.bigSell;
+    const tot = w.bigBuy + w.bigSell;
+    return `<tr><td>近 ${w.minutes} 分</td><td class="num up">${fu(w.bigBuy)}</td><td class="num down">${fu(w.bigSell)}</td><td class="num ${dcls(net)}">${net >= 0 ? '+' : ''}${fu(Math.abs(net)).replace(/^/, net < 0 ? '-' : '')}</td><td style="width:28%"><div class="bar"><i style="width:${tot ? (w.bigBuy / tot) * 100 : 50}%;background:var(--up)"></i></div></td><td class="num muted">${w.bigCount} 筆</td></tr>`;
+  };
+  const w15 = st.windows[1];
+  const lean = w15 && w15.bigBuy + w15.bigSell > 0 ? (w15.bigBuy > w15.bigSell * 1.5 ? '近 15 分鐘大單以買為主' : w15.bigSell > w15.bigBuy * 1.5 ? '近 15 分鐘大單以賣為主' : '近 15 分鐘大單買賣差不多') : '近 15 分鐘沒有大單';
+  const big = st.big.slice(0, 15);
+  const ratio = whaleVsCrowd(whale.top, whale.crowd);
+  el.innerHTML = `
+    <h2>大戶動向（Bybit＋Binance 永續；大單門檻 ${fu(whale.threshold)} U）</h2>
+    <div class="body" style="display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(320px,1fr))">
+      <div class="sec" style="min-width:0"><h3>大單牆（掛單簿裡特別大的單，每 5 秒更新）</h3>${walls}
+        <p class="note" style="margin:6px 0 0">大單可以隨時撤掉（假掛單）。一直掛著、價格靠近也不撤的才比較可信。</p></div>
+      <div class="sec" style="min-width:0"><h3>大額成交（主動吃單；${esc(lean)}）</h3>
+        <div class="scroll"><table class="tbl"><thead><tr><th>期間</th><th class="r">大單買</th><th class="r">大單賣</th><th class="r">淨買</th><th></th><th class="r">筆數</th></tr></thead><tbody>${st.windows.map(winRow).join('')}</tbody></table></div>
+        <h3 style="margin-top:10px">累積買賣差 CVD（全部成交，近 1 小時）</h3>${spark(st.cvd.filter((_, i, a) => i % Math.ceil(a.length / 300 || 1) === 0).map((x) => x.value), { color: (st.cvd.at(-1)?.value ?? 0) >= 0 ? 'var(--up)' : 'var(--down)' })}
+        <div class="scroll" style="max-height:260px;overflow-y:auto"><table class="tbl"><thead><tr><th>時間</th><th>買／賣</th><th class="r">價格</th><th class="r">金額</th><th>交易所</th></tr></thead><tbody>
+          ${big.map((t) => `<tr><td class="num">${tw(t.time).slice(6)}<span class="muted">:${String(new Date(t.time).getSeconds()).padStart(2, '0')}</span></td><td class="${t.side === 'buy' ? 'up' : 'down'}">${t.side === 'buy' ? '大單買進' : '大單賣出'}</td><td class="r num">${fp(t.price)}</td><td class="r num"><b>${fu(t.notional)}</b></td><td>${t.ex}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">最近一小時還沒有超過門檻的成交</td></tr>'}
+        </tbody></table></div></div>
+      <div class="sec" style="min-width:0"><h3>大戶 vs 散戶多空比（Binance，近 4 小時）</h3>${ratio ? `
+        <p class="num" style="margin:0">大戶持倉：<span class="up">多 ${(ratio.top.long * 100).toFixed(1)}%</span>／<span class="down">空 ${(ratio.top.short * 100).toFixed(1)}%</span>${ratio.global ? `<br>全部帳戶：<span class="up">多 ${(ratio.global.long * 100).toFixed(1)}%</span>／<span class="down">空 ${(ratio.global.short * 100).toFixed(1)}%</span>` : ''}</p>
+        <p style="margin:6px 0">${esc(ratio.zh)}</p>
+        <div class="note">大戶多單比例</div>${spark(whale.top.map((x) => x.long), { color: 'var(--info)' })}
+        ${whale.crowd ? `<div class="note">全部帳戶多單比例</div>${spark(whale.crowd.map((x) => x.long), { color: 'var(--muted)' })}` : ''}
+        <p class="note" style="margin:6px 0 0">「大戶」是 Binance 保證金餘額前 20% 的帳戶，看的是持倉金額比例，不是人數。</p>` : '<p class="muted">Binance 沒有這個幣的大戶數據（只有 Binance 有上架的合約才有）。</p>'}</div>
+    </div>`;
 }
 
 function trendCell(t) {
