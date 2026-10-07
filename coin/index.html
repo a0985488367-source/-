@@ -34,6 +34,9 @@
   .price { font-size: 30px; font-weight: 700; }
   .kv { display: grid; gap: 1px; } .kv span { font-size: 12px; color: var(--muted); } .kv b { font-size: 15px; }
   .status { font-size: 12px; color: var(--dim); margin-left: auto; }
+  .modes { display: flex; gap: 6px; flex-wrap: wrap; }
+  .modes button { background: var(--card2); color: var(--muted); border: 1px solid var(--line); padding: 6px 10px; font-size: 13px; font-weight: 600; }
+  .modes button[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
   .grid2 { display: grid; gap: 16px; grid-template-columns: 1fr; }
   @media (min-width: 980px) { .grid2 { grid-template-columns: 1.15fr .85fr; } }
   .verdict { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 10px; }
@@ -106,6 +109,10 @@
       <div class="kv"><span>未平倉量 24h</span><b class="num" id="oi">-</b></div>
       <div class="kv"><span>多空比（帳戶）</span><b class="num" id="ls">-</b></div>
       <a class="kv" id="tv" target="_blank" rel="noopener" style="color:var(--info);text-decoration:none"><span>看圖</span><b>TradingView ↗</b></a>
+      <div class="modes" role="group" aria-label="計算方式">
+        <button type="button" id="mode-live" aria-pressed="true">即時（含盤中 K 棒）</button>
+        <button type="button" id="mode-closed" aria-pressed="false">收盤確認（跟 Discord、TV 一樣）</button>
+      </div>
       <span class="status" id="status"></span>
     </div>
   </section>
