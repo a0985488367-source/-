@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>幣種全週期雷達</title>
+<meta name="theme-color" content="#0b0e14" />
+<style>
+  /* 版面：搜尋列 → 多空總結＋最值得看的計畫 → 價格地圖（所有關鍵價位排成一條梯子）→ 各週期一覽 → 各週期細節 → 合約數據 */
+  :root {
+    --bg: #0b0e14; --card: #131722; --card2: #1a1f2b; --line: #2a2e39; --fg: #e3e6ec; --muted: #8b97a8; --dim: #5d6779;
+    --up: #26a69a; --down: #ef5350; --warn: #e2b13c; --info: #3aa0ff; --accent: #6c5ce7;
+    --up-bg: rgba(38, 166, 154, .14); --down-bg: rgba(239, 83, 80, .14); --warn-bg: rgba(226, 177, 60, .14); --info-bg: rgba(58, 160, 255, .12);
+    --num: "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.55 -apple-system, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif; }
+  main { max-width: 1240px; margin: 0 auto; padding-inline: 16px; padding-block: 16px 64px; display: grid; gap: 16px; }
+  h1 { font-size: 20px; margin: 0; }
+  h2 { font-size: 15px; margin: 0 0 10px; color: var(--muted); font-weight: 600; letter-spacing: .03em; }
+  .num { font-family: var(--num); font-variant-numeric: tabular-nums; }
+  .up { color: var(--up); } .down { color: var(--down); } .muted { color: var(--muted); } .warn { color: var(--warn); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; min-width: 0; }
+  .top { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .search { display: flex; gap: 8px; flex: 1 1 280px; min-width: 0; }
+  .search input { flex: 1; min-width: 0; background: var(--card2); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font-size: 17px; font-family: inherit; text-transform: uppercase; }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 10px 16px; font-size: 15px; font-weight: 600; cursor: pointer; font-family: inherit; }
+  button.ghost { background: transparent; border: 1px solid var(--line); color: var(--muted); font-weight: 500; padding: 6px 10px; font-size: 13px; }
+  input:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .quick { display: flex; gap: 6px; flex-wrap: wrap; }
+  .quick button { background: var(--card2); color: var(--muted); border: 1px solid var(--line); padding: 4px 10px; font-size: 13px; font-weight: 500; }
+  .pricebar { display: flex; gap: 18px; align-items: baseline; flex-wrap: wrap; }
+  .price { font-size: 30px; font-weight: 700; }
+  .kv { display: grid; gap: 1px; } .kv span { font-size: 12px; color: var(--muted); } .kv b { font-size: 15px; }
+  .status { font-size: 12px; color: var(--dim); margin-left: auto; }
+  .grid2 { display: grid; gap: 16px; grid-template-columns: 1fr; }
+  @media (min-width: 980px) { .grid2 { grid-template-columns: 1.15fr .85fr; } }
+  .verdict { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 10px; }
+  .badge { font-size: 22px; font-weight: 800; padding: 4px 14px; border-radius: 10px; }
+  .badge.bullish { background: var(--up-bg); color: var(--up); } .badge.bearish { background: var(--down-bg); color: var(--down); } .badge.neutral { background: var(--card2); color: var(--muted); }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip { font-size: 12.5px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line); background: var(--card2); }
+  .chip.bullish { border-color: var(--up); color: var(--up); } .chip.bearish { border-color: var(--down); color: var(--down); }
+  .narr { margin: 10px 0 0; padding-left: 18px; display: grid; gap: 6px; }
+  .plan { display: grid; gap: 8px; }
+  .plan .head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  .plan .dir { font-weight: 800; font-size: 18px; }
+  .plan table, .tbl { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  .plan td, .tbl td, .tbl th { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+  .tbl th { color: var(--muted); font-weight: 500; font-size: 12px; white-space: nowrap; position: sticky; top: 0; background: var(--card); }
+  .r { text-align: right !important; }
+  .scroll { overflow-x: auto; max-width: 100%; }
+  .grid2 > *, main > * { min-width: 0; }
+  .tbl td[colspan] { white-space: normal; }
+  .tbl td, .tbl th { white-space: nowrap; }
+  .narr li, .sec li { overflow-wrap: anywhere; }
+  .ladder { display: grid; gap: 0; font-size: 13.5px; max-height: 640px; overflow-y: auto; }
+  .lrow { display: grid; grid-template-columns: 110px 72px 1fr; gap: 10px; padding: 5px 8px; border-bottom: 1px solid var(--line); align-items: center; }
+  .lrow.now { background: var(--info-bg); font-weight: 700; position: sticky; top: 0; bottom: 0; z-index: 1; }
+  .lrow .tags { display: flex; gap: 4px; flex-wrap: wrap; }
+  .tag { font-size: 11.5px; padding: 1px 7px; border-radius: 6px; background: var(--card2); color: var(--muted); white-space: nowrap; }
+  .tag.liq { background: var(--warn-bg); color: var(--warn); }
+  .tag.key { background: var(--info-bg); color: var(--info); }
+  .tag.bull { background: var(--up-bg); color: var(--up); }
+  .tag.bear { background: var(--down-bg); color: var(--down); }
+  .tag.plan { background: rgba(108, 92, 231, .18); color: #a99cf5; }
+  .tag.liqd { background: rgba(239, 83, 80, .08); color: #d98a88; }
+  details.tf { background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
+  details.tf > summary { cursor: pointer; padding: 12px 16px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; list-style: none; }
+  details.tf > summary::-webkit-details-marker { display: none; }
+  details.tf > summary .tfname { font-weight: 800; font-size: 17px; min-width: 42px; }
+  details.tf .body { padding: 0 16px 16px; display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+  .sec h3 { font-size: 13px; color: var(--muted); margin: 0 0 6px; font-weight: 600; letter-spacing: .03em; }
+  .sec ul { margin: 0; padding-left: 16px; display: grid; gap: 3px; font-size: 13.5px; }
+  .bar { height: 8px; border-radius: 4px; background: var(--card2); overflow: hidden; }
+  .bar i { display: block; height: 100%; }
+  .note { font-size: 12.5px; color: var(--dim); }
+  .err { background: var(--down-bg); color: var(--down); border-radius: 10px; padding: 12px 14px; font-weight: 600; }
+  .loading { color: var(--muted); padding: 40px 0; text-align: center; }
+  .check { font-size: 12.5px; }
+  @media (max-width: 560px) { .price { font-size: 24px; } .lrow { grid-template-columns: 92px 62px 1fr; gap: 6px; } }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<main>
+  <header class="card top">
+    <h1>幣種全週期雷達</h1>
+    <form class="search" id="form">
+      <input id="q" list="symbols" placeholder="輸入幣種，例如 BTC、SOL、PEPE" autocomplete="off" spellcheck="false" />
+      <datalist id="symbols"></datalist>
+      <button type="submit" id="go">查詢</button>
+    </form>
+    <div class="quick" id="quick"></div>
+  </header>
+
+  <section class="card" id="head" hidden>
+    <div class="pricebar">
+      <div class="kv"><span id="symName"></span><b class="price num" id="price">-</b></div>
+      <div class="kv"><span>24h 漲跌</span><b class="num" id="chg">-</b></div>
+      <div class="kv"><span>24h 高／低</span><b class="num" id="hl">-</b></div>
+      <div class="kv"><span>資金費率（8h）</span><b class="num" id="fund">-</b></div>
+      <div class="kv"><span>未平倉量 24h</span><b class="num" id="oi">-</b></div>
+      <div class="kv"><span>多空比（帳戶）</span><b class="num" id="ls">-</b></div>
+      <a class="kv" id="tv" target="_blank" rel="noopener" style="color:var(--info);text-decoration:none"><span>看圖</span><b>TradingView ↗</b></a>
+      <span class="status" id="status"></span>
+    </div>
+  </section>
+
+  <div id="out"><p class="loading">輸入幣種開始分析（Bybit USDT 永續，15m～週線）</p></div>
+
+  <p class="note">資料：Bybit USDT 永續（K 棒、多空比），資金費率／未平倉量依序試 Binance、Bybit、OKX。SMC 計畫跟 App、TradingView 指標、Discord 推播同一套算法（每個週期最近 499 根已收盤 K 棒）。
+    爆倉密集區是用成交量和常見槓桿推估的，不是交易所公布的數字。回測顯示 SMC 計畫照單全收是虧的，只當參考；Demo 自動下單用的是 4h／6h 順勢策略。</p>
+</main>
+<script type="module" src="./app.js"></script>
+</body>
+</html>
