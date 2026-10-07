@@ -72,3 +72,28 @@ test('爆倉估算：多單強平在現價下方、空單在上方；已經被�
   // 100 倍的強平（約 ±0.5%）已經被每根 K 棒的高低點（±0.8%）走過 → 不該出現在 99.2～100.8 之間
   for (const x of [...r.longs, ...r.shorts]) assert.ok(x.price < 99.2 || x.price > 100.8, JSON.stringify(x));
 });
+
+test('多空打架：同一帶價位有效計畫一多一空要抓出來；不同價位不算', async () => {
+  const { planConflicts } = await import('../src/radar/coin-report.js');
+  const c = planConflicts([
+    { tf: '15m', dir: 'short', entry: 2620 },
+    { tf: '1h', dir: 'long', entry: 2608 },
+    { tf: '4h', dir: 'long', entry: 2614.5 },
+    { tf: '1d', dir: 'long', entry: 2400 },
+  ]);
+  assert.equal(c.length, 1);
+  assert.deepEqual(c[0].shorts, ['15m']);
+  assert.deepEqual(c[0].longs.sort(), ['1h', '4h']);
+  assert.ok(c[0].low === 2608 && c[0].high === 2620);
+  assert.equal(planConflicts([{ tf: '1h', dir: 'long', entry: 100 }, { tf: '4h', dir: 'short', entry: 110 }]).length, 0);
+});
+
+test('整體中性時最值得看的計畫要跟日線／週線同方向（有的話）', () => {
+  for (const seed of [3, 7, 11, 19, 23]) {
+    const all = makeAll(seed);
+    const r = buildCoinReport(all, { daily: all['1d'], h1: all['1h'] });
+    if (!r.best || r.agg.label !== 'neutral' || !r.htf?.dir) continue;
+    const aligned = r.plans.filter((p) => p.valid && p.dir === r.htf.dir);
+    if (aligned.length) assert.equal(r.best.dir, r.htf.dir, `seed ${seed}`);
+  }
+});

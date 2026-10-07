@@ -196,14 +196,24 @@ export function buildCoinReport(tfCandles, opts = {}) {
   const price = opts.price ?? reports[0].price;
 
   const agg = aggregateBias(reports.map((r) => ({ interval: r.interval, bias: r.bias })));
-  const want = agg.label === 'bullish' ? 'long' : agg.label === 'bearish' ? 'short' : null;
-  const plans = reports.filter((r) => !r.setup.none).map((r) => ({ tf: r.interval, ...r.setup, distPct: round(pctFrom(r.setup.entry, price), 3) }));
+  // 大方向＝日線＋週線（加權）；整體中性時，「最值得看」改挑跟大方向同一邊的計畫
+  const hiRows = reports.filter((r) => ['1d', '1w'].includes(r.interval));
+  const htf = hiRows.length ? aggregateBias(hiRows.map((r) => ({ interval: r.interval, bias: r.bias }))) : null;
+  const dirOf = (label) => (label === 'bullish' ? 'long' : label === 'bearish' ? 'short' : null);
+  const htfDir = htf ? dirOf(htf.label) : null;
+  const want = dirOf(agg.label) ?? htfDir;
+  const plans = reports.filter((r) => !r.setup.none).map((r) => ({
+    tf: r.interval, ...r.setup, distPct: round(pctFrom(r.setup.entry, price), 3),
+    againstHtf: !!htfDir && r.setup.dir !== htfDir,
+  }));
   const validPlans = plans.filter((p) => p.valid);
-  // 最值得看的週期：計畫有效、方向跟整體偏向一致（中性時不限）、分數高、離現價近
+  // 最值得看的週期：計畫有效、方向跟整體偏向一致（整體中性就跟日線／週線一致）、分數高、離現價近
   const ranked = validPlans
-    .map((p) => ({ ...p, rank: p.score + (want ? (p.dir === want ? 15 : -20) : 0) - Math.min(30, Math.abs(p.distPct) * 6) + (TF_WEIGHT[p.tf] ?? 1) * 2 }))
+    .map((p) => ({ ...p, rank: p.score + (want ? (p.dir === want ? 15 : -25) : 0) - Math.min(30, Math.abs(p.distPct) * 6) + (TF_WEIGHT[p.tf] ?? 1) * 2 }))
     .sort((x, y) => y.rank - x.rank);
-  const best = ranked[0] ?? null;
+  // 有跟大方向同一邊的有效計畫就只從裡面挑；都沒有才退回逆向的（會標「逆大週期」）
+  const best = (want && ranked.find((p) => p.dir === want)) || ranked[0] || null;
+  const conflicts = planConflicts(validPlans);
 
   const liqAbove = mergeLevels(reports.flatMap((r) => r.liquidity.above.map((p) => ({ ...p, tf: r.interval }))), price)
     .filter((x) => x.price > price).sort((a, b) => a.price - b.price).slice(0, 6);
@@ -219,7 +229,10 @@ export function buildCoinReport(tfCandles, opts = {}) {
     price,
     generatedAt: Date.now(),
     agg: { score: agg.score, label: agg.label, labelZh: agg.labelZh, alignment: agg.alignment, bulls: agg.bulls, bears: agg.bears, neutrals: agg.neutrals, conflict: agg.conflict },
+    htf: htf ? { score: htf.score, label: htf.label, labelZh: htf.labelZh, dir: htfDir } : null,
+    want,
     best,
+    conflicts,
     plans: plans.sort((a, b) => Math.abs(a.distPct) - Math.abs(b.distPct)),
     liqAbove,
     liqBelow,
@@ -227,27 +240,48 @@ export function buildCoinReport(tfCandles, opts = {}) {
     levels,
     liquidation,
     tfs: reports,
-    narrative: narrativeZh({ agg, reports, best, liqAbove, liqBelow, price, derivatives: opts.derivatives, lsRatio: opts.lsRatio }),
+    narrative: narrativeZh({ agg, htf, reports, best, conflicts, liqAbove, liqBelow, price, derivatives: opts.derivatives, lsRatio: opts.lsRatio }),
   };
+}
+
+/**
+ * 同一帶價位有多有空：有效計畫的進場價彼此在 tolPct 內、方向相反 → 回傳 [{ low, high, longs: [tf], shorts: [tf] }]
+ */
+export function planConflicts(plans, tolPct = 1) {
+  const xs = [...plans].sort((a, b) => a.entry - b.entry);
+  const groups = [];
+  for (const p of xs) {
+    const g = groups[groups.length - 1];
+    if (g && Math.abs((p.entry - g.high) / g.high) * 100 <= tolPct) { g.high = p.entry; g.items.push(p); } else groups.push({ low: p.entry, high: p.entry, items: [p] });
+  }
+  return groups
+    .map((g) => ({ low: g.low, high: g.high, longs: g.items.filter((p) => p.dir === 'long').map((p) => p.tf), shorts: g.items.filter((p) => p.dir === 'short').map((p) => p.tf) }))
+    .filter((g) => g.longs.length && g.shorts.length);
 }
 
 const BIAS_ZH = { bullish: '偏多', bearish: '偏空', neutral: '中性' };
 const fmt = (p) => (p >= 1000 ? p.toFixed(1) : p >= 1 ? p.toFixed(4) : p.toPrecision(4));
 
 /** 給人看的總結（幾句話） */
-export function narrativeZh({ agg, reports, best, liqAbove, liqBelow, price, derivatives, lsRatio }) {
+export function narrativeZh({ agg, htf, reports, best, conflicts = [], liqAbove, liqBelow, price, derivatives, lsRatio }) {
   const lines = [];
+  const d = (p) => { const v = round(pctFrom(p, price), 2); return `${v > 0 ? '+' : ''}${v}%`; };
   const bull = reports.filter((r) => r.bias.score > 10).map((r) => r.interval);
   const bear = reports.filter((r) => r.bias.score < -10).map((r) => r.interval);
   const hi = reports.filter((r) => ['1d', '1w'].includes(r.interval)).map((r) => `${r.interval} ${BIAS_ZH[r.bias.label]}`).join('、');
   lines.push(`整體${agg.labelZh}（${agg.score > 0 ? '+' : ''}${agg.score}），${agg.alignment}% 的週期方向一致。偏多：${bull.join('、') || '沒有'}；偏空：${bear.join('、') || '沒有'}。${hi ? `大方向看 ${hi}。` : ''}`);
   if (agg.conflict) lines.push('多空週期數差不多，方向打架：短線容易來回掃，進場要更挑、倉位小一點。');
+  if (agg.label === 'neutral' && htf && htf.label !== 'neutral') lines.push(`整體中性，但大週期（日線＋週線）${BIAS_ZH[htf.label]}：優先找${htf.label === 'bullish' ? '多' : '空'}單，逆大週期的計畫只當短線。`);
+  for (const c of conflicts) {
+    const zone = c.low === c.high ? fmt(c.low) : `${fmt(c.low)}～${fmt(c.high)}`;
+    lines.push(`⚠ ${zone} 這一帶多空打架：${c.longs.join('／')} 要做多、${c.shorts.join('／')} 要做空。等其中一邊被收盤打破再進，或只跟大週期那一邊。`);
+  }
   if (best) {
-    lines.push(`最值得看：${best.tf} ${best.dir === 'long' ? '做多' : '做空'}（${best.grade} 級 ${best.score} 分），${best.entryType === 'market' ? '價格已經在進場區' : `等回到 ${fmt(best.entry)}（離現價 ${best.distPct > 0 ? '+' : ''}${best.distPct}%）`}，停損 ${fmt(best.stop)}${best.targets[0] ? `，第一目標 ${fmt(best.targets[0].price)}（${best.targets[0].rr}R）` : ''}。`);
+    lines.push(`最值得看：${best.tf} ${best.dir === 'long' ? '做多' : '做空'}（${best.grade} 級 ${best.score} 分${best.againstHtf ? '，逆大週期' : ''}），${best.entryType === 'market' ? '價格已經在進場區' : `等回到 ${fmt(best.entry)}（離現價 ${d(best.entry)}）`}，停損 ${fmt(best.stop)}${best.targets[0] ? `，第一目標 ${fmt(best.targets[0].price)}（${best.targets[0].rr}R）` : ''}。`);
   } else lines.push('現在沒有任何週期有「有效」的進場計畫：等價格回到進場區或結構轉向。');
-  const up = liqAbove[0], dn = liqBelow[0];
+  const up = liqAbove.find((x) => x.price > price), dn = liqBelow.find((x) => x.price < price);
   if (up || dn) {
-    lines.push(`上方最近的流動性 ${up ? `${fmt(up.price)}（+${up.distPct}%，${up.tfs.join('／')} 都看得到${up.touches > 1 ? `、${up.touches} 次碰到` : ''}）` : '沒有'}；下方 ${dn ? `${fmt(dn.price)}（${dn.distPct}%，${dn.tfs.join('／')}${dn.touches > 1 ? `、${dn.touches} 次碰到` : ''}）` : '沒有'}。價格常會先去掃比較近、比較多週期重疊的那一邊。`);
+    lines.push(`上方最近的流動性 ${up ? `${fmt(up.price)}（${d(up.price)}，${up.tfs.join('／')} 都看得到${up.touches > 1 ? `、${up.touches} 次碰到` : ''}）` : '沒有'}；下方 ${dn ? `${fmt(dn.price)}（${d(dn.price)}，${dn.tfs.join('／')}${dn.touches > 1 ? `、${dn.touches} 次碰到` : ''}）` : '沒有'}。價格常會先去掃比較近、比較多週期重疊的那一邊。`);
   }
   if (derivatives && Number.isFinite(derivatives.fundingRate)) {
     const fr = derivatives.fundingRate * 100;
