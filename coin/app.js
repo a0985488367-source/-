@@ -7,7 +7,7 @@
 import { PROVIDERS } from '../src/data/providers.js';
 import { fetchDerivatives } from '../src/data/derivatives.js';
 import { oiChangePct, annualizeFunding, fundingCountdown } from '../src/smc/derivatives.js';
-import { buildCoinReport, REPORT_TFS } from '../src/radar/coin-report.js';
+import { buildCoinReport, narrativeZh, REPORT_TFS } from '../src/radar/coin-report.js';
 import { bigTradeThreshold, detectWalls, trackWalls, tradeStats, whaleVsCrowd } from '../src/radar/whales.js';
 
 const bybit = PROVIDERS.bybit;
@@ -107,6 +107,7 @@ async function tick() {
     ticker = tk;
     livePrice = tk.price;
     renderHead();
+    renderSummary();
     renderLadder();
     renderBest();
   } catch { /* 下一次再試 */ }
@@ -268,7 +269,13 @@ function renderHead() {
   $('tv').href = `https://www.tradingview.com/chart/?symbol=BYBIT:${sym}.P`;
 }
 
+/** 總結文字用即時價格重寫（距離％跟下面卡片一致） */
+function liveNarrative() {
+  return narrativeZh({ agg: report.agg, htf: report.htf, reports: report.tfs, best: report.best, conflicts: report.conflicts, liqAbove: report.liqAbove, liqBelow: report.liqBelow, price: livePrice, derivatives: deriv, lsRatio: ls });
+}
+
 function renderSummary() {
+  if (!$('summary')) return;
   const a = report.agg;
   $('summary').innerHTML = `
     <h2>多空總結（15m～週線，越大的週期權重越高）</h2>
@@ -277,7 +284,7 @@ function renderSummary() {
       <span class="num">分數 ${a.score > 0 ? '+' : ''}${a.score}／方向一致 ${a.alignment}%（多 ${a.bulls}、空 ${a.bears}、中性 ${a.neutrals}）</span>
     </div>
     <div class="chips">${report.tfs.map((t) => `<span class="chip ${biasCls(t.bias.score)}">${t.interval} ${BIAS[biasCls(t.bias.score)]} <span class="num">${t.bias.score > 0 ? '+' : ''}${t.bias.score}</span></span>`).join('')}</div>
-    <ul class="narr">${report.narrative.map((s) => `<li>${esc(s)}</li>`).join('')}</ul>`;
+    <ul class="narr">${liveNarrative().map((s) => `<li class="${s.startsWith('⚠') ? 'warn' : ''}">${esc(s)}</li>`).join('')}</ul>`;
 }
 
 function planTable(p) {
@@ -297,13 +304,14 @@ function renderBest() {
   $('best').innerHTML = `
     <h2>最值得看的週期</h2>
     ${b ? `<div class="plan">
-      <div class="head"><span class="dir ${b.dir === 'long' ? 'up' : 'down'}">${b.tf} ${DIRZ[b.dir]}</span><span class="chip">${b.grade} 級 ${b.score} 分</span><span class="muted">最後目標 ${b.rrFinal}R</span></div>
+      <div class="head"><span class="dir ${b.dir === 'long' ? 'up' : 'down'}">${b.tf} ${DIRZ[b.dir]}</span><span class="chip">${b.grade} 級 ${b.score} 分</span><span class="muted">最後目標 ${b.rrFinal}R</span>${b.againstHtf ? '<span class="chip bearish">逆大週期，只當短線</span>' : report.htf?.dir ? '<span class="chip bullish">跟日線／週線同方向</span>' : ''}</div>
+      ${report.conflicts.filter((c) => b.entry >= c.low * 0.99 && b.entry <= c.high * 1.01).map((c) => `<p class="warn" style="margin:0">⚠ 這一帶多空打架：${c.longs.join('／')} 做多、${c.shorts.join('／')} 做空。等其中一邊被收盤打破再進。</p>`).join('')}
       ${planTable(b)}
       ${b.invalidation ? `<div class="note">失效條件：${esc(b.invalidation)}</div>` : ''}
     </div>` : '<p class="muted">現在沒有任何週期有有效的進場計畫，等價格回到進場區或結構轉向。</p>'}
     ${others.length ? `<h2 style="margin-top:14px">其他有效計畫（由近到遠）</h2>
       <div class="scroll"><table class="tbl"><thead><tr><th>週期</th><th>方向</th><th class="r">進場</th><th class="r">距離</th><th class="r">停損</th><th class="r">分數</th></tr></thead><tbody>
-      ${others.map((p) => `<tr><td>${p.tf}</td><td class="${p.dir === 'long' ? 'up' : 'down'}">${DIRZ[p.dir]}</td><td class="r num">${fp(p.entry)}</td><td class="r num ${dcls(dist(p.entry))}">${fd(dist(p.entry))}</td><td class="r num">${fp(p.stop)}</td><td class="r num">${p.grade} ${p.score}</td></tr>`).join('')}
+      ${others.map((p) => `<tr><td>${p.tf}</td><td class="${p.dir === 'long' ? 'up' : 'down'}">${DIRZ[p.dir]}${p.againstHtf ? ' <span class="muted">逆大週期</span>' : ''}</td><td class="r num">${fp(p.entry)}</td><td class="r num ${dcls(dist(p.entry))}">${fd(dist(p.entry))}</td><td class="r num">${fp(p.stop)}</td><td class="r num">${p.grade} ${p.score}</td></tr>`).join('')}
       </tbody></table></div>` : ''}`;
 }
 
