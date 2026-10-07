@@ -293,3 +293,58 @@ export function narrativeZh({ agg, htf, reports, best, conflicts = [], liqAbove,
   }
   return lines;
 }
+
+const TF_MS = { '15m': 9e5, '30m': 18e5, '1h': 36e5, '2h': 72e5, '4h': 144e5, '6h': 216e5, '1d': 864e5, '1w': 6048e5 };
+
+/** 這個週期下一根 K 棒收盤的時間（UTC 對齊；週線從星期一 00:00 UTC 起算＝台灣星期一早上 8 點） */
+export function nextCloseTime(interval, now = Date.now()) {
+  const ms = TF_MS[interval];
+  if (!ms) return null;
+  if (interval === '1w') {
+    const MON = 4 * 864e5; // 1970-01-01 是星期四，往後 4 天是星期一
+    return Math.floor((now - MON) / ms) * ms + MON + ms;
+  }
+  return Math.floor(now / ms) * ms + ms;
+}
+
+/**
+ * 兩次重算之間變了什麼（給畫面列「最近變化」）。回傳 [{ kind, zh }]，沒有變化回傳空陣列。
+ * 只比較會影響判斷的：整體偏向、各週期偏向（變號或變動 ≥ 5 分）、最值得看、各週期計畫（出現／消失／換方向／進場價變）、新的獵取、新的多空打架。
+ */
+export function diffReports(prev, next) {
+  if (!prev || !next || prev.empty || next.empty) return [];
+  const out = [];
+  const lab = { bullish: '偏多', bearish: '偏空', neutral: '中性' };
+  const sign = (v) => `${v > 0 ? '+' : ''}${v}`;
+  if (prev.agg.label !== next.agg.label) out.push({ kind: 'agg', zh: `整體 ${lab[prev.agg.label]} → ${lab[next.agg.label]}（${sign(prev.agg.score)} → ${sign(next.agg.score)}）` });
+  else if (Math.abs(prev.agg.score - next.agg.score) >= 3) out.push({ kind: 'agg', zh: `整體分數 ${sign(prev.agg.score)} → ${sign(next.agg.score)}` });
+  const prevTf = new Map(prev.tfs.map((t) => [t.interval, t]));
+  for (const t of next.tfs) {
+    const p = prevTf.get(t.interval);
+    if (!p) continue;
+    const a = p.bias.score, b = t.bias.score;
+    const cls = (v) => (v > 10 ? 'bullish' : v < -10 ? 'bearish' : 'neutral');
+    if (cls(a) !== cls(b)) out.push({ kind: 'bias', zh: `${t.interval} ${lab[cls(a)]} → ${lab[cls(b)]}（${sign(a)} → ${sign(b)}）` });
+    else if (Math.abs(a - b) >= 5) out.push({ kind: 'bias', zh: `${t.interval} 偏向 ${sign(a)} → ${sign(b)}` });
+    const ps = p.setup, ns = t.setup;
+    const dz = (d) => (d === 'long' ? '多' : '空');
+    if (ps.none && !ns.none) out.push({ kind: 'plan', zh: `${t.interval} 出現新計畫：做${dz(ns.dir)} ${fmt(ns.entry)}` });
+    else if (!ps.none && ns.none) out.push({ kind: 'plan', zh: `${t.interval} 計畫消失（原本做${dz(ps.dir)} ${fmt(ps.entry)}）` });
+    else if (!ps.none && !ns.none) {
+      if (ps.dir !== ns.dir) out.push({ kind: 'plan', zh: `${t.interval} 計畫換方向：做${dz(ps.dir)} → 做${dz(ns.dir)}（${fmt(ns.entry)}）` });
+      else if (Math.abs((ns.entry - ps.entry) / ps.entry) > 0.001) out.push({ kind: 'plan', zh: `${t.interval} 進場價 ${fmt(ps.entry)} → ${fmt(ns.entry)}` });
+      if (ps.valid !== ns.valid) out.push({ kind: 'plan', zh: `${t.interval} 計畫${ns.valid ? '變成有效' : '變成無效'}` });
+    }
+    const lastP = p.liquidity.sweeps[0]?.time ?? 0;
+    for (const s of t.liquidity.sweeps.filter((x) => x.time > lastP)) out.push({ kind: 'sweep', zh: `${t.interval} 新的獵取：${s.side === 'buyside' ? '掃上方' : '掃下方'} ${fmt(s.level)}` });
+  }
+  const bk = (b) => (b ? `${b.tf}|${b.dir}` : '');
+  if (bk(prev.best) !== bk(next.best)) {
+    const z = (b) => (b ? `${b.tf} 做${b.dir === 'long' ? '多' : '空'}` : '沒有');
+    out.push({ kind: 'best', zh: `最值得看 ${z(prev.best)} → ${z(next.best)}` });
+  }
+  const ck = (c) => `${c.longs.join(',')}/${c.shorts.join(',')}`;
+  const prevC = new Set((prev.conflicts ?? []).map(ck));
+  for (const c of next.conflicts ?? []) if (!prevC.has(ck(c))) out.push({ kind: 'conflict', zh: `新的多空打架：${fmt(c.low)}～${fmt(c.high)}（${c.longs.join('／')} 多、${c.shorts.join('／')} 空）` });
+  return out;
+}

@@ -97,3 +97,33 @@ test('整體中性時最值得看的計畫要跟日線／週線同方向（有�
     if (aligned.length) assert.equal(r.best.dir, r.htf.dir, `seed ${seed}`);
   }
 });
+
+test('下一根收盤時間：一般週期照 UTC 對齊，週線從星期一 00:00 UTC 起算', async () => {
+  const { nextCloseTime } = await import('../src/radar/coin-report.js');
+  const t = Date.UTC(2026, 9, 7, 10, 22); // 星期三 10:22 UTC
+  assert.equal(nextCloseTime('15m', t), Date.UTC(2026, 9, 7, 10, 30));
+  assert.equal(nextCloseTime('4h', t), Date.UTC(2026, 9, 7, 12, 0));
+  assert.equal(nextCloseTime('1d', t), Date.UTC(2026, 9, 8, 0, 0));
+  assert.equal(nextCloseTime('1w', t), Date.UTC(2026, 9, 12, 0, 0)); // 下週一
+});
+
+test('兩次重算的差異：偏向變號、計畫換方向、最值得看換掉都要列出來', async () => {
+  const { diffReports } = await import('../src/radar/coin-report.js');
+  const tf = (interval, score, setup, sweeps = []) => ({ interval, bias: { score }, setup, liquidity: { sweeps } });
+  const prev = {
+    agg: { label: 'neutral', score: -12 }, best: { tf: '15m', dir: 'short' }, conflicts: [],
+    tfs: [tf('15m', -70, { dir: 'short', entry: 2620, valid: true }), tf('1h', 5, { none: true })],
+  };
+  const next = {
+    agg: { label: 'neutral', score: -11 }, best: { tf: '2h', dir: 'long' }, conflicts: [{ low: 2595, high: 2620, longs: ['1h'], shorts: ['15m'] }],
+    tfs: [tf('15m', 20, { dir: 'long', entry: 2600, valid: true }), tf('1h', -30, { dir: 'long', entry: 2595, valid: true }, [{ time: 9, side: 'sellside', level: 2590 }])],
+  };
+  const zh = diffReports(prev, next).map((d) => d.zh).join('\n');
+  assert.match(zh, /15m 偏空 → 偏多/);
+  assert.match(zh, /15m 計畫換方向/);
+  assert.match(zh, /1h 出現新計畫/);
+  assert.match(zh, /1h 新的獵取/);
+  assert.match(zh, /最值得看 15m 做空 → 2h 做多/);
+  assert.match(zh, /新的多空打架/);
+  assert.deepEqual(diffReports(next, next), []);
+});
