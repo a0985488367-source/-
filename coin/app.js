@@ -7,7 +7,7 @@
 import { PROVIDERS } from '../src/data/providers.js';
 import { fetchDerivatives } from '../src/data/derivatives.js';
 import { oiChangePct, annualizeFunding, fundingCountdown } from '../src/smc/derivatives.js';
-import { buildCoinReport, narrativeZh, REPORT_TFS } from '../src/radar/coin-report.js';
+import { buildCoinReport, narrativeZh, nextCloseTime, diffReports, REPORT_TFS } from '../src/radar/coin-report.js';
 import { bigTradeThreshold, detectWalls, trackWalls, tradeStats, whaleVsCrowd } from '../src/radar/whales.js';
 
 const bybit = PROVIDERS.bybit;
@@ -26,6 +26,8 @@ let ls = null;
 let fullTimer = null;
 let tickTimer = null;
 let loadSeq = 0;
+let changes = []; // 最近幾次重算各自變了什麼 [{ time, items }]
+let lastCalc = null;
 const openTfs = new Set(['4h']);
 
 /* 大戶動向的即時狀態（換幣時清空） */
@@ -52,6 +54,12 @@ const DIRZ = { long: '做多', short: '做空', bull: '多', bear: '空' };
 const POI_ZH = { 'Order Block': 'OB', Breaker: 'Breaker', FVG: 'FVG', 'Inversion FVG': '反轉 FVG', 'Volume Imbalance': '量能缺口' };
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const fu = (n) => (!Number.isFinite(n) ? '-' : n >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(0)}K` : n.toFixed(0));
+const left = (ms) => {
+  const s = Math.max(0, Math.round(ms / 1000));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60;
+  if (h >= 24) return `${Math.floor(h / 24)}天${h % 24}時`;
+  return h ? `${h}:${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}` : `${m}:${String(ss).padStart(2, '0')}`;
+};
 const ago = (ms) => { const s = Math.max(0, Math.round((Date.now() - ms) / 1000)); return s < 60 ? `${s} 秒` : s < 3600 ? `${Math.floor(s / 60)} 分` : `${Math.floor(s / 3600)} 小時`; };
 const biasCls = (score) => (score > 10 ? 'bullish' : score < -10 ? 'bearish' : 'neutral');
 
@@ -89,8 +97,16 @@ async function loadAll(symbol, { quiet = false } = {}) {
     deriv = dv;
     ls = lr;
     setDecimals(livePrice);
+    const prevReport = report && report.symbol === symbol ? report : null;
     report = buildCoinReport(closed, { daily: raw[REPORT_TFS.indexOf('1d')], h1: closed['1h'], price: livePrice, derivatives: dv, lsRatio: lr });
     if (report.empty) throw new Error('資料不夠，沒辦法分析');
+    report.symbol = symbol;
+    lastCalc = Date.now();
+    if (!prevReport) changes = [];
+    else {
+      const items = diffReports(prevReport, report);
+      if (items.length) changes = [{ time: lastCalc, items }, ...changes].slice(0, 8);
+    }
     render();
     $('status').textContent = `分析於 ${tw(Date.now())}（每分鐘重算、價格每 3 秒更新）`;
   } catch (e) {
@@ -215,6 +231,8 @@ function start(symbol) {
   clearInterval(fullTimer);
   clearInterval(tickTimer);
   resetWhales(symbol);
+  report = null;
+  changes = [];
   loadAll(symbol);
   fullTimer = setInterval(() => loadAll(symbol, { quiet: true }), FULL_REFRESH_MS);
   tickTimer = setInterval(tick, TICK_MS);
@@ -283,8 +301,12 @@ function renderSummary() {
       <span class="badge ${a.label}">${a.labelZh}</span>
       <span class="num">分數 ${a.score > 0 ? '+' : ''}${a.score}／方向一致 ${a.alignment}%（多 ${a.bulls}、空 ${a.bears}、中性 ${a.neutrals}）</span>
     </div>
-    <div class="chips">${report.tfs.map((t) => `<span class="chip ${biasCls(t.bias.score)}">${t.interval} ${BIAS[biasCls(t.bias.score)]} <span class="num">${t.bias.score > 0 ? '+' : ''}${t.bias.score}</span></span>`).join('')}</div>
-    <ul class="narr">${liveNarrative().map((s) => `<li class="${s.startsWith('⚠') ? 'warn' : ''}">${esc(s)}</li>`).join('')}</ul>`;
+    <div class="chips">${report.tfs.map((t) => `<span class="chip ${biasCls(t.bias.score)}" title="下一根 K 棒收盤後這個週期才會重算">${t.interval} ${BIAS[biasCls(t.bias.score)]} <span class="num">${t.bias.score > 0 ? '+' : ''}${t.bias.score}</span> <span class="num muted">⏱${left(nextCloseTime(t.interval) - Date.now())}</span></span>`).join('')}</div>
+    <p class="note" style="margin:6px 0 0">⏱＝那個週期下一根 K 棒還有多久收盤；只用收盤的 K 棒算，收盤前數字不會變（價格和距離每 3 秒更新）。</p>
+    <ul class="narr">${liveNarrative().map((s) => `<li class="${s.startsWith('⚠') ? 'warn' : ''}">${esc(s)}</li>`).join('')}</ul>
+    <div class="sec" style="margin-top:12px"><h3>最近變化（每分鐘重算一次，有變才列）</h3>${changes.length
+      ? `<ul>${changes.map((c) => `<li><span class="num muted">${tw(c.time).slice(6)}</span> ${c.items.map((i) => `<span class="tag ${i.kind === 'best' || i.kind === 'conflict' ? 'liq' : i.kind === 'sweep' ? 'key' : ''}">${esc(i.zh)}</span>`).join(' ')}</li>`).join('')}</ul>`
+      : `<p class="muted" style="margin:0">打開之後還沒有變化。上次重算 ${lastCalc ? tw(lastCalc).slice(6) : '-'}；最快會變的是 15m，還有 ${left(nextCloseTime('15m') - Date.now())}。</p>`}</div>`;
 }
 
 function planTable(p) {
