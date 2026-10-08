@@ -1,0 +1,9 @@
+{
+  "name": "smc-signals-worker",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare Worker 的相依套件（只有部署打包時用；測試不需要安裝）",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.132.1"
+  }
+}

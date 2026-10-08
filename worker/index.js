@@ -196,6 +196,7 @@ import { breakoutSignal } from '../src/strategies/breakout.js';
 import { emaCrossSignal } from '../src/strategies/ema-cross.js';
 import { macdZeroSignal } from '../src/strategies/macd-zero.js';
 import { fakeoutSignal, FAKEOUT_DEFAULTS } from '../src/strategies/fakeout.js';
+import { handleAiAsk, AI_MODEL } from './ai.js';
 import { trendExtraSignal, trendExtraIndicators, TREND_EXTRA_STOP_ATR } from '../src/strategies/trend-extra.js';
 
 const DEFAULTS = {
@@ -426,9 +427,9 @@ export default {
     ctx.waitUntil(run(env));
   },
 
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     try {
-      return await handleFetch(request, env);
+      return await handleFetch(request, env, ctx);
     } catch (e) {
       // 沒有這層以前，任何一個 route 裡沒接住的例外都會變成 Cloudflare
       // 自己的「error code: 1101」錯誤頁——完全看不出是哪一行炸的，之前
@@ -439,8 +440,21 @@ export default {
   },
 };
 
-async function handleFetch(request, env) {
+async function handleFetch(request, env, ctx) {
     const url = new URL(request.url);
+    // 幣種雷達（coin/）的「問 AI」：金鑰在 Worker，網頁帶使用者自己設的密碼（x-ai-token）
+    if (url.pathname === '/ai/ask') {
+      if (request.method === 'OPTIONS') {
+        return new Response(null, { status: 204, headers: { ...CORS_HEADERS, 'access-control-allow-methods': 'POST, OPTIONS', 'access-control-allow-headers': 'content-type, x-ai-token', 'access-control-max-age': '86400' } });
+      }
+      if (request.method !== 'POST') return json({ error: '請用 POST' }, { status: 405 });
+      return handleAiAsk(request, env, { cors: CORS_HEADERS, waitUntil: ctx?.waitUntil?.bind(ctx) });
+    }
+    if (url.pathname === '/ai/status') {
+      const day = new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10);
+      const used = env.SMC_KV ? Number((await env.SMC_KV.get(`ai:count:${day}`).catch(() => null)) || 0) : null;
+      return json({ configured: !!(env.ANTHROPIC_API_KEY && env.AI_TOKEN), model: AI_MODEL, dailyLimit: Number(env.AI_DAILY_LIMIT ?? 100), usedToday: used });
+    }
     if (url.pathname === '/run') {
       const result = await run(env, { dry: url.searchParams.get('dry') === '1' });
       return json(result);

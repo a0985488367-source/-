@@ -9,6 +9,7 @@ import { fetchDerivatives } from '../src/data/derivatives.js';
 import { oiChangePct, annualizeFunding, fundingCountdown } from '../src/smc/derivatives.js';
 import { buildCoinReport, narrativeZh, nextCloseTime, diffReports, REPORT_TFS } from '../src/radar/coin-report.js';
 import { bigTradeThreshold, detectWalls, trackWalls, tradeStats, whaleVsCrowd } from '../src/radar/whales.js';
+import { buildAiSnapshot, aiUserMessage } from '../src/radar/ai-context.js';
 
 const bybit = PROVIDERS.bybit;
 const $ = (id) => document.getElementById(id);
@@ -304,6 +305,7 @@ function start(symbol) {
   clearInterval(fullTimer);
   clearInterval(tickTimer);
   resetWhales(symbol);
+  if (!$('ai-panel').hidden) aiOpen();
   report = null;
   rawTf = null;
   changes = [];
@@ -630,6 +632,158 @@ function renderTfs() {
     d.addEventListener('toggle', () => { if (d.open) openTfs.add(d.dataset.tf); else openTfs.delete(d.dataset.tf); });
   }
 }
+
+
+/* ───────────── 問 AI ───────────── */
+const AI_KEY = 'coin-radar:ai';
+const AI_DEFAULT_URL = 'https://smc-signals.crypto-radar-guardian-24x7.workers.dev';
+// Claude Opus 5.5 價格（美元／百萬 token）：輸入 4、輸出 20、快取讀 0.2、快取寫 5；網路搜尋每次 0.01
+const AI_PRICE = { in: 4, out: 20, cacheRead: 0.2, cacheWrite: 5, search: 0.01 };
+const USD_TWD = 32;
+const AI_QUICK = ['現在能做多還是做空？', '最近的進場點在哪？停損放哪？', '大戶最近在做什麼？', '各週期在打架嗎？該怎麼辦？', '最近為什麼漲／跌？（查新聞）'];
+const ai = { symbol: null, messages: [], busy: false, cfg: (() => { try { return JSON.parse(localStorage.getItem(AI_KEY) || '{}'); } catch { return {}; } })() };
+
+function aiSaveCfg() { try { localStorage.setItem(AI_KEY, JSON.stringify(ai.cfg)); } catch { /* 無痕模式 */ } }
+const aiUrl = () => (ai.cfg.url || AI_DEFAULT_URL).replace(/\/$/, '');
+
+/** 很陽春的 markdown：粗體、行內程式碼、標題、條列、連結，其他全部跳脫 */
+function mdLite(src) {
+  const inline = (t) => esc(t)
+    .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (m, a, u) => `<a href="${u.replace(/"/g, '%22')}" target="_blank" rel="noopener">${a}</a>`);
+  const out = [];
+  let list = null;
+  for (const raw of String(src).split('\n')) {
+    const lineTxt = raw.trimEnd();
+    const li = /^\s*(?:[-*•]|\d+[.)])\s+(.*)$/.exec(lineTxt);
+    if (li) { (list ??= []).push(`<li>${inline(li[1])}</li>`); continue; }
+    if (list) { out.push(`<ul>${list.join('')}</ul>`); list = null; }
+    const h = /^#{1,4}\s+(.*)$/.exec(lineTxt);
+    if (h) out.push(`<h4>${inline(h[1])}</h4>`);
+    else if (lineTxt.trim()) out.push(`<div>${inline(lineTxt)}</div>`);
+    else out.push('<div style="height:6px"></div>');
+  }
+  if (list) out.push(`<ul>${list.join('')}</ul>`);
+  return out.join('');
+}
+
+function aiCost(u) {
+  if (!u) return null;
+  const usd = (u.input_tokens * AI_PRICE.in + u.output_tokens * AI_PRICE.out + (u.cache_read_input_tokens || 0) * AI_PRICE.cacheRead + (u.cache_creation_input_tokens || 0) * AI_PRICE.cacheWrite) / 1e6 + (u.web_search_requests || 0) * AI_PRICE.search;
+  return `約 ${usd.toFixed(3)} 美元（${(usd * USD_TWD).toFixed(1)} 台幣）${u.web_search_requests ? `，上網查了 ${u.web_search_requests} 次` : ''}`;
+}
+
+function aiBubble(cls, html) {
+  const el = document.createElement('div');
+  el.className = `ai-msg ${cls}`;
+  el.innerHTML = html;
+  $('ai-log').appendChild(el);
+  $('ai-log').scrollTop = $('ai-log').scrollHeight;
+  return el;
+}
+
+function aiReset() {
+  ai.symbol = sym;
+  ai.messages = [];
+  $('ai-log').innerHTML = '';
+  aiBubble('ai', mdLite(`我會根據這頁 **${(sym || '').replace(/USDT$/, '')}** 當下的資料回答（各週期結構、流動性、計畫、大戶動向、合約數據），需要時也會上網查新聞。\n可以直接問，或點下面的問題。同一個幣可以一直追問，換幣或按「新對話」會重新開始。`));
+}
+
+function aiOpen() {
+  $('ai-panel').hidden = false;
+  $('ai-fab').hidden = true;
+  if (ai.symbol !== sym) aiReset();
+  $('ai-title').textContent = `問 AI：${(sym || '').replace(/USDT$/, '')}`;
+  const noToken = !ai.cfg.token;
+  $('ai-set').hidden = !noToken;
+  if (noToken) { $('ai-token').value = ''; $('ai-url').value = aiUrl(); }
+  $('ai-quick').innerHTML = AI_QUICK.map((q) => `<button type="button">${esc(q)}</button>`).join('');
+}
+
+async function aiCheck() {
+  $('ai-check').textContent = '檢查中…';
+  try {
+    const r = await fetch(`${aiUrl()}/ai/status`).then((x) => x.json());
+    $('ai-check').textContent = r.configured ? `Worker 已設定好（${r.model}，今天問了 ${r.usedToday ?? '?'}／${r.dailyLimit} 次）` : 'Worker 還沒設定 ANTHROPIC_API_KEY／AI_TOKEN';
+  } catch { $('ai-check').textContent = '連不到 Worker，檢查網址'; }
+}
+
+async function aiAsk(question) {
+  question = String(question || '').trim();
+  if (!question || ai.busy) return;
+  if (!report || !sym) { aiBubble('err', '還在載入資料，等一下再問'); return; }
+  if (!ai.cfg.token) { $('ai-set').hidden = false; aiBubble('err', '先輸入 AI 密碼'); return; }
+  if (ai.symbol !== sym) aiReset();
+  const snapshot = buildAiSnapshot({
+    symbol: sym, mode, price: livePrice, report, ticker, deriv, ls, changes,
+    whales: { walls: whale.walls, threshold: whale.threshold, stats: tradeStats(whale.trades, whale.threshold, Date.now()), ratio: whaleVsCrowd(whale.top, whale.crowd) },
+    full: ai.messages.length === 0,
+  });
+  const userMsg = { role: 'user', content: aiUserMessage(snapshot, question) };
+  const convo = [...ai.messages, userMsg];
+  aiBubble('user', esc(question));
+  const bubble = aiBubble('ai', '<span class="ai-status">送出中…</span>');
+  ai.busy = true;
+  $('ai-send').disabled = true;
+  let text = '';
+  let status = '';
+  const paint = () => { bubble.innerHTML = (text ? mdLite(text) : '') + (status ? `<div class="ai-status">${esc(status)}</div>` : ''); $('ai-log').scrollTop = $('ai-log').scrollHeight; };
+  try {
+    const res = await fetch(`${aiUrl()}/ai/ask`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-ai-token': ai.cfg.token }, body: JSON.stringify({ symbol: sym, messages: convo }) });
+    if (!res.body) throw new Error(`HTTP ${res.status}`);
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    let done = null;
+    for (;;) {
+      const { value, done: end } = await reader.read();
+      if (end) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const lineTxt = buf.slice(0, i).trim();
+        buf = buf.slice(i + 1);
+        if (!lineTxt) continue;
+        const ev = JSON.parse(lineTxt);
+        if (ev.t === 'text') { text += ev.d; status = ''; }
+        else if (ev.t === 'status') status = ev.d;
+        else if (ev.t === 'error' || ev.t === 'refusal') { status = ''; text = ''; bubble.className = 'ai-msg err'; bubble.textContent = ev.d; }
+        else if (ev.t === 'done') done = ev;
+        if (ev.t !== 'error' && ev.t !== 'refusal') paint();
+      }
+    }
+    if (done && done.append?.length) {
+      // 對話只能往後加：把這次的問題和 AI 原封不動的回覆接上去，下次整段送回
+      ai.messages = [...convo, ...done.append];
+      status = '';
+      paint();
+      const meta = document.createElement('div');
+      meta.className = 'ai-meta';
+      meta.textContent = `${aiCost(done.usage) ?? ''}｜根據 ${tw(Date.now()).slice(6)} 的資料${mode === 'live' ? '（含盤中 K 棒）' : ''}`;
+      bubble.appendChild(meta);
+    } else if (bubble.className !== 'ai-msg err') {
+      bubble.className = 'ai-msg err';
+      bubble.textContent = '沒有拿到完整回答，請再問一次';
+    }
+    if (res.status === 401) { ai.cfg.token = ''; aiSaveCfg(); $('ai-set').hidden = false; }
+  } catch (e) {
+    bubble.className = 'ai-msg err';
+    bubble.textContent = `連線失敗：${e.message || e}`;
+  } finally {
+    ai.busy = false;
+    $('ai-send').disabled = false;
+  }
+}
+
+$('ai-fab').addEventListener('click', aiOpen);
+$('ai-close').addEventListener('click', () => { $('ai-panel').hidden = true; $('ai-fab').hidden = false; });
+$('ai-new').addEventListener('click', aiReset);
+$('ai-gear').addEventListener('click', () => { $('ai-set').hidden = !$('ai-set').hidden; $('ai-token').value = ai.cfg.token || ''; $('ai-url').value = aiUrl(); if (!$('ai-set').hidden) aiCheck(); });
+$('ai-save').addEventListener('click', () => { ai.cfg.token = $('ai-token').value.trim(); ai.cfg.url = $('ai-url').value.trim() || AI_DEFAULT_URL; aiSaveCfg(); aiCheck(); if (ai.cfg.token) setTimeout(() => { $('ai-set').hidden = true; }, 1200); });
+$('ai-quick').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) aiAsk(b.textContent); });
+$('ai-form').addEventListener('submit', (e) => { e.preventDefault(); const q = $('ai-q').value; $('ai-q').value = ''; aiAsk(q); });
+$('ai-q').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('ai-form').requestSubmit(); } });
 
 /* ───────────── 初始化 ───────────── */
 $('mode-live')?.addEventListener('click', () => setMode('live'));

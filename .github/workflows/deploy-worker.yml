@@ -278,7 +278,10 @@ jobs:
         working-directory: worker
         run: |
           set -e
-          npx --yes esbuild@0.24 index.js --bundle --format=esm --platform=neutral --outfile=dist/index.js
+          # 「問 AI」用的 Anthropic SDK（worker/package.json）；只在打包時需要
+          npm ci --no-audit --no-fund
+          # --platform=browser：SDK 會換成瀏覽器版本（不碰 node:fs 之類），Cloudflare Worker 跑得動
+          npx --yes esbuild@0.24 index.js --bundle --format=esm --platform=browser --conditions=worker,browser --outfile=dist/index.js
           echo "打包完成：$(wc -c < dist/index.js) bytes"
 
       - name: 部署 Worker（改用 Cloudflare 經典上傳 API，不走 wrangler 的版本化部署）
@@ -412,6 +415,8 @@ jobs:
           EXECUTOR_HMAC_SECRET: ${{ secrets.EXECUTOR_HMAC_SECRET }}
           AUTO_TRADE_TOKEN: ${{ secrets.AUTO_TRADE_TOKEN }}
           GITHUB_API_TOKEN: ${{ secrets.GITHUB_API_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AI_TOKEN: ${{ secrets.AI_TOKEN }}
         run: |
           if [ -n "$CF_EMAIL" ] && [ -n "$CF_GLOBAL_KEY" ]; then
             AUTH_HEADERS=(-H "X-Auth-Email: $CF_EMAIL" -H "X-Auth-Key: $CF_GLOBAL_KEY")
@@ -440,6 +445,9 @@ jobs:
           sync_secret EXECUTOR_HMAC_SECRET "$EXECUTOR_HMAC_SECRET"
           sync_secret AUTO_TRADE_TOKEN "$AUTO_TRADE_TOKEN"
           sync_secret GITHUB_API_TOKEN "$GITHUB_API_TOKEN"
+          # 幣種雷達的「問 AI」（兩個都要有才會開）
+          sync_secret ANTHROPIC_API_KEY "$ANTHROPIC_API_KEY"
+          sync_secret AI_TOKEN "$AI_TOKEN"
 
       - name: 部署完直接打 /status 確認現在的狀態（不需要另外開瀏覽器查）
         if: ${{ steps.check.outputs.ready == 'true' }}
