@@ -15,6 +15,7 @@
     color-scheme: dark;
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.55 -apple-system, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif; }
   main { max-width: 1240px; margin: 0 auto; padding-inline: 16px; padding-block: 16px 64px; display: grid; gap: 16px; }
   h1 { font-size: 20px; margin: 0; }
@@ -84,6 +85,28 @@
   .err { background: var(--down-bg); color: var(--down); border-radius: 10px; padding: 12px 14px; font-weight: 600; }
   .loading { color: var(--muted); padding: 40px 0; text-align: center; }
   .check { font-size: 12.5px; }
+
+  /* 問 AI：右下角浮動按鈕＋側邊對話框（手機全螢幕） */
+  .ai-fab { position: fixed; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); z-index: 30; border-radius: 999px; padding: 12px 18px; font-size: 16px; box-shadow: 0 6px 24px rgba(0,0,0,.45); }
+  .ai-panel { position: fixed; top: 0; right: 0; bottom: 0; width: min(460px, 100vw); z-index: 40; background: var(--card); border-left: 1px solid var(--line); display: flex; flex-direction: column; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); box-shadow: -8px 0 30px rgba(0,0,0,.4); }
+  .ai-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  .ai-head b { flex: 1; font-size: 16px; }
+  .ai-log { flex: 1; overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 12px; }
+  .ai-msg { border-radius: 12px; padding: 10px 12px; font-size: 14.5px; line-height: 1.65; overflow-wrap: anywhere; }
+  .ai-msg.user { background: rgba(108, 92, 231, .2); align-self: flex-end; max-width: 88%; }
+  .ai-msg.ai { background: var(--card2); }
+  .ai-msg.err { background: var(--down-bg); color: var(--down); }
+  .ai-msg ul { margin: 4px 0; padding-left: 18px; }
+  .ai-msg h4 { margin: 8px 0 4px; font-size: 14.5px; }
+  .ai-msg a { color: var(--info); }
+  .ai-meta { font-size: 11.5px; color: var(--dim); margin-top: 6px; }
+  .ai-status { font-size: 12.5px; color: var(--warn); }
+  .ai-quick { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 14px 8px; }
+  .ai-quick button { background: var(--card2); color: var(--muted); border: 1px solid var(--line); padding: 5px 10px; font-size: 12.5px; font-weight: 500; }
+  .ai-form { display: flex; gap: 8px; padding: 10px 14px 14px; border-top: 1px solid var(--line); }
+  .ai-form textarea { flex: 1; min-width: 0; resize: none; background: var(--card2); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; font: inherit; font-size: 16px; height: 64px; }
+  .ai-set { padding: 14px; display: grid; gap: 10px; font-size: 14px; }
+  .ai-set input { width: 100%; background: var(--card2); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; font-size: 16px; font-family: inherit; }
   @media (max-width: 560px) { .price { font-size: 24px; } .lrow { grid-template-columns: 92px 62px 1fr; gap: 6px; } }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
@@ -122,6 +145,27 @@
   <p class="note">資料：Bybit USDT 永續（K 棒、多空比），資金費率／未平倉量依序試 Binance、Bybit、OKX。SMC 計畫跟 App、TradingView 指標、Discord 推播同一套算法（每個週期最近 499 根已收盤 K 棒）。
     大單牆、大額成交來自 Bybit 和 Binance 永續的公開掛單簿／成交，大戶多空比來自 Binance；交易所不公開下單者身分，「大戶」只是指金額特別大。爆倉密集區是用成交量和常見槓桿推估的，不是交易所公布的數字。回測顯示 SMC 計畫照單全收是虧的，只當參考；Demo 自動下單用的是 4h／6h 順勢策略。</p>
 </main>
+<button type="button" class="ai-fab" id="ai-fab">💬 問 AI</button>
+<aside class="ai-panel" id="ai-panel" hidden aria-label="問 AI">
+  <div class="ai-head">
+    <b id="ai-title">問 AI</b>
+    <button type="button" class="ghost" id="ai-new">新對話</button>
+    <button type="button" class="ghost" id="ai-gear">設定</button>
+    <button type="button" class="ghost" id="ai-close" aria-label="關閉">✕</button>
+  </div>
+  <div class="ai-set" id="ai-set" hidden>
+    <p class="muted" style="margin:0">AI 走你的 Cloudflare Worker，金鑰在 Worker 裡，這裡只要輸入你在 GitHub Secrets 設的 <b>AI_TOKEN</b>（只存在這台裝置的瀏覽器）。</p>
+    <label for="ai-token">AI 密碼（AI_TOKEN）<input id="ai-token" type="password" autocomplete="off" /></label>
+    <label for="ai-url">Worker 網址（通常不用改）<input id="ai-url" type="url" autocomplete="off" spellcheck="false" /></label>
+    <div style="display:flex;gap:8px"><button type="button" id="ai-save">儲存</button><span class="muted" id="ai-check" style="align-self:center;font-size:13px"></span></div>
+  </div>
+  <div class="ai-log" id="ai-log"></div>
+  <div class="ai-quick" id="ai-quick"></div>
+  <form class="ai-form" id="ai-form">
+    <textarea id="ai-q" placeholder="問這個幣的任何事，例如：現在 4h 能做多嗎？停損放哪？" aria-label="問題"></textarea>
+    <button type="submit" id="ai-send">送出</button>
+  </form>
+</aside>
 <script type="module" src="./app.js"></script>
 </body>
 </html>

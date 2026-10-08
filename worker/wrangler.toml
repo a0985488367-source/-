@@ -143,6 +143,11 @@ WORKER_SCAN_MIN_SCORE = "0"
 WORKER_SCAN_CONCURRENCY = "3"
 # 資料源照這個順序嘗試，優先用 Bybit（跟自動下單實際交易的交易所一致）
 WORKER_SCAN_PROVIDERS = "bybit,binance,okx"
+# 幣種雷達（coin/）的「問 AI」：模型 Claude Opus 5.5（2026-10-08 使用者選的）。金鑰放 secret：
+#   ANTHROPIC_API_KEY（console.anthropic.com 申請，另外計費）、AI_TOKEN（使用者自己設的密碼，網頁要輸入同一串）
+# 每天最多問幾次（擋掉意外燒錢），思考深度 low／medium／high（越高越慢越貴）
+AI_DAILY_LIMIT = "100"
+AI_EFFORT = "medium"
 
 # KV 命名空間：部署前請先建立，並把 id 填在這裡
 # （wrangler kv namespace create SMC_KV，或在主控台 Storage → KV 建立）
