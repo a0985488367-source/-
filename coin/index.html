@@ -105,6 +105,11 @@
   .ai-quick button { background: var(--card2); color: var(--muted); border: 1px solid var(--line); padding: 5px 10px; font-size: 12.5px; font-weight: 500; }
   .ai-form { display: flex; gap: 8px; padding: 10px 14px 14px; border-top: 1px solid var(--line); }
   .ai-form textarea { flex: 1; min-width: 0; resize: none; background: var(--card2); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; font: inherit; font-size: 16px; height: 64px; }
+  .ai-bal { padding: 6px 14px; font-size: 12.5px; color: var(--muted); border-bottom: 1px solid var(--line); }
+  .ai-bal b { color: var(--fg); }
+  .ai-bal.low { background: var(--down-bg); color: var(--down); }
+  .ai-bal.low b { color: var(--down); }
+  .ai-set a { color: var(--info); }
   .ai-set { padding: 14px; display: grid; gap: 10px; font-size: 14px; }
   .ai-set input { width: 100%; background: var(--card2); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; font-size: 16px; font-family: inherit; }
   @media (max-width: 560px) { .price { font-size: 24px; } .lrow { grid-template-columns: 92px 62px 1fr; gap: 6px; } }
@@ -153,11 +158,15 @@
     <button type="button" class="ghost" id="ai-gear">設定</button>
     <button type="button" class="ghost" id="ai-close" aria-label="關閉">✕</button>
   </div>
+  <div class="ai-bal" id="ai-bal" hidden></div>
   <div class="ai-set" id="ai-set" hidden>
     <p class="muted" style="margin:0">AI 走你的 Cloudflare Worker，金鑰在 Worker 裡，這裡只要輸入你在 GitHub Secrets 設的 <b>AI_TOKEN</b>（只存在這台裝置的瀏覽器）。</p>
     <label for="ai-token">AI 密碼（AI_TOKEN）<input id="ai-token" type="password" autocomplete="off" /></label>
     <label for="ai-url">Worker 網址（通常不用改）<input id="ai-url" type="url" autocomplete="off" spellcheck="false" /></label>
     <div style="display:flex;gap:8px"><button type="button" id="ai-save">儲存</button><span class="muted" id="ai-check" style="align-self:center;font-size:13px"></span></div>
+    <label for="ai-balance">Anthropic 目前餘額（美元）：照 <a href="https://console.anthropic.com/settings/billing" target="_blank" rel="noopener">console 的 Billing 頁</a>填，之後每次問答自動往下扣；儲值後再來改一次
+      <span style="display:flex;gap:8px;margin-top:4px"><input id="ai-balance" type="number" inputmode="decimal" min="0" step="0.01" placeholder="例如 10" style="flex:1" /><button type="button" id="ai-bal-save">更新餘額</button></span></label>
+    <span class="muted" id="ai-bal-msg" style="font-size:13px"></span>
   </div>
   <div class="ai-log" id="ai-log"></div>
   <div class="ai-quick" id="ai-quick"></div>

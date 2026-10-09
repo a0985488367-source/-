@@ -196,7 +196,7 @@ import { breakoutSignal } from '../src/strategies/breakout.js';
 import { emaCrossSignal } from '../src/strategies/ema-cross.js';
 import { macdZeroSignal } from '../src/strategies/macd-zero.js';
 import { fakeoutSignal, FAKEOUT_DEFAULTS } from '../src/strategies/fakeout.js';
-import { handleAiAsk, AI_MODEL } from './ai.js';
+import { handleAiAsk, aiStatus, aiSetBudget } from './ai.js';
 import { trendExtraSignal, trendExtraIndicators, TREND_EXTRA_STOP_ATR } from '../src/strategies/trend-extra.js';
 
 const DEFAULTS = {
@@ -443,17 +443,20 @@ export default {
 async function handleFetch(request, env, ctx) {
     const url = new URL(request.url);
     // 幣種雷達（coin/）的「問 AI」：金鑰在 Worker，網頁帶使用者自己設的密碼（x-ai-token）
-    if (url.pathname === '/ai/ask') {
-      if (request.method === 'OPTIONS') {
-        return new Response(null, { status: 204, headers: { ...CORS_HEADERS, 'access-control-allow-methods': 'POST, OPTIONS', 'access-control-allow-headers': 'content-type, x-ai-token', 'access-control-max-age': '86400' } });
-      }
-      if (request.method !== 'POST') return json({ error: '請用 POST' }, { status: 405 });
-      return handleAiAsk(request, env, { cors: CORS_HEADERS, waitUntil: ctx?.waitUntil?.bind(ctx) });
+    if (url.pathname.startsWith('/ai/') && request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: { ...CORS_HEADERS, 'access-control-allow-methods': 'GET, POST, OPTIONS', 'access-control-allow-headers': 'content-type, x-ai-token', 'access-control-max-age': '86400' } });
     }
-    if (url.pathname === '/ai/status') {
-      const day = new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10);
-      const used = env.SMC_KV ? Number((await env.SMC_KV.get(`ai:count:${day}`).catch(() => null)) || 0) : null;
-      return json({ configured: !!(env.ANTHROPIC_API_KEY && env.AI_TOKEN), model: AI_MODEL, dailyLimit: Number(env.AI_DAILY_LIMIT ?? 100), usedToday: used });
+    if (url.pathname === '/ai/ask') {
+      if (request.method !== 'POST') return json({ error: '請用 POST' }, { status: 405 });
+      // 餘額快用完時推播 Discord（記帳估算，一天最多一次）
+      const notify = (content) => postDiscord(env, { content });
+      return handleAiAsk(request, env, { cors: CORS_HEADERS, waitUntil: ctx?.waitUntil?.bind(ctx), notify });
+    }
+    if (url.pathname === '/ai/status') return json(await aiStatus(request, env), { headers: { 'cache-control': 'no-store' } });
+    if (url.pathname === '/ai/budget') {
+      if (request.method !== 'POST') return json({ error: '請用 POST' }, { status: 405 });
+      const r = await aiSetBudget(request, env);
+      return json(r.body, { status: r.status });
     }
     if (url.pathname === '/run') {
       const result = await run(env, { dry: url.searchParams.get('dry') === '1' });

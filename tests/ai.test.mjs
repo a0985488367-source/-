@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildAiSnapshot, aiUserMessage } from '../src/radar/ai-context.js';
-import { handleAiAsk, validateConversation, AI_MODEL, AI_SYSTEM } from '../worker/ai.js';
+import { handleAiAsk, validateConversation, AI_MODEL, AI_SYSTEM, usageCostUsd, applySpend, emptyLedger, ledgerView, aiStatus, aiSetBudget } from '../worker/ai.js';
 
 const report = {
   agg: { labelZh: '中性', score: -11, alignment: 75 },
@@ -114,4 +114,59 @@ test('問 AI：被安全機制擋下時不回傳要接的訊息；每天次數�
   assert.deepEqual(out.find((o) => o.t === 'done').append, []);
   const r2 = await handleAiAsk(ask('pw', [{ role: 'user', content: 'x' }]), env, { client: fakeClient([]) });
   assert.equal(r2.status, 429);
+});
+
+test('花費：依 token 和搜尋次數算美元', () => {
+  const usd = usageCostUsd({ input_tokens: 1e6, output_tokens: 1e5, cache_read_input_tokens: 1e6, cache_creation_input_tokens: 2e5, web_search_requests: 3 });
+  assert.equal(Math.round(usd * 1e4) / 1e4, 4 + 2 + 0.2 + 1 + 0.03);
+  assert.equal(usageCostUsd(null), 0);
+});
+
+test('餘額記帳：從填的餘額往下扣；剩不到 1 美元提醒，一天只提醒一次', () => {
+  const t = Date.UTC(2026, 9, 9, 4);
+  let l = { ...emptyLedger(), balanceAt: 1.5, setAt: t, spentSince: 0 };
+  let r = applySpend(l, 0.3, t);
+  assert.equal(r.alert, null);
+  assert.equal(ledgerView(r.ledger, t).balance, 1.2);
+  r = applySpend(r.ledger, 0.4, t + 1000);
+  assert.match(r.alert, /剩約 0\.80 美元/);
+  assert.equal(ledgerView(r.ledger, t).low, true);
+  r = applySpend(r.ledger, 0.1, t + 2000);
+  assert.equal(r.alert, null, '同一天不重複提醒');
+  r = applySpend(r.ledger, 0.1, t + 864e5);
+  assert.ok(r.alert, '隔天再提醒');
+  assert.equal(Math.round(ledgerView(r.ledger, t).monthUsd * 100) / 100, 0.9);
+  // 沒填餘額：只記花費、不提醒
+  r = applySpend(emptyLedger(), 5, t);
+  assert.equal(r.alert, null);
+  assert.equal(ledgerView(r.ledger, t).set, false);
+  // 只留最近 6 個月
+  l = emptyLedger();
+  for (let m = 0; m < 9; m++) l = applySpend(l, 1, Date.UTC(2026, m, 15)).ledger;
+  assert.equal(Object.keys(l.months).length, 6);
+});
+
+test('餘額：要密碼才能看和設定；問答完自動扣，低於 1 美元推播', async () => {
+  const kv = kvStore();
+  const env = { AI_TOKEN: 'pw', ANTHROPIC_API_KEY: 'k', SMC_KV: kv };
+  const req = (path, token, body) => new Request(`https://w${path}`, { method: body ? 'POST' : 'GET', headers: token ? { 'x-ai-token': token } : {}, body: body ? JSON.stringify(body) : undefined });
+  let st = await aiStatus(req('/ai/status'), env);
+  assert.equal(st.ledger, undefined, '沒密碼看不到餘額');
+  assert.equal((await aiSetBudget(req('/ai/budget', 'bad', { balance: 5 }), env)).status, 401);
+  assert.equal((await aiSetBudget(req('/ai/budget', 'pw', { balance: -1 }), env)).status, 400);
+  assert.equal((await aiSetBudget(req('/ai/budget', 'pw', { balance: 1.05 }), env)).status, 200);
+  st = await aiStatus(req('/ai/status', 'pw'), env);
+  assert.equal(st.ledger.balance, 1.05);
+
+  const sent = [];
+  const client = fakeClient([{ content: [{ type: 'text', text: '好' }], stop_reason: 'end_turn', usage: { input_tokens: 10000, output_tokens: 1000 } }]);
+  const out = await lines(await handleAiAsk(ask('pw', [{ role: 'user', content: 'q' }]), env, { client, notify: async (s) => { sent.push(s); } }));
+  const done = out.find((o) => o.t === 'done');
+  assert.equal(Math.round(done.cost * 1000) / 1000, 0.06);
+  assert.equal(done.ledger.balance, 0.99);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0], /console\.anthropic\.com/);
+  st = await aiStatus(req('/ai/status', 'pw'), env);
+  assert.equal(st.ledger.low, true);
+  assert.equal(st.usedToday, 1);
 });
