@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildAiSnapshot, aiUserMessage } from '../src/radar/ai-context.js';
-import { handleAiAsk, validateConversation, AI_MODEL, AI_SYSTEM, usageCostUsd, applySpend, emptyLedger, ledgerView, aiStatus, aiSetBudget } from '../worker/ai.js';
+import { aiErrorZh, handleAiAsk, validateConversation, AI_MODEL, AI_SYSTEM, usageCostUsd, applySpend, emptyLedger, ledgerView, aiStatus, aiSetBudget } from '../worker/ai.js';
 
 const report = {
   agg: { labelZh: '中性', score: -11, alignment: 75 },
@@ -169,4 +169,10 @@ test('餘額：要密碼才能看和設定；問答完自動扣，低於 1 美�
   st = await aiStatus(req('/ai/status', 'pw'), env);
   assert.equal(st.ledger.low, true);
   assert.equal(st.usedToday, 1);
+});
+
+test('錯誤訊息：附上 Anthropic 回的原文，才看得出真正原因', () => {
+  const e = Object.assign(new Error('403 {...}'), { status: 403, error: { type: 'error', error: { type: 'permission_error', message: 'Identity verification required.' } } });
+  assert.match(aiErrorZh(e), /權限不足[\s\S]*原文：Identity verification required\./);
+  assert.match(aiErrorZh({ status: 401 }), /金鑰無效/);
 });
