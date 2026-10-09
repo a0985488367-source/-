@@ -5,7 +5,7 @@
  *
  * 存的格式：{ symbol, messages, view, updated, lastFullAt }
  *   messages   送給 API 的整段對話（原封不動，追問時整段送回）
- *   view       畫面上的泡泡 [{ k: 'user'|'ai', text, meta? }]
+ *   view       畫面上的泡泡 [{ k: 'user'|'ai'|'scan', text, meta?, rows? }]（scan＝全市場掃描前 10 名）
  *   lastFullAt 上一次附「完整快照」（各週期細節）的時間
  */
 
@@ -23,7 +23,7 @@ export function needFullSnapshot(chat, now = Date.now()) {
 /** 從瀏覽器讀出來的紀錄是不是能用（格式壞掉就當沒有） */
 export function validChat(chat) {
   return !!chat && typeof chat.symbol === 'string' && Array.isArray(chat.messages) && Array.isArray(chat.view)
-    && chat.view.every((v) => v && (v.k === 'user' || v.k === 'ai') && typeof v.text === 'string');
+    && chat.view.every((v) => v && (v.k === 'user' || v.k === 'ai' || v.k === 'scan') && typeof v.text === 'string');
 }
 
 /**

@@ -105,6 +105,11 @@
   .ai-quick button { background: var(--card2); color: var(--muted); border: 1px solid var(--line); padding: 5px 10px; font-size: 12.5px; font-weight: 500; }
   .ai-form { display: flex; gap: 8px; padding: 10px 14px 14px; border-top: 1px solid var(--line); }
   .ai-form textarea { flex: 1; min-width: 0; resize: none; background: var(--card2); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; font: inherit; font-size: 16px; height: 64px; }
+  .ai-tabs { display: flex; gap: 6px; padding: 8px 14px; border-bottom: 1px solid var(--line); }
+  .ai-tabs button { flex: 1; background: var(--card2); color: var(--muted); border: 1px solid var(--line); padding: 7px 10px; font-size: 14px; font-weight: 600; }
+  .ai-tabs button.on { background: var(--accent, #6c5ce7); color: #fff; border-color: transparent; }
+  .ai-scan { display: flex; flex-direction: column; gap: 4px; }
+  .ai-coin { display: flex; gap: 8px; align-items: baseline; text-align: left; background: transparent; color: var(--fg); border: 1px solid var(--line); padding: 6px 10px; font-size: 14px; font-weight: 400; }
   .ai-bal { padding: 6px 14px; font-size: 12.5px; color: var(--muted); border-bottom: 1px solid var(--line); }
   .ai-bal b { color: var(--fg); }
   .ai-bal.low { background: var(--down-bg); color: var(--down); }
@@ -158,6 +163,7 @@
     <button type="button" class="ghost" id="ai-gear">設定</button>
     <button type="button" class="ghost" id="ai-close" aria-label="關閉">✕</button>
   </div>
+  <div class="ai-tabs"><button type="button" id="ai-tab-coin" class="on">這個幣</button><button type="button" id="ai-tab-market">🔍 全市場</button></div>
   <div class="ai-bal" id="ai-bal" hidden></div>
   <div class="ai-set" id="ai-set" hidden>
     <p class="muted" style="margin:0">AI 走你的 Cloudflare Worker，金鑰在 Worker 裡，這裡只要輸入你在 GitHub Secrets 設的 <b>AI_TOKEN</b>（只存在這台裝置的瀏覽器）。</p>
