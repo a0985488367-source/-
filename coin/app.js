@@ -756,14 +756,56 @@ function aiOpen() {
   $('ai-set').hidden = !noToken;
   if (noToken) { $('ai-token').value = ''; $('ai-url').value = aiUrl(); }
   $('ai-quick').innerHTML = AI_QUICK.map((q) => `<button type="button">${esc(q)}</button>`).join('');
+  aiStatusRefresh();
+}
+
+const aiHeaders = () => (ai.cfg.token ? { 'x-ai-token': ai.cfg.token } : {});
+const usd = (v) => `${v < 0 ? '-' : ''}$${Math.abs(v).toFixed(2)}`;
+
+/** 標題下面那條：剩多少錢（記帳估算）、這個月花多少、今天問幾次 */
+function aiRenderBal(st) {
+  const el = $('ai-bal');
+  if (!st?.configured) { el.hidden = true; return; }
+  const l = st.ledger;
+  const parts = [];
+  if (l?.set) parts.push(`餘額約 <b>${usd(l.balance)}</b>（≈${Math.round(l.balance * USD_TWD)} 台幣）`);
+  else if (st.authed) parts.push('餘額：到「設定」填一次 console 上的餘額，之後自動扣');
+  if (l) parts.push(`本月花 ${usd(l.monthUsd)}`);
+  parts.push(`今天問 ${st.usedToday ?? '?'}／${st.dailyLimit} 次`);
+  if (l?.low) parts.push('快用完了，去 console 儲值');
+  el.innerHTML = parts.join('・');
+  el.classList.toggle('low', !!l?.low);
+  el.hidden = false;
+}
+
+async function aiStatusRefresh() {
+  try {
+    const r = await fetch(`${aiUrl()}/ai/status`, { headers: aiHeaders(), cache: 'no-store' }).then((x) => x.json());
+    aiRenderBal(r);
+    return r;
+  } catch { return null; }
 }
 
 async function aiCheck() {
   $('ai-check').textContent = '檢查中…';
+  const r = await aiStatusRefresh();
+  if (!r) { $('ai-check').textContent = '連不到 Worker，檢查網址'; return; }
+  $('ai-check').textContent = !r.configured ? 'Worker 還沒設定 ANTHROPIC_API_KEY／AI_TOKEN' : !r.authed ? 'Worker 已設定好，但密碼不對' : `Worker 已設定好（${r.model}），密碼正確`;
+  if (r.ledger?.set && $('ai-balance').value === '') $('ai-balance').placeholder = `目前估算 ${r.ledger.balance.toFixed(2)}`;
+}
+
+async function aiSaveBalance() {
+  const v = Number($('ai-balance').value);
+  if ($('ai-balance').value === '' || !Number.isFinite(v) || v < 0) { $('ai-bal-msg').textContent = '請填 0 以上的數字（美元）'; return; }
+  $('ai-bal-msg').textContent = '更新中…';
   try {
-    const r = await fetch(`${aiUrl()}/ai/status`).then((x) => x.json());
-    $('ai-check').textContent = r.configured ? `Worker 已設定好（${r.model}，今天問了 ${r.usedToday ?? '?'}／${r.dailyLimit} 次）` : 'Worker 還沒設定 ANTHROPIC_API_KEY／AI_TOKEN';
-  } catch { $('ai-check').textContent = '連不到 Worker，檢查網址'; }
+    const res = await fetch(`${aiUrl()}/ai/budget`, { method: 'POST', headers: { 'content-type': 'application/json', ...aiHeaders() }, body: JSON.stringify({ balance: v }) });
+    const r = await res.json();
+    if (!res.ok) { $('ai-bal-msg').textContent = r.error || `失敗（HTTP ${res.status}）`; return; }
+    $('ai-bal-msg').textContent = `已更新：從現在起由 ${usd(v)} 開始扣`;
+    $('ai-balance').value = '';
+    aiStatusRefresh();
+  } catch { $('ai-bal-msg').textContent = '連不到 Worker'; }
 }
 
 async function aiAsk(question) {
@@ -829,6 +871,7 @@ async function aiAsk(question) {
       const chat = { symbol: chatSym, messages: [...convo, ...done.append], view: [...view, { k: 'ai', text, meta: meta.textContent }], lastFullAt: full ? now : prevFullAt, updated: Date.now() };
       if (ai.symbol === chatSym) Object.assign(ai, chat);
       aiStoreSave(chat);
+      aiStatusRefresh(); // 餘額、今天次數跟著更新
     } else if (bubble.className !== 'ai-msg err') {
       bubble.className = 'ai-msg err';
       bubble.textContent = '沒有拿到完整回答，請再問一次';
@@ -848,6 +891,7 @@ $('ai-close').addEventListener('click', () => { $('ai-panel').hidden = true; $('
 $('ai-new').addEventListener('click', aiReset);
 $('ai-gear').addEventListener('click', () => { $('ai-set').hidden = !$('ai-set').hidden; $('ai-token').value = ai.cfg.token || ''; $('ai-url').value = aiUrl(); if (!$('ai-set').hidden) aiCheck(); });
 $('ai-save').addEventListener('click', () => { ai.cfg.token = $('ai-token').value.trim(); ai.cfg.url = $('ai-url').value.trim() || AI_DEFAULT_URL; aiSaveCfg(); aiCheck(); if (ai.cfg.token) setTimeout(() => { $('ai-set').hidden = true; }, 1200); });
+$('ai-bal-save').addEventListener('click', aiSaveBalance);
 $('ai-quick').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) aiAsk(b.textContent); });
 $('ai-form').addEventListener('submit', (e) => { e.preventDefault(); const q = $('ai-q').value; $('ai-q').value = ''; aiAsk(q); });
 $('ai-q').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('ai-form').requestSubmit(); } });
