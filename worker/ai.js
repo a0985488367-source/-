@@ -263,6 +263,7 @@ export async function handleAiAsk(request, env, deps = {}) {
       send({ t: 'done', append: stop === 'refusal' ? [] : append, usage, cost: usageCostUsd(usage), ledger, stop, model: AI_MODEL });
     } catch (e) {
       await record(); // 中途失敗前面幾輪已經花掉的也要記
+      console.error('ai ask failed', e?.status, e?.error?.error?.type, e?.message);
       send({ t: 'error', d: aiErrorZh(e) });
     } finally {
       await writer.close().catch(() => {});
@@ -276,8 +277,13 @@ export async function handleAiAsk(request, env, deps = {}) {
 /** API 錯誤翻成看得懂的中文 */
 export function aiErrorZh(e) {
   const s = e?.status;
+  // 附上 Anthropic 回的原文，才看得出真正原因（例如要身分驗證、地區限制、工作區設定）
+  const detail = String(e?.error?.error?.message || e?.message || '').slice(0, 300);
+  const why = detail ? `\n原文：${detail}` : '';
   if (s === 401) return 'Anthropic API 金鑰無效（檢查 GitHub Secrets 的 ANTHROPIC_API_KEY）';
-  if (s === 403) return 'Anthropic API 金鑰沒有權限';
+  if (s === 402) return `Anthropic 帳戶付款／額度有問題，到 console.anthropic.com 的 Billing 確認${why}`;
+  if (s === 403) return `Anthropic 拒絕這個請求（權限不足）${why}`;
+  if (s === 404) return `Anthropic 找不到模型或帳戶不能用這個模型${why}`;
   if (s === 429) return 'Anthropic API 太忙或額度用完，稍後再試（或到 console.anthropic.com 確認餘額）';
   if (s === 400) return `請求被拒絕：${e.message ?? ''}`.slice(0, 300);
   if (s >= 500) return 'Anthropic 伺服器暫時有問題，稍後再試';
