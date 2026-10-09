@@ -98,7 +98,8 @@ test('問 AI：串流文字、回傳要接上的 assistant 訊息；固定的 sy
   assert.equal(client.calls[0].model, AI_MODEL);
   assert.equal(client.calls[0].system, AI_SYSTEM);
   assert.equal(client.calls[0].fallbacks, 'default');
-  assert.deepEqual(client.calls[0].betas, ['server-side-fallback-2026-07-01']);
+  assert.deepEqual(client.calls[0].betas, ['server-side-fallback-2026-07-01', 'thinking-binding-controls-2026-08-01']);
+  assert.deepEqual(client.calls[0].thinking, { type: 'adaptive', block_binding: { prefix_mismatch_behavior: 'drop_block' } }); // 改過系統提示後舊對話還能接
   assert.equal(client.calls[1].messages.length, 2); // 暫停的那段接上去再送
   assert.equal(client.calls[1].system, client.calls[0].system);
   assert.deepEqual(client.calls[1].tools, client.calls[0].tools);

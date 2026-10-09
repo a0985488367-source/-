@@ -19,7 +19,8 @@
  * 剩不到 LOW_BALANCE_USD 時推播 Discord（一天最多一次）。只存在 KV，不寫進 repo。
  *
  * 對話只能往後加、不能改前面（Claude Opus 5.5 的思考區塊綁定整段前文）：system、tools 固定不變，
- * 市場快照放在每一則使用者訊息裡。
+ * 市場快照放在每一則使用者訊息裡。真的改了系統提示時，舊對話靠 drop_block 把對不上的思考區塊丟掉繼續
+ * （2026-10-09 加全市場說明後，使用者存在瀏覽器的舊對話就是這樣 400 的）。
  */
 
 export const AI_MODEL = 'claude-opus-5-5';
@@ -228,9 +229,11 @@ export async function handleAiAsk(request, env, deps = {}) {
         const stream = client.beta.messages.stream({
           model: AI_MODEL,
           max_tokens: 32000,
-          betas: ['server-side-fallback-2026-07-01'],
+          betas: ['server-side-fallback-2026-07-01', 'thinking-binding-controls-2026-08-01'],
           fallbacks: 'default',
-          thinking: { type: 'adaptive' },
+          // 改過系統提示（例如加新功能）之後，瀏覽器裡存的舊對話照樣能接著問：
+          // 對不上新前文的舊思考區塊直接丟掉（只影響那幾段推理，文字回答都還在），不要整個 400
+          thinking: { type: 'adaptive', block_binding: { prefix_mismatch_behavior: 'drop_block' } },
           output_config: { effort: env.AI_EFFORT || 'medium' },
           cache_control: { type: 'ephemeral' },
           system: AI_SYSTEM,
@@ -291,7 +294,8 @@ export function aiErrorZh(e) {
   if (s === 403) return `Anthropic 拒絕這個請求（權限不足）${why}`;
   if (s === 404) return `Anthropic 找不到模型或帳戶不能用這個模型${why}`;
   if (s === 429) return 'Anthropic API 太忙或額度用完，稍後再試（或到 console.anthropic.com 確認餘額）';
-  if (s === 400) return `請求被拒絕：${e.message ?? ''}`.slice(0, 300);
+  if (s === 400 && /different conversation/.test(detail)) return `這段對話跟現在的 AI 設定對不上，按「新對話」重新開始${why}`;
+  if (s === 400) return `請求格式被拒絕${why}`;
   if (s >= 500) return 'Anthropic 伺服器暫時有問題，稍後再試';
   return `呼叫 AI 失敗：${e?.message ?? e}`.slice(0, 300);
 }
