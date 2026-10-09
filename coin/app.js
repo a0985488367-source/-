@@ -10,6 +10,7 @@ import { oiChangePct, annualizeFunding, fundingCountdown } from '../src/smc/deri
 import { buildCoinReport, narrativeZh, nextCloseTime, diffReports, REPORT_TFS } from '../src/radar/coin-report.js';
 import { bigTradeThreshold, detectWalls, trackWalls, tradeStats, whaleVsCrowd } from '../src/radar/whales.js';
 import { buildAiSnapshot, aiUserMessage } from '../src/radar/ai-context.js';
+import { needFullSnapshot, validChat, chatsToPrune, agoZh } from '../src/radar/ai-history.js';
 
 const bybit = PROVIDERS.bybit;
 const $ = (id) => document.getElementById(id);
@@ -641,7 +642,7 @@ const AI_DEFAULT_URL = 'https://smc-signals.crypto-radar-guardian-24x7.workers.d
 const AI_PRICE = { in: 4, out: 20, cacheRead: 0.2, cacheWrite: 5, search: 0.01 };
 const USD_TWD = 32;
 const AI_QUICK = ['現在能做多還是做空？', '最近的進場點在哪？停損放哪？', '大戶最近在做什麼？', '各週期在打架嗎？該怎麼辦？', '最近為什麼漲／跌？（查新聞）'];
-const ai = { symbol: null, messages: [], busy: false, cfg: (() => { try { return JSON.parse(localStorage.getItem(AI_KEY) || '{}'); } catch { return {}; } })() };
+const ai = { symbol: null, messages: [], view: [], lastFullAt: 0, updated: 0, busy: false, loadP: null, cfg: (() => { try { return JSON.parse(localStorage.getItem(AI_KEY) || '{}'); } catch { return {}; } })() };
 
 function aiSaveCfg() { try { localStorage.setItem(AI_KEY, JSON.stringify(ai.cfg)); } catch { /* 無痕模式 */ } }
 const aiUrl = () => (ai.cfg.url || AI_DEFAULT_URL).replace(/\/$/, '');
@@ -683,17 +684,73 @@ function aiBubble(cls, html) {
   return el;
 }
 
-function aiReset() {
-  ai.symbol = sym;
-  ai.messages = [];
+/* 對話紀錄：每個幣一段，存在瀏覽器的 IndexedDB（關掉網頁再開還在；AI 回覆含搜尋結果，localStorage 放不下） */
+const AI_DB = 'coin-radar';
+const AI_STORE = 'ai-chats';
+let aiDbP = null;
+function aiDb() {
+  aiDbP ??= new Promise((resolve, reject) => {
+    const req = indexedDB.open(AI_DB, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(AI_STORE, { keyPath: 'symbol' });
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  }).catch(() => null); // 無痕模式等不能存：照樣能問，只是不會保存
+  return aiDbP;
+}
+async function aiTx(txMode, fn) {
+  const db = await aiDb();
+  if (!db) return null;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(AI_STORE, txMode);
+      const req = fn(tx.objectStore(AI_STORE));
+      tx.oncomplete = () => resolve(req?.result ?? null);
+      tx.onerror = tx.onabort = () => resolve(null);
+    } catch { resolve(null); }
+  });
+}
+async function aiStoreSave(chat) {
+  if (!chat.messages.length) { await aiTx('readwrite', (s) => s.delete(chat.symbol)); return; }
+  await aiTx('readwrite', (s) => s.put(chat));
+  const all = (await aiTx('readonly', (s) => s.getAll())) ?? [];
+  const drop = chatsToPrune(all.map((c) => ({ symbol: c.symbol, updated: c.updated })));
+  if (drop.length) await aiTx('readwrite', (s) => { drop.forEach((k) => s.delete(k)); });
+}
+
+function aiRender(resumed) {
   $('ai-log').innerHTML = '';
-  aiBubble('ai', mdLite(`我會根據這頁 **${(sym || '').replace(/USDT$/, '')}** 當下的資料回答（各週期結構、流動性、計畫、大戶動向、合約數據），需要時也會上網查新聞。\n可以直接問，或點下面的問題。同一個幣可以一直追問，換幣或按「新對話」會重新開始。`));
+  aiBubble('ai', mdLite(`我會根據這頁 **${(ai.symbol || '').replace(/USDT$/, '')}** 當下的資料回答（各週期結構、流動性、計畫、大戶動向、合約數據），需要時也會上網查新聞。\n可以直接問，或點下面的問題。每個幣的對話分開保存，關掉網頁再開還在；按「新對話」重新開始。`));
+  for (const v of ai.view) {
+    const el = aiBubble(v.k, v.k === 'user' ? esc(v.text) : mdLite(v.text));
+    if (v.meta) { const m = document.createElement('div'); m.className = 'ai-meta'; m.textContent = v.meta; el.appendChild(m); }
+  }
+  if (resumed) aiBubble('ai', `<span class="ai-status">↑ 接續 ${esc(agoZh(ai.updated))}的對話；再問會用現在的最新資料</span>`);
+}
+
+/** 切到某個幣的對話：先清空，再從瀏覽器讀回之前存的 */
+function aiLoad(symbol) {
+  Object.assign(ai, { symbol, messages: [], view: [], lastFullAt: 0, updated: 0 });
+  aiRender(false);
+  ai.loadP = aiTx('readonly', (s) => s.get(symbol)).then((chat) => {
+    if (ai.symbol !== symbol || ai.messages.length || !validChat(chat) || !chat.messages.length) return;
+    Object.assign(ai, { messages: chat.messages, view: chat.view, lastFullAt: chat.lastFullAt || 0, updated: chat.updated || 0 });
+    aiRender(true);
+  });
+  return ai.loadP;
+}
+
+function aiReset() {
+  if (ai.busy) return; // 回答到一半不能清掉
+  const symbol = sym;
+  Object.assign(ai, { symbol, messages: [], view: [], lastFullAt: 0, updated: 0, loadP: null });
+  aiRender(false);
+  aiStoreSave({ symbol, messages: [] });
 }
 
 function aiOpen() {
   $('ai-panel').hidden = false;
   $('ai-fab').hidden = true;
-  if (ai.symbol !== sym) aiReset();
+  if (ai.symbol !== sym) aiLoad(sym);
   $('ai-title').textContent = `問 AI：${(sym || '').replace(/USDT$/, '')}`;
   const noToken = !ai.cfg.token;
   $('ai-set').hidden = !noToken;
@@ -714,18 +771,25 @@ async function aiAsk(question) {
   if (!question || ai.busy) return;
   if (!report || !sym) { aiBubble('err', '還在載入資料，等一下再問'); return; }
   if (!ai.cfg.token) { $('ai-set').hidden = false; aiBubble('err', '先輸入 AI 密碼'); return; }
-  if (ai.symbol !== sym) aiReset();
+  if (ai.symbol !== sym) aiLoad(sym);
+  ai.busy = true;
+  $('ai-send').disabled = true;
+  await ai.loadP; // 先等之前的紀錄讀回來，才接得上
+  if (ai.symbol !== sym) { ai.busy = false; $('ai-send').disabled = false; return; }
+  const chatSym = ai.symbol;
+  const prevFullAt = ai.lastFullAt;
+  const now = Date.now();
+  const full = needFullSnapshot(ai, now);
   const snapshot = buildAiSnapshot({
     symbol: sym, mode, price: livePrice, report, ticker, deriv, ls, changes,
     whales: { walls: whale.walls, threshold: whale.threshold, stats: tradeStats(whale.trades, whale.threshold, Date.now()), ratio: whaleVsCrowd(whale.top, whale.crowd) },
-    full: ai.messages.length === 0,
+    full,
   });
   const userMsg = { role: 'user', content: aiUserMessage(snapshot, question) };
   const convo = [...ai.messages, userMsg];
+  const view = [...ai.view, { k: 'user', text: question }];
   aiBubble('user', esc(question));
   const bubble = aiBubble('ai', '<span class="ai-status">送出中…</span>');
-  ai.busy = true;
-  $('ai-send').disabled = true;
   let text = '';
   let status = '';
   const paint = () => { bubble.innerHTML = (text ? mdLite(text) : '') + (status ? `<div class="ai-status">${esc(status)}</div>` : ''); $('ai-log').scrollTop = $('ai-log').scrollHeight; };
@@ -755,13 +819,16 @@ async function aiAsk(question) {
     }
     if (done && done.append?.length) {
       // 對話只能往後加：把這次的問題和 AI 原封不動的回覆接上去，下次整段送回
-      ai.messages = [...convo, ...done.append];
       status = '';
       paint();
       const meta = document.createElement('div');
       meta.className = 'ai-meta';
-      meta.textContent = `${aiCost(done.usage) ?? ''}｜根據 ${tw(Date.now()).slice(6)} 的資料${mode === 'live' ? '（含盤中 K 棒）' : ''}`;
+      meta.textContent = `${aiCost(done.usage) ?? ''}｜根據 ${tw(now).slice(6)} 的資料${mode === 'live' ? '（含盤中 K 棒）' : ''}${full ? '' : '（摘要）'}`;
       bubble.appendChild(meta);
+      // 存起來：關掉網頁再開、換幣再換回來都接得上（回答途中換了幣也照樣存到原本那個幣）
+      const chat = { symbol: chatSym, messages: [...convo, ...done.append], view: [...view, { k: 'ai', text, meta: meta.textContent }], lastFullAt: full ? now : prevFullAt, updated: Date.now() };
+      if (ai.symbol === chatSym) Object.assign(ai, chat);
+      aiStoreSave(chat);
     } else if (bubble.className !== 'ai-msg err') {
       bubble.className = 'ai-msg err';
       bubble.textContent = '沒有拿到完整回答，請再問一次';
