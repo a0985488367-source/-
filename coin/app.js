@@ -11,6 +11,7 @@ import { buildCoinReport, narrativeZh, nextCloseTime, diffReports, REPORT_TFS } 
 import { bigTradeThreshold, detectWalls, trackWalls, tradeStats, whaleVsCrowd } from '../src/radar/whales.js';
 import { buildAiSnapshot, aiUserMessage } from '../src/radar/ai-context.js';
 import { needFullSnapshot, validChat, chatsToPrune, agoZh } from '../src/radar/ai-history.js';
+import { runMarketScan, marketSnapshot, marketUserMessage, SCAN_TOP_N, SCAN_FRESH_MS } from '../src/radar/market-scan.js';
 
 const bybit = PROVIDERS.bybit;
 const $ = (id) => document.getElementById(id);
@@ -641,8 +642,10 @@ const AI_DEFAULT_URL = 'https://smc-signals.crypto-radar-guardian-24x7.workers.d
 // Claude Opus 5.5 價格（美元／百萬 token）：輸入 4、輸出 20、快取讀 0.2、快取寫 5；網路搜尋每次 0.01
 const AI_PRICE = { in: 4, out: 20, cacheRead: 0.2, cacheWrite: 5, search: 0.01 };
 const USD_TWD = 32;
+const AI_QUICK_MARKET = ['現在哪幾個幣最值得做多？', '哪幾個幣最值得做空？', '有沒有剛出順勢訊號的幣？', '哪些幣多週期最一致？', '整體市場現在偏多還偏空？'];
+const MARKET_KEY = 'MARKET'; // 全市場那段對話在瀏覽器裡的 key
 const AI_QUICK = ['現在能做多還是做空？', '最近的進場點在哪？停損放哪？', '大戶最近在做什麼？', '各週期在打架嗎？該怎麼辦？', '最近為什麼漲／跌？（查新聞）'];
-const ai = { symbol: null, messages: [], view: [], lastFullAt: 0, updated: 0, busy: false, loadP: null, cfg: (() => { try { return JSON.parse(localStorage.getItem(AI_KEY) || '{}'); } catch { return {}; } })() };
+const ai = { scope: 'coin', symbol: null, messages: [], view: [], lastFullAt: 0, updated: 0, busy: false, loadP: null, cfg: (() => { try { return JSON.parse(localStorage.getItem(AI_KEY) || '{}'); } catch { return {}; } })() };
 
 function aiSaveCfg() { try { localStorage.setItem(AI_KEY, JSON.stringify(ai.cfg)); } catch { /* 無痕模式 */ } }
 const aiUrl = () => (ai.cfg.url || AI_DEFAULT_URL).replace(/\/$/, '');
@@ -717,10 +720,43 @@ async function aiStoreSave(chat) {
   if (drop.length) await aiTx('readwrite', (s) => { drop.forEach((k) => s.delete(k)); });
 }
 
+/* 全市場掃描（在瀏覽器裡跑，10 分鐘內重問沿用同一次結果） */
+const market = { scan: null, running: null };
+const aiKey = () => (ai.scope === 'market' ? MARKET_KEY : sym);
+
+async function bybitTickers() {
+  const r = await fetch('https://api.bybit.com/v5/market/tickers?category=linear').then((x) => x.json());
+  if (r.retCode !== 0) throw new Error(r.retMsg || 'bybit error');
+  return r.result.list.map((t) => ({ symbol: t.symbol, price: +t.lastPrice, change: +t.price24hPcnt * 100, turnover: +t.turnover24h, funding: t.fundingRate === '' ? null : +t.fundingRate }));
+}
+
+function marketScan(onProgress) {
+  if (market.scan && Date.now() - market.scan.time < SCAN_FRESH_MS) return Promise.resolve(market.scan);
+  market.running ??= runMarketScan({
+    fetchTickers: bybitTickers,
+    fetchKlines: (s, tf) => bybit.fetchKlines(s, tf, { limit: 500 }),
+    onProgress: (d, n, s) => market.onProgress?.(d, n, s),
+    n: SCAN_TOP_N,
+  }).then((scan) => { market.scan = scan; return scan; }).finally(() => { market.running = null; });
+  market.onProgress = onProgress;
+  return market.running;
+}
+
+/** 掃描結果泡泡：前 10 名，點了直接打開那個幣 */
+function scanBubble(rows) {
+  const dz = (d) => (d === 'long' ? '<span class="up">多</span>' : d === 'short' ? '<span class="down">空</span>' : '<span class="muted">中性</span>');
+  const el = aiBubble('ai', `<div class="ai-meta" style="margin:0 0 6px">掃描結果前 ${rows.length} 名（機會分數只是排序，不是勝率；點幣名打開）</div>`
+    + rows.map((r) => `<button type="button" class="ai-coin" data-s="${esc(r.s)}"><b>${esc(r.s.replace(/USDT$/, ''))}</b> ${dz(r.dir)} <span class="muted">${r.score}分 · 24h ${r.chg >= 0 ? '+' : ''}${r.chg}%</span></button>`).join(''));
+  el.classList.add('ai-scan');
+  return el;
+}
+
 function aiRender(resumed) {
   $('ai-log').innerHTML = '';
-  aiBubble('ai', mdLite(`我會根據這頁 **${(ai.symbol || '').replace(/USDT$/, '')}** 當下的資料回答（各週期結構、流動性、計畫、大戶動向、合約數據），需要時也會上網查新聞。\n可以直接問，或點下面的問題。每個幣的對話分開保存，關掉網頁再開還在；按「新對話」重新開始。`));
+  if (ai.symbol === MARKET_KEY) aiBubble('ai', mdLite(`問的時候我會先掃一輪 **Bybit 成交額前 ${SCAN_TOP_N} 檔**（1h／4h／6h／1d／1w 的結構、順勢策略、多週期偏向、SMC 計畫），再挑出值得看的幣說明。\n掃一次約 10～30 秒，10 分鐘內再問會沿用同一次結果。這段對話也會保存；按「新對話」重新開始。`));
+  else aiBubble('ai', mdLite(`我會根據這頁 **${(ai.symbol || '').replace(/USDT$/, '')}** 當下的資料回答（各週期結構、流動性、計畫、大戶動向、合約數據），需要時也會上網查新聞。\n可以直接問，或點下面的問題。每個幣的對話分開保存，關掉網頁再開還在；按「新對話」重新開始。`));
   for (const v of ai.view) {
+    if (v.k === 'scan') { scanBubble(v.rows ?? []); continue; }
     const el = aiBubble(v.k, v.k === 'user' ? esc(v.text) : mdLite(v.text));
     if (v.meta) { const m = document.createElement('div'); m.className = 'ai-meta'; m.textContent = v.meta; el.appendChild(m); }
   }
@@ -741,7 +777,7 @@ function aiLoad(symbol) {
 
 function aiReset() {
   if (ai.busy) return; // 回答到一半不能清掉
-  const symbol = sym;
+  const symbol = aiKey();
   Object.assign(ai, { symbol, messages: [], view: [], lastFullAt: 0, updated: 0, loadP: null });
   aiRender(false);
   aiStoreSave({ symbol, messages: [] });
@@ -750,12 +786,16 @@ function aiReset() {
 function aiOpen() {
   $('ai-panel').hidden = false;
   $('ai-fab').hidden = true;
-  if (ai.symbol !== sym) aiLoad(sym);
-  $('ai-title').textContent = `問 AI：${(sym || '').replace(/USDT$/, '')}`;
+  if (ai.symbol !== aiKey()) aiLoad(aiKey());
+  $('ai-title').textContent = '問 AI';
+  $('ai-tab-coin').textContent = (sym || '').replace(/USDT$/, '') || '這個幣';
+  $('ai-tab-coin').classList.toggle('on', ai.scope === 'coin');
+  $('ai-tab-market').classList.toggle('on', ai.scope === 'market');
+  $('ai-q').placeholder = ai.scope === 'market' ? '問全市場，例如：現在哪幾個幣最值得做多？' : '問這個幣的任何事，例如：現在 4h 能做多嗎？停損放哪？';
   const noToken = !ai.cfg.token;
   $('ai-set').hidden = !noToken;
   if (noToken) { $('ai-token').value = ''; $('ai-url').value = aiUrl(); }
-  $('ai-quick').innerHTML = AI_QUICK.map((q) => `<button type="button">${esc(q)}</button>`).join('');
+  $('ai-quick').innerHTML = (ai.scope === 'market' ? AI_QUICK_MARKET : AI_QUICK).map((q) => `<button type="button">${esc(q)}</button>`).join('');
   aiStatusRefresh();
 }
 
@@ -811,32 +851,57 @@ async function aiSaveBalance() {
 async function aiAsk(question) {
   question = String(question || '').trim();
   if (!question || ai.busy) return;
-  if (!report || !sym) { aiBubble('err', '還在載入資料，等一下再問'); return; }
+  const isMarket = ai.scope === 'market';
+  if (!isMarket && (!report || !sym)) { aiBubble('err', '還在載入資料，等一下再問'); return; }
   if (!ai.cfg.token) { $('ai-set').hidden = false; aiBubble('err', '先輸入 AI 密碼'); return; }
-  if (ai.symbol !== sym) aiLoad(sym);
+  const key = aiKey();
+  if (ai.symbol !== key) aiLoad(key);
   ai.busy = true;
   $('ai-send').disabled = true;
   await ai.loadP; // 先等之前的紀錄讀回來，才接得上
-  if (ai.symbol !== sym) { ai.busy = false; $('ai-send').disabled = false; return; }
+  if (ai.symbol !== key) { ai.busy = false; $('ai-send').disabled = false; return; }
   const chatSym = ai.symbol;
   const prevFullAt = ai.lastFullAt;
-  const now = Date.now();
-  const full = needFullSnapshot(ai, now);
-  const snapshot = buildAiSnapshot({
-    symbol: sym, mode, price: livePrice, report, ticker, deriv, ls, changes,
-    whales: { walls: whale.walls, threshold: whale.threshold, stats: tradeStats(whale.trades, whale.threshold, Date.now()), ratio: whaleVsCrowd(whale.top, whale.crowd) },
-    full,
-  });
-  const userMsg = { role: 'user', content: aiUserMessage(snapshot, question) };
-  const convo = [...ai.messages, userMsg];
+  let now = Date.now();
+  let full;
+  let content;
   const view = [...ai.view, { k: 'user', text: question }];
   aiBubble('user', esc(question));
+  if (isMarket) {
+    // 全市場：先掃（10 分鐘內沿用），這段對話還沒看過這次掃描才附上完整結果
+    const prog = aiBubble('ai', '<span class="ai-status">掃描市場中…</span>');
+    let scan;
+    try {
+      scan = await marketScan((d, n, s) => { prog.innerHTML = `<span class="ai-status">掃描市場中… ${d}/${n}（${esc(s.replace(/USDT$/, ''))}）</span>`; });
+    } catch (e) {
+      prog.className = 'ai-msg err';
+      prog.textContent = `掃描失敗（連不到 Bybit）：${e.message || e}`;
+      ai.busy = false; $('ai-send').disabled = false;
+      return;
+    }
+    prog.remove();
+    full = !ai.messages.length || ai.lastFullAt !== scan.time;
+    now = scan.time;
+    const rows = scan.rows.slice(0, 10).map((r) => ({ s: r.symbol, dir: r.dir, score: r.score, chg: Math.round(r.change * 10) / 10 }));
+    if (full) { view.push({ k: 'scan', text: '', rows }); scanBubble(rows); }
+    content = marketUserMessage(full ? marketSnapshot(scan) : null, question);
+  } else {
+    full = needFullSnapshot(ai, now);
+    const snapshot = buildAiSnapshot({
+      symbol: sym, mode, price: livePrice, report, ticker, deriv, ls, changes,
+      whales: { walls: whale.walls, threshold: whale.threshold, stats: tradeStats(whale.trades, whale.threshold, Date.now()), ratio: whaleVsCrowd(whale.top, whale.crowd) },
+      full,
+    });
+    content = aiUserMessage(snapshot, question);
+  }
+  const userMsg = { role: 'user', content };
+  const convo = [...ai.messages, userMsg];
   const bubble = aiBubble('ai', '<span class="ai-status">送出中…</span>');
   let text = '';
   let status = '';
   const paint = () => { bubble.innerHTML = (text ? mdLite(text) : '') + (status ? `<div class="ai-status">${esc(status)}</div>` : ''); $('ai-log').scrollTop = $('ai-log').scrollHeight; };
   try {
-    const res = await fetch(`${aiUrl()}/ai/ask`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-ai-token': ai.cfg.token }, body: JSON.stringify({ symbol: sym, messages: convo }) });
+    const res = await fetch(`${aiUrl()}/ai/ask`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-ai-token': ai.cfg.token }, body: JSON.stringify({ symbol: isMarket ? 'MARKET' : sym, messages: convo }) });
     if (!res.body) throw new Error(`HTTP ${res.status}`);
     const reader = res.body.getReader();
     const dec = new TextDecoder();
@@ -865,7 +930,9 @@ async function aiAsk(question) {
       paint();
       const meta = document.createElement('div');
       meta.className = 'ai-meta';
-      meta.textContent = `${aiCost(done.usage) ?? ''}｜根據 ${tw(now).slice(6)} 的資料${mode === 'live' ? '（含盤中 K 棒）' : ''}${full ? '' : '（摘要）'}`;
+      meta.textContent = isMarket
+        ? `${aiCost(done.usage) ?? ''}｜根據 ${tw(now).slice(6)} 的全市場掃描`
+        : `${aiCost(done.usage) ?? ''}｜根據 ${tw(now).slice(6)} 的資料${mode === 'live' ? '（含盤中 K 棒）' : ''}${full ? '' : '（摘要）'}`;
       bubble.appendChild(meta);
       // 存起來：關掉網頁再開、換幣再換回來都接得上（回答途中換了幣也照樣存到原本那個幣）
       const chat = { symbol: chatSym, messages: [...convo, ...done.append], view: [...view, { k: 'ai', text, meta: meta.textContent }], lastFullAt: full ? now : prevFullAt, updated: Date.now() };
@@ -892,6 +959,15 @@ $('ai-new').addEventListener('click', aiReset);
 $('ai-gear').addEventListener('click', () => { $('ai-set').hidden = !$('ai-set').hidden; $('ai-token').value = ai.cfg.token || ''; $('ai-url').value = aiUrl(); if (!$('ai-set').hidden) aiCheck(); });
 $('ai-save').addEventListener('click', () => { ai.cfg.token = $('ai-token').value.trim(); ai.cfg.url = $('ai-url').value.trim() || AI_DEFAULT_URL; aiSaveCfg(); aiCheck(); if (ai.cfg.token) setTimeout(() => { $('ai-set').hidden = true; }, 1200); });
 $('ai-bal-save').addEventListener('click', aiSaveBalance);
+const aiScope = (scope) => { if (ai.busy || ai.scope === scope) return; ai.scope = scope; aiOpen(); };
+$('ai-tab-coin').addEventListener('click', () => aiScope('coin'));
+$('ai-tab-market').addEventListener('click', () => aiScope('market'));
+$('ai-log').addEventListener('click', (e) => {
+  const b = e.target.closest('button.ai-coin');
+  if (!b || ai.busy) return;
+  ai.scope = 'coin';
+  start(b.dataset.s); // 打開那個幣（start 會順便把問 AI 換到那個幣的對話）
+});
 $('ai-quick').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) aiAsk(b.textContent); });
 $('ai-form').addEventListener('submit', (e) => { e.preventDefault(); const q = $('ai-q').value; $('ai-q').value = ''; aiAsk(q); });
 $('ai-q').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('ai-form').requestSubmit(); } });
