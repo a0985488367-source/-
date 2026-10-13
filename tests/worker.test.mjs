@@ -1554,10 +1554,12 @@ function stubWithKlines(opts, trendByTf) {
 test('統整週期：15m 做空、1h／4h 也是空 → 推播，訊息附上面兩層的結構', async () => {
   const discord = [];
   const calls = stubWithKlines({ market: makeMarket([row({ interval: '15m', dir: 'short', entry: 100, stop: 105, provider: 'bybit', targets: [{ name: 'TP1', price: 90, rr: 2 }] })]), prices: { ABCUSDT: 100.05 }, discord }, { '1h': 'down', '4h': 'down' });
-  const out = await runWorker(makeEnv({ SMC_MTF_FILTER: 'true' }));
+  const env = makeEnv({ SMC_MTF_FILTER: 'true' });
+  const out = await runWorker(env);
   assert.equal(out.alerts, 1);
   assert.deepEqual(out.mtfBlocked, []);
   assert.deepEqual(calls.sort(), ['1h', '4h']);
+  assert.match(env.SMC_KV.store.get('mtfst:ABCUSDT:1h'), /"swing":"short"/, '算好的結構存起來，下一根收盤前不再重抓');
   const f = discord[0].embeds[0].fields.find((x) => x.name.includes('週期統整'));
   assert.match(f.value, /1h 大結構空 ✅・小結構空 ✅/);
   assert.match(f.value, /4h 大結構空 ✅/);

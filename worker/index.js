@@ -1726,24 +1726,65 @@ async function fetchBybitLinearKlines(symbol, interval, limit) {
     .sort((a, b) => a.time - b.time);
 }
 
+/** Binance 公開行情鏡像（現貨）：api.binance.com／fapi 從 Cloudflare 常被地區封鎖（451），這個網域是給公開行情用的 */
+async function fetchVisionKlines(symbol, interval, limit) {
+  const res = await fetch(`https://data-api.binance.vision/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${Math.min(1000, limit)}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const rows = await res.json();
+  if (!Array.isArray(rows)) throw new Error('格式不對');
+  return rows.map((r) => ({ time: +r[0], open: +r[1], high: +r[2], low: +r[3], close: +r[4], volume: +r[5] }));
+}
+
+const UPPER_SOURCES = {
+  'binance-vision': (symbol, tf) => fetchVisionKlines(symbol, tf, GATE_BARS),
+  // OKX 從 Cloudflare 共用 IP 常被限流（429）：等一下再試，最多 3 次
+  okx: async (symbol, tf) => {
+    for (let k = 0; ; k++) {
+      try { return await PROVIDERS.okx.fetchKlines(symbol, tf, { limit: GATE_BARS }); } catch (e) {
+        if (k >= 2 || !/429/.test(String(e?.message))) throw e;
+        await new Promise((r) => setTimeout(r, 1200 * (k + 1)));
+      }
+    }
+  },
+  bybit: (symbol, tf) => PROVIDERS.bybit.fetchKlines(symbol, tf, { limit: GATE_BARS }),
+  binance: (symbol, tf) => PROVIDERS.binance.fetchKlines(symbol, tf, { limit: GATE_BARS }),
+};
+
+/** 這個週期下一根 K 棒收盤還有幾秒（週線從星期一 00:00 UTC 起算） */
+function secondsToClose(tf, now = Date.now()) {
+  const ms = intervalToMs(tf);
+  const off = tf === '1w' ? 4 * 864e5 : 0;
+  return Math.max(60, Math.ceil((Math.floor((now - off) / ms) * ms + off + ms - now) / 1000) + 30);
+}
+
 /**
- * 上面週期現在的大／小結構（只用已收盤的 K 棒；同一輪同一個幣／週期只抓一次）。
- * 先用這筆計畫的資料源，失敗就依序換 bybit／okx／binance；全部失敗回 { st: null, error }（error 會寫進推播，才查得到原因）
+ * 上面週期現在的大／小結構（只用已收盤的 K 棒）。同一輪同一個幣／週期只算一次，算好存 KV 到那個週期下一根收盤。
+ * 資料源依序：這筆計畫的資料源 → Binance 公開行情鏡像 → OKX（限流會重試）→ Bybit → Binance；
+ * 全部失敗回 { st: null, error }（error 會寫進推播，才查得到原因）
  */
 async function upperStructure(env, row, tf, cache) {
   const k = `${row.symbol}|${tf}`;
   if (!cache.has(k)) {
     cache.set(k, (async () => {
+      const kvKey = `mtfst:${row.symbol}:${tf}`;
+      if (env.SMC_KV) {
+        const hit = await env.SMC_KV.get(kvKey).catch(() => null);
+        if (hit) { try { return JSON.parse(hit); } catch { /* 重算 */ } }
+      }
       const errors = [];
-      for (const id of [...new Set([row.provider, 'bybit', 'okx', 'binance'].filter((x) => PROVIDERS[x]))]) {
+      for (const id of [...new Set([row.provider, 'binance-vision', 'okx', 'bybit', 'binance'].filter((x) => UPPER_SOURCES[x]))]) {
         let candles;
         try {
-          candles = await PROVIDERS[id].fetchKlines(row.symbol, tf, { limit: GATE_BARS });
+          candles = await UPPER_SOURCES[id](row.symbol, tf);
         } catch (e) { errors.push(`${id} ${String(e?.message ?? e).slice(0, 60)}`); continue; }
         if (!(candles?.length > 61)) { errors.push(`${id} 只有 ${candles?.length ?? 0} 根`); continue; }
         try {
           const st = structureOf(candles.slice(0, -1));
-          if (st) return { st, provider: id };
+          if (st) {
+            const out = { st, provider: id };
+            if (env.SMC_KV) await env.SMC_KV.put(kvKey, JSON.stringify(out), { expirationTtl: secondsToClose(tf) }).catch(() => {});
+            return out;
+          }
           errors.push(`${id} 結構算不出來`);
         } catch (e) { errors.push(`${id} 分析失敗 ${String(e?.message ?? e).slice(0, 60)}`); }
       }
