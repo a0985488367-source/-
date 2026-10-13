@@ -371,3 +371,18 @@ test('summarize 正確統計勝率與期望值', () => {
   assert.equal(s.expectancy, 0.75);
   assert.equal(s.profitFactor, 2.5);
 });
+
+test('統整週期過濾：上兩層大結構同向＋上一層小結構同向才過；讀不到上一層就不擋', async () => {
+  const { mtfGate, UPPER_TFS } = await import('../src/smc/mtf-gate.js');
+  assert.deepEqual(UPPER_TFS['15m'], ['1h', '4h']);
+  assert.deepEqual(UPPER_TFS['1d'], ['1w']);
+  const up = (swing, internal) => ({ swing, internal });
+  assert.equal(mtfGate('short', [{ tf: '1h', st: up('short', 'short') }, { tf: '4h', st: up('short', 'long') }]).pass, true, '第二層只看大結構');
+  const pullback = mtfGate('short', [{ tf: '1h', st: up('short', 'long') }, { tf: '4h', st: up('short', 'short') }]);
+  assert.equal(pullback.pass, false);
+  assert.match(pullback.lines[0], /還在回調/);
+  assert.equal(mtfGate('long', [{ tf: '1h', st: up('long', 'long') }, { tf: '4h', st: up('short', 'short') }]).pass, false);
+  const unk = mtfGate('long', [{ tf: '1h', st: null }, { tf: '4h', st: up('short', 'short') }]);
+  assert.ok(unk.pass && unk.unknown);
+  assert.equal(mtfGate('long', [{ tf: '1w', st: up('long', 'short') }]).pass, false, '1d 只有一層：1w 大小結構都要同向');
+});
