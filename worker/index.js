@@ -288,6 +288,8 @@ const DEFAULTS = {
   SMC_AUTO_TRADE_ENABLED: 'true',
   // SMC 推播的「統整週期」過濾：上面兩層大結構同向＋上一層小結構同向（沒在回調）才推（src/smc/mtf-gate.js）
   SMC_MTF_FILTER: 'false',
+  // SMC 只推這些週期的進場區（逗號分隔；留空＝全部）。其他週期照樣掃描（App／網頁看得到），只是不推播
+  SMC_PUSH_INTERVALS: '',
   SMC_MTF_BLOCK_TTL_SEC: '900', // 被擋掉的進場區多久後再重新判斷一次（上面週期可能轉向）
 };
 
@@ -680,7 +682,9 @@ async function run(env, { dry = false } = {}) {
   const minScore = Number(cfg(env, 'MIN_SCORE'));
   const nearPct = Number(cfg(env, 'NEAR_PCT'));
   const only = smcSymbols(env);
-  const watch = market.rows.filter((r) => r.valid && r.status === 'waiting' && r.score >= minScore && (!only.length || only.includes(r.symbol)));
+  const pushIvs = String(cfg(env, 'SMC_PUSH_INTERVALS')).split(',').map((x) => x.trim()).filter(Boolean);
+  const watch = market.rows.filter((r) => r.valid && r.status === 'waiting' && r.score >= minScore && (!only.length || only.includes(r.symbol))
+    && (!pushIvs.length || pushIvs.includes(r.interval)));
   if (!watch.length) return { checked: 0, alerts: 0, ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout };
 
   const prices = await getPrices(watch.map((r) => r.symbol));

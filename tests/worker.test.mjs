@@ -1601,3 +1601,12 @@ test('同一個幣、同方向、同時到價的好幾個週期 → 合併成一
   assert.match(abc.embeds[0].fields.find((f) => f.name.includes('其他週期')).value, /\*\*1h\*\* 進 100/);
   assert.ok(env.SMC_KV.store.has('hit:ABCUSDT:1h:long:100') && env.SMC_KV.store.has('hit:ABCUSDT:4h:long:100.02'));
 });
+
+test('SMC_PUSH_INTERVALS：只推指定週期的進場區，其他週期價格到了也不推', async () => {
+  const discord = [];
+  stubFetch({ market: makeMarket([row({ interval: '4h' }), row({ symbol: 'XYZUSDT', interval: '15m' })]), prices: { ABCUSDT: 99.9, XYZUSDT: 99.9 }, discord });
+  const out = await runWorker(makeEnv({ SMC_PUSH_INTERVALS: '15m,30m,1h' }));
+  assert.equal(out.checked, 1);
+  assert.equal(discord.length, 1);
+  assert.match(discord[0].embeds[0].title, /XYZ\/USDT 【15m】/);
+});
