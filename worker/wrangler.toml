@@ -121,6 +121,10 @@ BREAKOUT_BATCH_SIZE = "20"
 WORKER_SCAN_ENABLED = "true"
 # 2026-09-29 使用者要求：SMC 只盯市值前 10 大（不含穩定幣），只推播不下單
 SMC_SYMBOLS = "BTCUSDT,ETHUSDT,XRPUSDT,BNBUSDT,SOLUSDT,DOGEUSDT,ADAUSDT,TRXUSDT,LINKUSDT,AVAXUSDT"
+# 2026-10-13 使用者選的：SMC 推播「統整週期」——上面兩層大結構同向＋上一層小結構同向（沒在回調）才推，
+# 同一個幣同方向同時到價的週期合併成一則（src/smc/mtf-gate.js）。回測 150 天：推播少約一半、吃損少一半，
+# 但每筆期望值只從 -0.08R 變 -0.07R（只是少虧、少吵，不是變賺）
+SMC_MTF_FILTER = "true"
 WORKER_SCAN_TOP = "120"
 WORKER_SCAN_BATCH_SIZE = "20"
 # 只盯 SMC_SYMBOLS 10 檔、一批（20）就裝得下：改成「每個週期有新 K 棒收盤才重掃」

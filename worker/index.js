@@ -197,6 +197,7 @@ import { emaCrossSignal } from '../src/strategies/ema-cross.js';
 import { macdZeroSignal } from '../src/strategies/macd-zero.js';
 import { fakeoutSignal, FAKEOUT_DEFAULTS } from '../src/strategies/fakeout.js';
 import { handleAiAsk, aiStatus, aiSetBudget } from './ai.js';
+import { UPPER_TFS, GATE_BARS, structureOf, mtfGate } from '../src/smc/mtf-gate.js';
 import { trendExtraSignal, trendExtraIndicators, TREND_EXTRA_STOP_ATR } from '../src/strategies/trend-extra.js';
 
 const DEFAULTS = {
@@ -285,6 +286,9 @@ const DEFAULTS = {
   GOLDEN_CROSS_TF: '',
   // SMC 進場區的自動下單（false＝只推播不下單；突破／假突破這些另外的策略不受影響）
   SMC_AUTO_TRADE_ENABLED: 'true',
+  // SMC 推播的「統整週期」過濾：上面兩層大結構同向＋上一層小結構同向（沒在回調）才推（src/smc/mtf-gate.js）
+  SMC_MTF_FILTER: 'false',
+  SMC_MTF_BLOCK_TTL_SEC: '900', // 被擋掉的進場區多久後再重新判斷一次（上面週期可能轉向）
 };
 
 /** 突破單、EMA 交叉單這類「另外的策略」（不是 SMC） */
@@ -691,20 +695,48 @@ async function run(env, { dry = false } = {}) {
 
   const autoTradeOn = await isAutoTradeEnabled(env);
   const sent = [];
+  const blocked = [];
+  const gateOn = cfg(env, 'SMC_MTF_FILTER') === 'true';
+  const structCache = new Map();
+  const fresh = [];
   for (const hit of hits) {
     const key = `hit:${hit.row.symbol}:${hit.row.interval}:${hit.row.dir}:${hit.row.entry}`;
     if (env.SMC_KV) {
       if (await env.SMC_KV.get(key)) continue;
+      if (gateOn && await env.SMC_KV.get(`mtfblock:${key}`)) { blocked.push(`${hit.row.symbol} ${hit.row.interval} ${hit.row.dir}（剛判斷過，上面週期不同向）`); continue; }
     }
+    // 統整週期：上面兩層不同向（或上一層還在回調）就不推
+    if (gateOn) {
+      const upper = await Promise.all((UPPER_TFS[hit.row.interval] ?? []).map(async (tf) => ({ tf, st: await upperStructure(env, hit.row, tf, structCache) })));
+      hit.gate = mtfGate(hit.row.dir, upper);
+      if (!hit.gate.pass) {
+        blocked.push(`${hit.row.symbol} ${hit.row.interval} ${hit.row.dir}：${hit.gate.lines.join('；')}`);
+        if (env.SMC_KV && !dry) await env.SMC_KV.put(`mtfblock:${key}`, '1', { expirationTtl: Number(cfg(env, 'SMC_MTF_BLOCK_TTL_SEC')) });
+        continue;
+      }
+    }
+    fresh.push({ hit, key });
+  }
+  // 同一個幣、同方向、這一輪同時到價的好幾個週期 → 合併成一則（主訊息用分數最高的那個）
+  const groups = new Map();
+  for (const f of fresh) {
+    const g = `${f.hit.row.symbol}:${f.hit.row.dir}`;
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(f);
+  }
+  for (const group of groups.values()) {
+    group.sort((a, b) => b.hit.row.score - a.hit.row.score);
+    const { hit } = group[0];
+    const others = group.slice(1).map((x) => x.hit);
     let autoTrade = null;
     if (!dry) {
       // 跟 Discord 通知共用同一個去重 key：同一個進場區只會下單一次，
       // 不會因為 Worker 每 2 分鐘重跑就對同一個訊號重複下單。
       if (autoTradeOn) autoTrade = await autoTradeOrder(env, hit);
-      await postDiscord(env, buildEmbed(hit, market, autoTrade, autoTrade ? await executorMode(env) : null, env));
-      if (env.SMC_KV) await env.SMC_KV.put(key, String(Date.now()), { expirationTtl: Number(cfg(env, 'ALERT_TTL_SEC')) });
+      await postDiscord(env, buildEmbed(hit, market, autoTrade, autoTrade ? await executorMode(env) : null, env, others));
+      if (env.SMC_KV) for (const x of group) await env.SMC_KV.put(x.key, String(Date.now()), { expirationTtl: Number(cfg(env, 'ALERT_TTL_SEC')) });
     }
-    sent.push(`${hit.row.symbol} ${hit.row.dir} @ ${hit.price}${autoTrade?.orderId ? ' 🤖已下單' : ''}`);
+    sent.push(`${hit.row.symbol} ${hit.row.dir} @ ${hit.price}${others.length ? `（合併 ${[hit, ...others].map((x) => x.row.interval).join('＋')}）` : ''}${autoTrade?.orderId ? ' 🤖已下單' : ''}`);
   }
 
   return {
@@ -712,6 +744,7 @@ async function run(env, { dry = false } = {}) {
     reached: hits.length,
     alerts: sent.length,
     sent,
+    ...(gateOn ? { mtfBlocked: blocked } : {}),
     autoTradeOn,
     closedPositions,
     trailingStops,
@@ -1139,14 +1172,15 @@ function tradingViewUrl(symbol, interval) {
   return `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(`BYBIT:${symbol}.P`)}&interval=${TV_INTERVAL[interval] ?? '60'}`;
 }
 
-function buildEmbed({ row: r, price }, market, autoTrade, mode = null, env = {}) {
+function buildEmbed({ row: r, price, gate }, market, autoTrade, mode = null, env = {}, others = []) {
   const base = r.symbol.replace(/USDT$/, '');
   const long = r.dir === 'long';
   const tps = (r.targets || []).map((t) => `**${t.name}** ${fmt(t.price)} · ${t.rr.toFixed(2)}R`).join('\n');
+  const tfs = [r.interval, ...others.map((o) => o.row.interval)].join('＋');
   return {
     username: 'SMC 即時守門員',
     embeds: [{
-      title: `⚡ ${base}/USDT 【${r.interval}】價格到了　${long ? '🟢 做多' : '🔴 做空'} · ${r.grade} 級`,
+      title: `⚡ ${base}/USDT 【${tfs}】價格到了　${long ? '🟢 做多' : '🔴 做空'} · ${r.grade} 級`,
       color: long ? 0x26a69a : 0xef5350,
       description:
         `等待中的計畫，價格剛剛回到進場區。\n` +
@@ -1158,6 +1192,8 @@ function buildEmbed({ row: r, price }, market, autoTrade, mode = null, env = {})
         { name: '目標', value: tps || '—' },
         { name: '評分', value: `${r.score}/100（匯流 ${r.checksPassed}/${r.checksTotal}）`, inline: true },
         { name: '區間位置', value: r.pd ? `${r.pd.zone} ${r.pd.pct?.toFixed?.(0) ?? ''}%` : '—', inline: true },
+        ...(gate ? [{ name: '🧭 週期統整（上面兩層同向才推）', value: `${gate.lines.join('\n')}${gate.unknown ? '\n⚠️ 上一層讀不到資料，這則沒過濾' : ''}` }] : []),
+        ...(others.length ? [{ name: '同時到價的其他週期', value: others.map((o) => `**${o.row.interval}** 進 ${fmt(o.row.entry)}・損 ${fmt(o.row.stop)}・${o.row.grade} 級 ${o.row.score} 分`).join('\n') }] : []),
         ...propField(propSizing(env, r.entry, r.stop)),
         { name: '📱 去 App 對照', value: compareText(r, market) },
         ...(autoTrade ? [{ name: `🤖 自動下單（${modeLabel(mode)}）`, value: autoTradeText(autoTrade) }] : []),
@@ -1681,6 +1717,25 @@ async function fetchBybitLinearKlines(symbol, interval, limit) {
   return data.result.list
     .map((r) => ({ time: +r[0], open: +r[1], high: +r[2], low: +r[3], close: +r[4], volume: +r[5] }))
     .sort((a, b) => a.time - b.time);
+}
+
+/** 上面週期現在的大／小結構（只用已收盤的 K 棒；同一輪同一個幣／週期只抓一次）。抓不到回 null */
+async function upperStructure(env, row, tf, cache) {
+  const k = `${row.symbol}|${tf}`;
+  if (!cache.has(k)) {
+    cache.set(k, (async () => {
+      let candles = null;
+      try {
+        const p = PROVIDERS[row.provider];
+        candles = p ? await p.fetchKlines(row.symbol, tf, { limit: GATE_BARS + 1 }) : null;
+      } catch { /* 換別家 */ }
+      if (!candles?.length) {
+        try { candles = await fetchKlinesAny(env, row.symbol, tf, GATE_BARS + 1); } catch { return null; }
+      }
+      try { return structureOf(candles.slice(0, -1)); } catch { return null; }
+    })());
+  }
+  return cache.get(k);
 }
 
 /** 照 BREAKOUT_PROVIDERS 的順序抓 K 棒；bybit-linear＝Bybit 合約。全部失敗就把每一家的錯誤一起丟出來 */

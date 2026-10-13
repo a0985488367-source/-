@@ -1522,3 +1522,80 @@ test('同一個進場區重複執行只會下單一次（跟 Discord 通知共�
   const tradeCalls = executor.calls.filter((c) => c.url.endsWith('/trade'));
   assert.equal(tradeCalls.length, firstRoundTrades, '第二次執行不該再下一次單');
 });
+
+/* ---------------------------------------------- SMC 推播：統整週期＋合併 */
+
+/** Bybit K 線（新到舊）：dir 'up'／'down' 的鋸齒趨勢，大小結構都同方向 */
+const bybitZig = (dir, n = 301) => Array.from({ length: n }, (_, i) => {
+  const step = (i % 20 < 13 ? 1 : -1) * 0.6 * (dir === 'up' ? 1 : -1);
+  const o = 100 + i * 0.1 * (dir === 'up' ? 1 : -1) + step;
+  const c = o + step;
+  return [String(1.7e12 + i * 36e5), String(o), String(Math.max(o, c) + 0.2), String(Math.min(o, c) - 0.2), String(c), '100', '0'];
+}).reverse();
+
+function stubWithKlines(opts, trendByTf) {
+  stubFetch(opts);
+  const base = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    if (u.includes('api.bybit.com/v5/market/kline')) {
+      const q = new URL(u).searchParams;
+      const tf = { 60: '1h', 240: '4h', D: '1d', W: '1w' }[q.get('interval')];
+      calls.push(tf);
+      if (!trendByTf[tf]) throw new Error('沒準備 ' + tf);
+      return new Response(JSON.stringify({ retCode: 0, result: { list: bybitZig(trendByTf[tf]) } }), { status: 200 });
+    }
+    return base(url, init);
+  };
+  return calls;
+}
+
+test('統整週期：15m 做空、1h／4h 也是空 → 推播，訊息附上面兩層的結構', async () => {
+  const discord = [];
+  const calls = stubWithKlines({ market: makeMarket([row({ interval: '15m', dir: 'short', entry: 100, stop: 105, provider: 'bybit', targets: [{ name: 'TP1', price: 90, rr: 2 }] })]), prices: { ABCUSDT: 100.05 }, discord }, { '1h': 'down', '4h': 'down' });
+  const out = await runWorker(makeEnv({ SMC_MTF_FILTER: 'true' }));
+  assert.equal(out.alerts, 1);
+  assert.deepEqual(out.mtfBlocked, []);
+  assert.deepEqual(calls.sort(), ['1h', '4h']);
+  const f = discord[0].embeds[0].fields.find((x) => x.name.includes('週期統整'));
+  assert.match(f.value, /1h 大結構空 ✅・小結構空 ✅/);
+  assert.match(f.value, /4h 大結構空 ✅/);
+});
+
+test('統整週期：15m 做空但 1h 還在漲 → 不推，記下來 15 分鐘內不重判', async () => {
+  const discord = [];
+  const env = makeEnv({ SMC_MTF_FILTER: 'true' });
+  const opts = { market: makeMarket([row({ interval: '15m', dir: 'short', entry: 100, stop: 105, provider: 'bybit', targets: [{ name: 'TP1', price: 90, rr: 2 }] })]), prices: { ABCUSDT: 100.05 }, discord };
+  stubWithKlines(opts, { '1h': 'up', '4h': 'down' });
+  let out = await runWorker(env);
+  assert.equal(out.alerts, 0);
+  assert.equal(discord.length, 0);
+  assert.match(out.mtfBlocked[0], /ABCUSDT 15m short：1h 大結構多 ❌/);
+  const calls = stubWithKlines(opts, { '1h': 'up', '4h': 'down' });
+  out = await runWorker(env);
+  assert.equal(out.alerts, 0);
+  assert.equal(calls.length, 0, '剛判斷過的不再抓 K 棒');
+  assert.match(out.mtfBlocked[0], /剛判斷過/);
+});
+
+test('統整週期：上面週期抓不到資料 → 照推，訊息註明沒過濾', async () => {
+  const discord = [];
+  stubWithKlines({ market: makeMarket([row({ interval: '15m', provider: 'bybit' })]), prices: { ABCUSDT: 99.9 }, discord }, {});
+  const out = await runWorker(makeEnv({ SMC_MTF_FILTER: 'true', BREAKOUT_PROVIDERS: 'bybit' }));
+  assert.equal(out.alerts, 1);
+  assert.match(discord[0].embeds[0].fields.find((x) => x.name.includes('週期統整')).value, /上一層讀不到資料，這則沒過濾/);
+});
+
+test('同一個幣、同方向、同時到價的好幾個週期 → 合併成一則，兩個進場區都記去重', async () => {
+  const discord = [];
+  const env = makeEnv();
+  stubFetch({ market: makeMarket([row({ interval: '1h', score: 70 }), row({ interval: '4h', score: 80, entry: 100.02 }), row({ symbol: 'XYZUSDT' })]), prices: { ABCUSDT: 99.9, XYZUSDT: 99.9 }, discord });
+  const out = await runWorker(env);
+  assert.equal(out.alerts, 2);
+  assert.equal(discord.length, 2);
+  const abc = discord.find((d) => d.embeds[0].title.includes('ABC'));
+  assert.match(abc.embeds[0].title, /【4h＋1h】/, '分數高的當主訊息');
+  assert.match(abc.embeds[0].fields.find((f) => f.name.includes('其他週期')).value, /\*\*1h\*\* 進 100/);
+  assert.ok(env.SMC_KV.store.has('hit:ABCUSDT:1h:long:100') && env.SMC_KV.store.has('hit:ABCUSDT:4h:long:100.02'));
+});
