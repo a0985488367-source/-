@@ -462,6 +462,13 @@ async function handleFetch(request, env, ctx) {
       const r = await aiSetBudget(request, env);
       return json(r.body, { status: r.status });
     }
+    // 統整週期的檢查：/mtf-check?symbol=ETHUSDT&interval=6h&dir=short&provider=okx（部署後會自動打一次，查「讀不到資料」用）
+    if (url.pathname === '/mtf-check') {
+      const q = url.searchParams;
+      const r = { symbol: (q.get('symbol') || 'BTCUSDT').toUpperCase(), interval: q.get('interval') || '15m', dir: q.get('dir') === 'short' ? 'short' : 'long', provider: q.get('provider') || 'bybit' };
+      const upper = await Promise.all((UPPER_TFS[r.interval] ?? []).map(async (tf) => ({ tf, ...(await upperStructure(env, r, tf, new Map())) })));
+      return json({ ...r, upper, gate: mtfGate(r.dir, upper) });
+    }
     if (url.pathname === '/run') {
       const result = await run(env, { dry: url.searchParams.get('dry') === '1' });
       return json(result);
@@ -707,7 +714,7 @@ async function run(env, { dry = false } = {}) {
     }
     // 統整週期：上面兩層不同向（或上一層還在回調）就不推
     if (gateOn) {
-      const upper = await Promise.all((UPPER_TFS[hit.row.interval] ?? []).map(async (tf) => ({ tf, st: await upperStructure(env, hit.row, tf, structCache) })));
+      const upper = await Promise.all((UPPER_TFS[hit.row.interval] ?? []).map(async (tf) => ({ tf, ...(await upperStructure(env, hit.row, tf, structCache)) })));
       hit.gate = mtfGate(hit.row.dir, upper);
       if (!hit.gate.pass) {
         blocked.push(`${hit.row.symbol} ${hit.row.interval} ${hit.row.dir}：${hit.gate.lines.join('；')}`);
@@ -1719,20 +1726,29 @@ async function fetchBybitLinearKlines(symbol, interval, limit) {
     .sort((a, b) => a.time - b.time);
 }
 
-/** 上面週期現在的大／小結構（只用已收盤的 K 棒；同一輪同一個幣／週期只抓一次）。抓不到回 null */
+/**
+ * 上面週期現在的大／小結構（只用已收盤的 K 棒；同一輪同一個幣／週期只抓一次）。
+ * 先用這筆計畫的資料源，失敗就依序換 bybit／okx／binance；全部失敗回 { st: null, error }（error 會寫進推播，才查得到原因）
+ */
 async function upperStructure(env, row, tf, cache) {
   const k = `${row.symbol}|${tf}`;
   if (!cache.has(k)) {
     cache.set(k, (async () => {
-      let candles = null;
-      try {
-        const p = PROVIDERS[row.provider];
-        candles = p ? await p.fetchKlines(row.symbol, tf, { limit: GATE_BARS + 1 }) : null;
-      } catch { /* 換別家 */ }
-      if (!candles?.length) {
-        try { candles = await fetchKlinesAny(env, row.symbol, tf, GATE_BARS + 1); } catch { return null; }
+      const errors = [];
+      for (const id of [...new Set([row.provider, 'bybit', 'okx', 'binance'].filter((x) => PROVIDERS[x]))]) {
+        let candles;
+        try {
+          candles = await PROVIDERS[id].fetchKlines(row.symbol, tf, { limit: GATE_BARS });
+        } catch (e) { errors.push(`${id} ${String(e?.message ?? e).slice(0, 60)}`); continue; }
+        if (!(candles?.length > 61)) { errors.push(`${id} 只有 ${candles?.length ?? 0} 根`); continue; }
+        try {
+          const st = structureOf(candles.slice(0, -1));
+          if (st) return { st, provider: id };
+          errors.push(`${id} 結構算不出來`);
+        } catch (e) { errors.push(`${id} 分析失敗 ${String(e?.message ?? e).slice(0, 60)}`); }
       }
-      try { return structureOf(candles.slice(0, -1)); } catch { return null; }
+      console.error('mtf upper failed', row.symbol, tf, errors.join('；'));
+      return { st: null, error: errors.join('；') || '沒有可用的資料源' };
     })());
   }
   return cache.get(k);

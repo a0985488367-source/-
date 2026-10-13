@@ -26,7 +26,7 @@ export function structureOf(closedCandles) {
 
 /**
  * @param {'long'|'short'} dir 訊號方向
- * @param {Array<{ tf: string, st: { swing, internal } | null }>} upper 上面兩層（照順序：緊鄰的在前）
+ * @param {Array<{ tf: string, st: { swing, internal } | null, error?: string }>} upper 上面兩層（照順序：緊鄰的在前）；error＝抓不到的原因
  * @returns {{ pass: boolean, unknown: boolean, lines: string[] }}
  *   unknown＝上一層讀不到資料：不擋（寧可多推一則，也不要因為抓不到資料漏掉），訊息裡會註明
  */
@@ -36,9 +36,9 @@ export function mtfGate(dir, upper) {
   const lines = [];
   let pass = true;
   let unknown = false;
-  upper.forEach(({ tf, st }, i) => {
+  upper.forEach(({ tf, st, error }, i) => {
     if (!st) {
-      lines.push(`${tf} 讀不到資料`);
+      lines.push(`${tf} 讀不到資料${error ? `（${error}）` : ''}`);
       if (i === 0) unknown = true;
       return;
     }
