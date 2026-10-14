@@ -16,6 +16,8 @@
 - 合併後如果改到 `worker/`，再手動觸發 `deploy-worker.yml`（ref 用 `main`）讓 Worker 生效。
 - `tradingview/smc-plan.pine` 是 `src/smc/` 的 TradingView 逐行改寫版（使用者在 TV 上看 SMC 計畫用）：
   改了 `src/smc/` 的規則要同步改 Pine 版，`tests/tradingview-parity.test.mjs` 會比對兩邊結果。
+- `coach/` 是獨立的「SMC 教練」手機 App（掃描板＋圖表教練＋時段），直接 import `src/smc/coach.js`、`src/smc/sessions.js`，
+  規則只有一份；`dojo/` 是 SMC 道場學習 App。兩個都靠 GitHub Pages（pages.yml）上線。
 - 策略／評分規則的改動要先用 `scripts/research/` 的回測（GitHub Actions `research.yml`）驗證，
   前後半段資料都成立才上線；這個環境連不到交易所，回測只能在 Actions 上跑。
   **策略改動要先把回測數據給使用者看，由使用者決定要不要上線**（只動回測工具的可以直接合併）。

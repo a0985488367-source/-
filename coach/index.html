@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0A0F1D">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="SMC 教練">
+<title>SMC 教練</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=Noto+Sans+TC:wght@400;500;700;900&display=swap">
+<style>
+/* 夜間看盤桌：深色單一主題（跟 SMC 道場同一套色），金色只留給「到位」 */
+:root {
+  --bg: #0A0F1D; --panel: #111a2e; --panel2: #17223b; --line: #25314f; --fg: #E8EDF7; --mut: #8C99B8; --dim: #56627f;
+  --bull: #2CD3A3; --bear: #FF6E6E; --gold: #F5BF4F; --sel: #8E9DFF;
+  --s1: #4d84d6; --s2: #2CD3A3; --s3: #F5BF4F; --s4: #8E9DFF;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; background: var(--bg); color: var(--fg); }
+body { font: 15px/1.55 "Noto Sans TC", -apple-system, "PingFang TC", sans-serif; padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); overflow-x: hidden; }
+#app { max-width: 560px; margin: 0 auto; padding: 12px 16px 40px; }
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; text-align: inherit; padding: 0; }
+.row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sp { flex: 1; }
+.mut { color: var(--mut); }
+.small { font-size: 12px; }
+.num, .now, .sym, .cell, .stg { font-family: "Chakra Petch", ui-monospace, monospace; }
+.gold { color: var(--gold); }
+header { margin: 4px 0 12px; }
+.eyebrow { margin: 0; font: 600 11px "Chakra Petch", monospace; letter-spacing: .22em; color: var(--mut); }
+h1 { margin: 0; font-size: 22px; font-weight: 900; }
+.h3 { margin: 18px 0 8px; font-size: 14px; font-weight: 700; color: var(--mut); }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; margin: 0 0 10px; }
+.card.no { color: var(--bear); }
+/* 時段列 */
+.sess .now { font-size: 20px; }
+.tag { font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 99px; background: var(--panel2); color: var(--mut); }
+.tag.s1 { color: var(--s1); } .tag.s2 { color: var(--s2); background: rgba(44,211,163,.12); } .tag.s3 { color: var(--s3); background: rgba(245,191,79,.12); } .tag.s4 { color: var(--s4); background: rgba(142,157,255,.12); }
+.tl { position: relative; height: 10px; border-radius: 6px; background: var(--panel2); margin: 10px 0 2px; overflow: hidden; }
+.tl .seg { position: absolute; top: 0; bottom: 0; opacity: .75; }
+.seg.s1, .sw.s1 { background: var(--s1); } .seg.s2, .sw.s2 { background: var(--s2); } .seg.s3, .sw.s3 { background: var(--s3); } .seg.s4, .sw.s4 { background: var(--s4); }
+.tl .nowm { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--fg); box-shadow: 0 0 6px var(--fg); }
+.tlx { display: flex; justify-content: space-between; font: 10px "Chakra Petch", monospace; color: var(--dim); }
+/* 分頁、篩選 */
+.tabs { display: flex; gap: 6px; margin: 12px 0 10px; }
+.tabs button { flex: 1; text-align: center; padding: 9px 4px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); color: var(--mut); font-size: 14px; }
+.tabs button.on { color: var(--fg); border-color: var(--sel); background: var(--panel2); font-weight: 700; }
+.filters { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.seg2 { display: inline-flex; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 3px; }
+.seg2 button { padding: 6px 10px; border-radius: 7px; color: var(--mut); font: 600 13px "Chakra Petch", "Noto Sans TC", sans-serif; }
+.seg2 button.on { background: var(--panel2); color: var(--fg); }
+.chip { padding: 7px 11px; border-radius: 99px; border: 1px solid var(--line); color: var(--mut); font-size: 13px; }
+.chip.on { border-color: var(--bull); color: var(--bull); }
+/* 劇本卡 */
+.setup { display: block; width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 11px 13px; margin: 0 0 8px; }
+.setup.ready { border-color: var(--gold); box-shadow: 0 0 0 1px rgba(245,191,79,.25) inset; }
+.setup.stale, .cell.stale { opacity: .55; }
+.sym { font-size: 17px; font-weight: 700; }
+.sym.big { font-size: 22px; }
+.side { font-size: 12px; font-weight: 700; padding: 1px 7px; border-radius: 6px; }
+.side.L { color: var(--bull); background: rgba(44,211,163,.12); } .side.S { color: var(--bear); background: rgba(255,110,110,.12); }
+.dots { display: inline-flex; gap: 3px; } .dots i { width: 7px; height: 7px; border-radius: 50%; background: var(--line); } .dots i.on { background: var(--fg); }
+.setup.ready .dots i.on { background: var(--gold); }
+.stg { font-size: 13px; }
+.badges { display: flex; gap: 5px; flex-wrap: wrap; margin: 7px 0 4px; }
+.b { font-size: 12px; padding: 2px 7px; border-radius: 6px; background: var(--panel2); color: var(--mut); }
+.b.ok { color: var(--bull); } .b.no { color: var(--bear); }
+.nx { font-size: 13px; color: var(--fg); }
+/* 總表 */
+.grid { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 6px 8px; }
+.gh, .gr { display: grid; grid-template-columns: 64px repeat(3, 1fr); gap: 5px; align-items: center; padding: 3px 0; }
+.gh span { text-align: center; font: 600 12px "Chakra Petch", monospace; color: var(--mut); }
+.gr b { font: 700 13px "Chakra Petch", monospace; }
+.cell { position: relative; text-align: center; padding: 7px 0; border-radius: 8px; background: var(--panel2); font-size: 13px; color: var(--dim); }
+.cell.L { color: var(--bull); background: rgba(44,211,163,.1); } .cell.S { color: var(--bear); background: rgba(255,110,110,.1); }
+.cell.ready { box-shadow: 0 0 0 1.5px var(--gold) inset; color: var(--gold); }
+.cell i { position: absolute; top: 1px; right: 4px; font: 700 9px "Noto Sans TC", sans-serif; font-style: normal; color: var(--gold); }
+.ev { display: flex; gap: 8px; align-items: center; width: 100%; padding: 7px 0; border-top: 1px solid var(--line); font-size: 13px; flex-wrap: wrap; }
+.ev:first-of-type { border-top: 0; }
+.foot { margin-top: 16px; }
+.help ol { padding-left: 20px; margin: 6px 0; } .help li { margin: 5px 0; } .help p { margin: 6px 0; }
+.tt { width: 100%; border-collapse: collapse; font-size: 13px; } .tt td { padding: 5px 4px; border-top: 1px solid var(--line); }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+/* 單一劇本 */
+.back { color: var(--sel); font-size: 16px; padding: 6px 0; }
+.dh { margin-bottom: 8px; }
+.sides { display: flex; width: 100%; margin-bottom: 8px; } .sides button { flex: 1; text-align: center; }
+.chartbox { position: relative; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; margin-bottom: 10px; }
+#cv { display: block; width: 100%; height: min(52vh, 420px); touch-action: none; }
+.zoom { position: absolute; right: 64px; bottom: 28px; display: flex; gap: 6px; }
+.zoom button { min-width: 34px; height: 30px; padding: 0 8px; border-radius: 8px; background: rgba(23,34,59,.92); border: 1px solid var(--line); text-align: center; font-size: 13px; }
+.next { margin: 10px 0; padding: 10px 12px; border-radius: 10px; background: rgba(245,191,79,.08); border: 1px solid rgba(245,191,79,.35); font-size: 14px; }
+.next.ok { background: rgba(44,211,163,.08); border-color: rgba(44,211,163,.4); }
+.step { display: flex; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); }
+.step .ic { width: 22px; height: 22px; flex: none; border-radius: 50%; display: grid; place-items: center; font-size: 12px; background: var(--panel2); color: var(--dim); }
+.step.ok .ic { background: rgba(44,211,163,.18); color: var(--bull); } .step.half .ic { color: var(--gold); } .step.bad .ic { color: var(--bear); background: rgba(255,110,110,.14); }
+.step.cur .ic { color: var(--gold); box-shadow: 0 0 0 1.5px var(--gold) inset; }
+.step b { font-size: 14px; } .step p { margin: 2px 0 0; font-size: 13px; color: var(--mut); }
+.step.ok p { color: var(--fg); }
+.tvlink { display: block; text-align: center; margin: 14px 0; color: var(--mut); }
+#toast { position: fixed; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom)); transform: translate(-50%, 140%); max-width: 92vw; background: var(--panel2); border: 1px solid var(--gold); color: var(--fg); padding: 11px 16px; border-radius: 12px; font-size: 14px; transition: transform .25s; z-index: 9; }
+#toast.show { transform: translate(-50%, 0); }
+</style>
+</head>
+<body>
+<div id="app"><p class="mut" style="padding:40px 0;text-align:center">載入 SMC 教練…</p></div>
+<noscript>這個 App 需要開啟 JavaScript。</noscript>
+<script type="module" src="app.js"></script>
+</body>
+</html>
