@@ -20,6 +20,7 @@
 import fs from 'node:fs';
 import { analyze, structure, atrOf, coachState } from './coach-core.mjs';
 import { opt as optFrom, klines, printTable } from './lib.mjs';
+import { sessionOf } from '../../src/smc/sessions.js';
 
 const ARGS = process.argv.slice(2);
 const opt = (n, d) => optFrom(ARGS, n, d);
@@ -99,7 +100,9 @@ async function main() {
           if (seen.has(key)) continue;
           seen.add(key);
           sigs++;
-          const base = { sym, iv, dir: r.d > 0 ? 'long' : 'short', sigMs: closeMs, rr: r.plan.rr, bias: r.bias, disc: r.disc, kind: r.plan.kind };
+          // 時段：掃蕩那根的開盤時間、訊號（回踩到位那根收盤）的時間各落在哪個時段（UTC，跟 src/smc/sessions.js 一樣）
+          const sessId = (ms) => (sessionOf(ms) || { id: 'none' }).id;
+          const base = { sym, iv, dir: r.d > 0 ? 'long' : 'short', sigMs: closeMs, rr: r.plan.rr, bias: r.bias, disc: r.disc, kind: r.plan.kind, sess: sessId(W[r.plan.swU].time), sessSig: sessId(closeMs - 1) };
           const variants = [];
           if (r.plan.rr >= MIN_RR) {
             variants.push('all');
@@ -144,6 +147,18 @@ async function main() {
   }));
   log('\n● 各週期（變體 bias）');
   printTable(log, ['週期', '筆數', '勝率', '平均R', '總R', '獲利因子', '每天幾筆'], INTERVALS.map((iv) => [iv, ...stat(trades.filter((t) => t.v === 'bias' && t.iv === iv))]));
+  const SESS = [['asia', '亞洲盤 UTC0-6'], ['london', '倫敦殺區 UTC7-10'], ['nyam', '紐約早盤 UTC12-15'], ['nypm', '紐約午盤 UTC17:30-20'], ['none', '非時段']];
+  const KZ = ['london', 'nyam', 'nypm'];
+  for (const v of ['all', 'bias']) {
+    log(`\n● 掃蕩發生的時段（變體 ${v}）`);
+    printTable(log, ['時段', '筆數', '勝率', '平均R', '總R', '獲利因子', '每天幾筆', '前半 平均R', '後半 平均R'], [...SESS, ['kz', '三個殺區合計'], ['notkz', '殺區以外合計']].map(([id, nm]) => {
+      const list = trades.filter((t) => t.v === v && (id === 'kz' ? KZ.includes(t.sess) : id === 'notkz' ? !KZ.includes(t.sess) : t.sess === id));
+      const avg = (l) => l.length ? (l.reduce((x, t) => x + t.r, 0) / l.length).toFixed(3) : '-';
+      return [nm, ...stat(list), avg(list.filter((t) => t.fill < mid)), avg(list.filter((t) => t.fill >= mid))];
+    }));
+    log(`\n● 訊號（回踩到位）的時段（變體 ${v}）`);
+    printTable(log, ['時段', '筆數', '勝率', '平均R', '總R', '獲利因子', '每天幾筆'], SESS.map(([id, nm]) => [nm, ...stat(trades.filter((t) => t.v === v && t.sessSig === id))]));
+  }
   log('\n● 各幣（變體 bias）');
   printTable(log, ['幣', '筆數', '勝率', '平均R', '總R', '獲利因子', '每天幾筆'], SYMBOLS.map((s) => [s, ...stat(trades.filter((t) => t.v === 'bias' && t.sym === s))]));
 
