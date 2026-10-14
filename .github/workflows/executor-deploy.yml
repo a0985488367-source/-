@@ -95,11 +95,16 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           READ_KEY: ${{ secrets.BYBIT_READ_API_KEY }}
           READ_SECRET: ${{ secrets.BYBIT_READ_API_SECRET }}
+          LIVE_KEY: ${{ secrets.BYBIT_LIVE_API_KEY }}
+          LIVE_SECRET: ${{ secrets.BYBIT_LIVE_API_SECRET }}
         run: |
-          # 使用者自己手動下單的真實帳戶，只開「讀取」權限的 API Key，給 SMC 教練 App 的交易日誌用
+          # 使用者自己手動下單的真實帳戶，給 SMC 教練 App 的交易日誌用。優先用只開「讀取」的 BYBIT_READ_API_*，
+          # 沒有就用使用者之前加過的真實帳戶金鑰 BYBIT_LIVE_API_*（Executor 的日誌程式只會送 GET 查詢，不會下單）
           trim() { printf '%s' "$1" | tr -d '[:space:]'; }
-          K="$(trim "$READ_KEY")"; S="$(trim "$READ_SECRET")"
-          if [ -z "$K" ] || [ -z "$S" ]; then echo "ℹ️ 沒有 BYBIT_READ_API_KEY／BYBIT_READ_API_SECRET，交易日誌先不開"; exit 0; fi
+          K="$(trim "$READ_KEY")"; S="$(trim "$READ_SECRET")"; SRC=BYBIT_READ_API_KEY
+          if [ -z "$K" ] || [ -z "$S" ]; then K="$(trim "$LIVE_KEY")"; S="$(trim "$LIVE_SECRET")"; SRC=BYBIT_LIVE_API_KEY; fi
+          if [ -z "$K" ] || [ -z "$S" ]; then echo "::warning::沒有 BYBIT_READ_API_KEY／SECRET，也沒有 BYBIT_LIVE_API_KEY／SECRET，交易日誌先不開"; exit 0; fi
+          echo "交易日誌用的金鑰：$SRC"
           echo "::add-mask::$K"; echo "::add-mask::$S"
           flyctl secrets set --stage -a "$APP" "BYBIT_READ_API_KEY=$K" "BYBIT_READ_API_SECRET=$S" > /dev/null
           echo "✅ 已設定交易日誌唯讀金鑰（長度 ${#K}／${#S}，部署後生效）"
