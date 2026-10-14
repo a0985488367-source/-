@@ -96,4 +96,9 @@ test('SMC_PUSH_MODE=coach：推教練提醒、不推原本的進場區到價，�
   const n = discord.length;
   await worker.fetch(new Request('https://w.test/run'), env);
   assert.equal(discord.length, n, '同一根 K 棒、同一個劇本不會再推一次');
+  const rec = await (await worker.fetch(new Request('https://w.test/coach'), env)).json();
+  assert.equal(rec.alerts.length, n, '/coach 回傳推過的提醒');
+  assert.equal(rec.alerts[0].sym, 'BTCUSDT');
+  assert.ok(['L', 'S'].includes(rec.alerts[0].side) && rec.alerts[0].sweep.p > 0);
+  assert.equal(rec.alerts[0].entry, undefined, '不給進場價');
 });

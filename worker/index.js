@@ -479,6 +479,13 @@ async function handleFetch(request, env, ctx) {
       const upper = await Promise.all((UPPER_TFS[r.interval] ?? []).map(async (tf) => ({ tf, ...(await upperStructure(env, r, tf, new Map())) })));
       return json({ ...r, upper, gate: mtfGate(r.dir, upper) });
     }
+    // 教練提醒的最近紀錄：SMC 道場 App（dojo/ 看盤教室）讀這裡，點一則就打開那個幣、那個週期的即時圖
+    if (url.pathname === '/coach') {
+      const raw = env.SMC_KV ? await env.SMC_KV.get(COACH_RECENT_KEY).catch(() => null) : null;
+      let alerts = [];
+      try { alerts = raw ? JSON.parse(raw) : []; } catch { alerts = []; }
+      return json({ mode: cfg(env, 'SMC_PUSH_MODE'), symbols: smcSymbols(env), intervals: String(cfg(env, 'SMC_PUSH_INTERVALS')).split(',').map((x) => x.trim()).filter(Boolean), alerts }, { headers: { 'cache-control': 'no-store' } });
+    }
     if (url.pathname === '/run') {
       const result = await run(env, { dry: url.searchParams.get('dry') === '1' });
       return json(result);
@@ -1271,6 +1278,8 @@ async function postDiscord(env, payload) {
 /* ------------------------------------------------------- 教練提醒（看盤教室同一套規則） */
 
 const COACH_STEP = ['掃流動性', '結構轉向', 'POI', '回踩 POI', '計畫'];
+const COACH_RECENT_KEY = 'coach:recent';
+const COACH_RECENT_MAX = 80;
 
 /** 每個週期有新 K 棒收盤時，對 SMC_SYMBOLS × SMC_PUSH_INTERVALS 跑一次教練劇本；劇本「成形」（掃蕩＋轉向）跟「到位」（回踩 POI）各推一次 */
 async function runCoach(env, { dry = false } = {}) {
@@ -1317,15 +1326,33 @@ async function runCoach(env, { dry = false } = {}) {
       if (env.SMC_KV && !dry) await env.SMC_KV.put(job.k, String(job.lastOpen), { expirationTtl: 3 * 86400 });
     } catch (e) { errors.push(`${job.sym} ${job.iv}：${e.message}`); }
   });
-  const sent = [];
+  const sent = [], records = [];
   for (const a of alerts) {
     if (!dry) {
       await postDiscord(env, { embeds: [buildCoachEmbed(a, env)] });
       if (env.SMC_KV) await env.SMC_KV.put(a.key, String(Date.now()), { expirationTtl: Number(cfg(env, 'COACH_TTL_SEC')) });
+      records.push(coachRecord(a));
     }
     sent.push(`${a.sym} ${a.iv} ${a.r.d > 0 ? '多' : '空'} ${a.event === 'ready' ? '到位' : '成形'}`);
   }
+  if (records.length && env.SMC_KV) {
+    let list = [];
+    try { list = JSON.parse((await env.SMC_KV.get(COACH_RECENT_KEY)) || '[]'); } catch { list = []; }
+    await env.SMC_KV.put(COACH_RECENT_KEY, JSON.stringify([...records, ...list].slice(0, COACH_RECENT_MAX)));
+  }
   return { analyzed: batch.length, pending: jobs.length - batch.length, sent, errors };
+}
+
+/** 給 App 看的精簡紀錄（不含進場價） */
+function coachRecord({ sym, iv, r, event, W, biasTf }) {
+  const t = (i) => (i == null ? null : W[i].t * 1000);
+  return {
+    at: Date.now(), sym, iv, side: r.d > 0 ? 'L' : 'S', event, stage: r.stage, bias: r.bias, biasTf,
+    sweep: { p: r.sweep.p, at: t(r.sweep.u) },
+    shift: r.ev ? { p: r.ev.p, t: r.ev.t, at: t(r.ev.i) } : null,
+    poi: r.poi ? { kind: r.poi.kind, top: r.poi.top, bot: r.poi.bot } : null,
+    retestAt: t(r.rt), rr: r.plan ? Math.round(r.plan.rr * 10) / 10 : null,
+  };
 }
 
 function buildCoachEmbed({ sym, iv, r, event, W, biasTf }, env = {}) {
