@@ -6,6 +6,9 @@
 import { analyze, structure, atrOf, coachState, coachFollow } from '../src/smc/coach.js';
 import { sessionOf } from '../src/smc/sessions.js';
 
+/* 戰績、日誌、盯這單在 extras.js，載入之前先放空函式 */
+const X = window.__coachX = { loadLive() {}, loadJournal() {}, loadWatches() {}, watchButton() {} };
+
 const COINS = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'DOGE', 'ADA', 'AVAX', 'LINK', 'LTC', 'DOT', 'NEAR', 'APT', 'ARB', 'OP'];
 const TFS = ['15m', '30m', '1h'];
 const MS = { '15m': 9e5, '30m': 18e5, '1h': 36e5, '4h': 144e5 };
@@ -38,16 +41,16 @@ const store = {
 /* ═════════ 行情 ═════════ */
 let SRC = null;
 const bin = (j) => j.map((r) => ({ t: Math.floor(r[0] / 1000), o: +r[1], h: +r[2], l: +r[3], c: +r[4] }));
-function sources(coin, tf, limit) {
-  const sym = coin + 'USDT';
+function sources(coin, tf, limit, end) {
+  const sym = coin + 'USDT', e1 = end ? `&end=${end}` : '', e2 = end ? `&endTime=${end}` : '';
   return [
-    { n: 'Bybit 永續', u: `https://api.bybit.com/v5/market/kline?category=linear&symbol=${sym}&interval=${IV[tf][0]}&limit=${Math.min(limit, 1000)}`, p: (j) => { if (!j || !j.result || !j.result.list) throw new Error('格式不對'); return j.result.list.map((r) => ({ t: Math.floor(r[0] / 1000), o: +r[1], h: +r[2], l: +r[3], c: +r[4] })).reverse(); } },
-    { n: 'Binance 永續', u: `https://fapi.binance.com/fapi/v1/klines?symbol=${sym}&interval=${IV[tf][1]}&limit=${Math.min(limit, 1500)}`, p: bin },
-    { n: 'Binance 現貨', u: `https://data-api.binance.vision/api/v3/klines?symbol=${sym}&interval=${IV[tf][1]}&limit=${Math.min(limit, 1000)}`, p: bin },
+    { n: 'Bybit 永續', u: `https://api.bybit.com/v5/market/kline?category=linear&symbol=${sym}&interval=${IV[tf][0]}&limit=${Math.min(limit, 1000)}${e1}`, p: (j) => { if (!j || !j.result || !j.result.list) throw new Error('格式不對'); return j.result.list.map((r) => ({ t: Math.floor(r[0] / 1000), o: +r[1], h: +r[2], l: +r[3], c: +r[4] })).reverse(); } },
+    { n: 'Binance 永續', u: `https://fapi.binance.com/fapi/v1/klines?symbol=${sym}&interval=${IV[tf][1]}&limit=${Math.min(limit, 1500)}${e2}`, p: bin },
+    { n: 'Binance 現貨', u: `https://data-api.binance.vision/api/v3/klines?symbol=${sym}&interval=${IV[tf][1]}&limit=${Math.min(limit, 1000)}${e2}`, p: bin },
   ];
 }
-async function fetchK(coin, tf, limit) {
-  const list = sources(coin, tf, limit), order = SRC != null ? [SRC, ...[0, 1, 2].filter((i) => i !== SRC)] : [0, 1, 2], errs = [];
+async function fetchK(coin, tf, limit, end) {
+  const list = sources(coin, tf, limit, end), order = SRC != null ? [SRC, ...[0, 1, 2].filter((i) => i !== SRC)] : [0, 1, 2], errs = [];
   for (const k of order) {
     const s = list[k], ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 9000);
     try {
@@ -248,15 +251,20 @@ function paint() {
 }
 function getSum(k) { if (R[k] && R[k].L) return { ...R[k], fresh: true }; if (cache && cache.R[k]) return { ...cache.R[k], fresh: false }; return null; }
 function renderBoard() {
-  const tabs = `<div class="tabs">${[['board', '掃描板'], ['push', '📣 推播紀錄'], ['help', '說明']].map(([v, n]) => `<button data-tab="${v}" class="${P.tab === v ? 'on' : ''}">${n}</button>`).join('')}</div>`;
+  const tabs = `<div class="tabs">${[['board', '掃描'], ['live', '戰績'], ['journal', '日誌'], ['push', '推播'], ['help', '說明']].map(([v, n]) => `<button data-tab="${v}" class="${P.tab === v ? 'on' : ''}">${n}</button>`).join('')}</div>`;
   let body = '';
   if (P.tab === 'push') body = '<div id="push" class="card mut">載入推播紀錄…</div>';
   else if (P.tab === 'help') body = helpHtml();
+  else if (P.tab === 'live') body = '<div id="live" class="card mut">載入教練即時戰績…</div>';
+  else if (P.tab === 'journal') body = '<div id="journal"></div>';
   else body = boardHtml();
   const prog = !booted ? `<span class="mut small">${cache ? '先顯示上次結果，' : ''}更新中 ${loading}/${loadTotal}</span>` : `<span class="mut small">${lastSrc}・${hm(lastFull / 1000)} 更新</span>`;
   $('#app').innerHTML = `<header class="row"><div><p class="eyebrow">SMC COACH</p><h1>🧭 SMC 教練</h1></div><span class="sp"></span>${prog}</header>${sessionBar()}${tabs}${body}`;
   bindBoard();
   if (P.tab === 'push') loadPush();
+  if (P.tab === 'live') X.loadLive();
+  if (P.tab === 'journal') X.loadJournal();
+  if (P.tab === 'board') X.loadWatches();
 }
 function boardHtml() {
   const tfs = P.tf === 'all' ? TFS : [P.tf];
@@ -295,7 +303,7 @@ function boardHtml() {
     return `<button class="cell ${n >= 2 ? s : ''} ${hot ? 'ready' : ''} ${r.fresh ? '' : 'stale'}" data-open="${c}|${tf}|${s}">${n ? `${s === 'L' ? '多' : '空'} ${n}` : '—'}${x.bias === 2 && n >= 2 ? '<i>順</i>' : ''}</button>`;
   }).join('')}</div>`).join('')}</div>`;
   const evs = events.length ? `<div class="card"><p class="h3">最新動態（App 開著時）</p>${events.slice(0, 8).map((e) => `<button class="ev" data-open="${e.coin}|${e.tf}|${e.side}"><span class="mut small">${hm(e.at / 1000)}</span><span class="side ${e.side}">${e.coin} ${e.tf} ${sideName(e.side)}</span><span>${evText(e)}${e.ev !== 'end' && e.sess >= 2 ? '・' + SESS_NAME[e.sess].replace('殺區', '') : ''}</span></button>`).join('')}</div>` : '';
-  return `${filt}<p class="h3">還能做的劇本（第 2 步以上）</p>${cards}${endCards}${evs}<p class="h3">全部幣種（每格顯示走得比較前面的那一邊）</p>${grid}
+  return `<div id="watches"></div>${filt}<p class="h3">還能做的劇本（第 2 步以上）</p>${cards}${endCards}${evs}<p class="h3">全部幣種（每格顯示走得比較前面的那一邊）</p>${grid}
     <p class="foot mut small">教練只說劇本走到哪一步，不是進場訊號。回測 150 天、15 檔：教練劇本＋4h 同向平均每筆約 -0.05R，沒有穩定優勢。</p>`;
 }
 function helpHtml() {
@@ -341,6 +349,7 @@ function openDetail(coin, tf, side, push = true) {
     <div class="seg2 sides"><button data-side="L">多單劇本</button><button data-side="S">空單劇本</button></div>
     <div class="chartbox"><canvas id="cv"></canvas><div class="zoom"><button data-z="1.25">＋</button><button data-z="0.8">－</button><button data-z="0">最新</button></div></div>
     <div id="coach"></div>
+    <div id="watchbox"></div>
     <a class="tvlink mut small" target="_blank" rel="noopener" href="https://www.tradingview.com/chart/?symbol=BYBIT:${coin}USDT.P&interval=${IV[tf][0]}">在 TradingView 打開 ${coin} ${tf} ↗</a>`;
   $('#bk').onclick = () => history.back();
   document.querySelectorAll('[data-dtf]').forEach((b) => { b.onclick = () => openDetail(DT.coin, b.dataset.dtf, DT.side, false); });
@@ -433,6 +442,7 @@ function renderDetail() {
     chart.fitted = true;
   }
   if (chart) chart.set(C, ann);
+  X.watchButton(coin, tf, side, x, f);
 }
 
 /* ═════════ K 線圖（拖曳、雙指縮放、時段底色） ═════════ */
@@ -517,3 +527,6 @@ setInterval(() => { if (view === 'board' && P.tab === 'board' && booted) renderB
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { tick(); if (view === 'board') renderBoard(); } });
 if ('serviceWorker' in navigator) addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
 window.__coach = { R, D, H, openDetail, events: () => events };
+/* 戰績、日誌、盯這單（extras.js）要用到的東西 */
+Object.assign(window.__coach, { fetchK, MS, TFS, COINS, WORKER, fmt, hm, mdhm, esc, sessIdx, SESS_NAME, ENDED, store, openDetail, renderBoard, toast, sideName });
+import('./extras.js').then((m) => m.install(window.__coach, X)).catch((e) => console.error('extras', e));

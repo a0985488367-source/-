@@ -294,3 +294,15 @@ test('GET /history：沒有簽章 → 401', async () => {
     assert.equal(res.status, 401);
   } finally { await close(); }
 });
+
+test('GET /journal：沒設定唯讀金鑰時回 configured=false，不會去打 Bybit；沒簽章被拒絕', async () => {
+  const { baseUrl, close } = await startServer();
+  try {
+    const r = await call(baseUrl, 'GET', '/journal?days=7');
+    assert.equal(r.status, 200);
+    assert.equal(r.body.configured, false);
+    assert.match(r.body.error, /BYBIT_READ_API_KEY/);
+    const raw = await fetch(baseUrl + '/journal');
+    assert.equal(raw.status, 401);
+  } finally { await close(); }
+});

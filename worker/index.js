@@ -200,6 +200,7 @@ import { handleAiAsk, aiStatus, aiSetBudget } from './ai.js';
 import { UPPER_TFS, GATE_BARS, structureOf, mtfGate } from '../src/smc/mtf-gate.js';
 import { trendExtraSignal, trendExtraIndicators, TREND_EXTRA_STOP_ATR } from '../src/strategies/trend-extra.js';
 import { analyze as coachAnalyze, structure as coachStructure, atrOf as coachAtr, coachState } from '../src/smc/coach.js';
+import { appTokenOk, loadCoachLive, saveCoachLive, trackCoachLive, coachLiveResponse, handleWatch, checkWatches, journalResponse } from './coach-extras.js';
 
 const DEFAULTS = {
   MARKET_URL: 'https://raw.githubusercontent.com/a0985488367-source/-/main/data/market.json',
@@ -486,6 +487,17 @@ async function handleFetch(request, env, ctx) {
       try { alerts = raw ? JSON.parse(raw) : []; } catch { alerts = []; }
       return json({ mode: cfg(env, 'SMC_PUSH_MODE'), symbols: smcSymbols(env), intervals: String(cfg(env, 'SMC_PUSH_INTERVALS')).split(',').map((x) => x.trim()).filter(Boolean), alerts }, { headers: { 'cache-control': 'no-store' } });
     }
+    // SMC 教練 App：即時戰績（公開唯讀）、盯這單、交易日誌（要 App 密碼）
+    if ((url.pathname === '/journal' || url.pathname === '/watch') && request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: { ...CORS_HEADERS, 'access-control-allow-methods': 'GET, POST, DELETE, OPTIONS', 'access-control-allow-headers': 'content-type, x-app-token', 'access-control-max-age': '86400' } });
+    }
+    if (url.pathname === '/coach-live') return json(await coachLiveResponse(env), { headers: { 'cache-control': 'no-store' } });
+    if (url.pathname === '/watch' || url.pathname === '/journal') {
+      if (!appTokenOk(request, env)) return json({ error: '密碼不對：用你設定過的 AI_TOKEN、AUTO_TRADE_TOKEN 或 APP_TOKEN 其中一個' }, { status: 401 });
+      if (url.pathname === '/watch') { const r = await handleWatch(request, env); return json(r.body, { status: r.status, headers: { 'cache-control': 'no-store' } }); }
+      const days = Math.min(90, Math.max(1, Number(url.searchParams.get('days')) || 30));
+      return json(await journalResponse(env, days, executorCall), { headers: { 'cache-control': 'no-store' } });
+    }
     if (url.pathname === '/run') {
       const result = await run(env, { dry: url.searchParams.get('dry') === '1' });
       return json(result);
@@ -689,11 +701,13 @@ async function run(env, { dry = false } = {}) {
   const breakout = await runBreakout(env, { dry }).catch((e) => ({ error: e.message }));
   // 教練提醒（SMC_PUSH_MODE=coach）：自己抓 K 棒判斷，跟 market.json 無關
   const coach = await runCoach(env, { dry }).catch((e) => ({ error: e.message }));
+  // App 的「盯這單」：每次排程都看一次
+  const watches = await checkWatches(env, { fetchKlines: fetchKlinesAny, postDiscord, intervalToMs, dry }).catch((e) => ({ error: e.message }));
 
   const market = await getFreshMarket(env);
   const ageMin = (Date.now() - new Date(market.generatedAt).getTime()) / 60000;
   // 教練模式：照樣更新掃描結果（App 用），但不推原本的進場區到價提醒
-  if (cfg(env, 'SMC_PUSH_MODE') === 'coach') return { mode: 'coach', coach, ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout };
+  if (cfg(env, 'SMC_PUSH_MODE') === 'coach') return { mode: 'coach', coach, watches, ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout };
   if (ageMin > Number(cfg(env, 'MAX_MARKET_AGE_MIN'))) {
     return { skipped: 'market-too-old', ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout };
   }
@@ -1300,6 +1314,7 @@ async function runCoach(env, { dry = false } = {}) {
   const batch = jobs.slice(0, Number(cfg(env, 'COACH_BATCH')));
   const biasCache = new Map(), alerts = [], errors = [];
   const biasTf = cfg(env, 'COACH_BIAS_TF'), bars = Number(cfg(env, 'COACH_BARS'));
+  const live = batch.length ? await loadCoachLive(env) : null; // 教練即時戰績（App 的「戰績」分頁）
   const closedOnly = (list, ms) => list.filter((c) => c.time + ms <= now).map((c) => ({ t: c.time / 1000, o: +c.open, h: +c.high, l: +c.low, c: +c.close }));
   await mapLimit(batch, 3, async (job) => {
     try {
@@ -1314,6 +1329,7 @@ async function runCoach(env, { dry = false } = {}) {
       const W = closedOnly(list, job.ms).slice(-bars);
       if (W.length < 120) throw new Error('K 棒不夠');
       const A = coachAnalyze(W, 4, 2), st = coachState(W, A, bias);
+      if (live) trackCoachLive(live, job, W, A, st, biasTf);
       for (const side of ['L', 'S']) {
         const r = st[side];
         if (!r.sweep || r.stage < 2) continue;
@@ -1326,6 +1342,7 @@ async function runCoach(env, { dry = false } = {}) {
       if (env.SMC_KV && !dry) await env.SMC_KV.put(job.k, String(job.lastOpen), { expirationTtl: 3 * 86400 });
     } catch (e) { errors.push(`${job.sym} ${job.iv}：${e.message}`); }
   });
+  if (live && !dry) await saveCoachLive(env, live).catch((e) => errors.push('戰績寫入失敗：' + e.message));
   const sent = [], records = [];
   for (const a of alerts) {
     if (!dry) {

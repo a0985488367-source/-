@@ -20,11 +20,14 @@ function sign(secret, message) {
  * 呼叫端要自己判斷這是不是「connectivity / region failure」而不是
  * 「這筆請求本身有問題」——見 healthcheck.js。
  */
-export async function bybitCall(method, path, params = {}, { retries = 0 } = {}) {
+export async function bybitCall(method, path, params = {}, { retries = 0, acct = null } = {}) {
+  // acct：改用另一組金鑰／主機（交易日誌查使用者真實帳戶用，只會是唯讀的 GET）
+  const host = acct ? acct.host : config.bybitHost, apiKey = acct ? acct.key : config.bybitApiKey, apiSecret = acct ? acct.secret : config.bybitApiSecret;
+  if (acct && method !== 'GET') throw new Error('交易日誌帳戶只能查詢');
   for (let attempt = 0; ; attempt++) {
     const ts = String(Date.now());
     const recvWindow = '10000';
-    let url = config.bybitHost + path;
+    let url = host + path;
     let body;
     let payload;
     if (method === 'GET') {
@@ -46,10 +49,10 @@ export async function bybitCall(method, path, params = {}, { retries = 0 } = {})
         signal: ctl.signal,
         headers: {
           'Content-Type': 'application/json',
-          'X-BAPI-API-KEY': config.bybitApiKey,
+          'X-BAPI-API-KEY': apiKey,
           'X-BAPI-TIMESTAMP': ts,
           'X-BAPI-RECV-WINDOW': recvWindow,
-          'X-BAPI-SIGN': sign(config.bybitApiSecret, ts + config.bybitApiKey + recvWindow + payload),
+          'X-BAPI-SIGN': sign(apiSecret, ts + apiKey + recvWindow + payload),
         },
         body,
       });
@@ -118,7 +121,7 @@ export async function getInstrument(symbol) {
  * 往前 days 天的歷史紀錄（成交明細、已平倉損益）。Bybit 這兩個端點一次最多查 7 天、
  * 一頁最多 100 筆，所以一週一週往前查、每週再翻頁。
  */
-async function pagedHistory(path, days) {
+async function pagedHistory(path, days, acct = null) {
   const DAY = 86_400_000;
   const now = Date.now();
   const from = now - days * DAY;
@@ -129,7 +132,7 @@ async function pagedHistory(path, days) {
     for (let page = 0; page < 50; page++) {
       const r = await bybitCall('GET', path, {
         category: 'linear', startTime: String(start), endTime: String(end), limit: '100', cursor,
-      }, { retries: 1 });
+      }, { retries: 1, acct });
       out.push(...(r?.list ?? []));
       cursor = r?.nextPageCursor;
       if (!cursor || !(r?.list ?? []).length) break;
@@ -140,6 +143,27 @@ async function pagedHistory(path, days) {
 
 export const getExecutions = (days) => pagedHistory('/v5/execution/list', days);
 export const getClosedPnl = (days) => pagedHistory('/v5/position/closed-pnl', days);
+
+/** 交易日誌帳戶（使用者手動下單的真實帳戶，唯讀金鑰）；沒設定就回 null */
+export function journalAccount() {
+  if (!config.journalApiKey || !config.journalApiSecret) return null;
+  return { host: 'https://api.bybit.com', key: config.journalApiKey, secret: config.journalApiSecret };
+}
+export async function getJournal(days) {
+  const acct = journalAccount();
+  if (!acct) throw new Error('還沒設定 BYBIT_READ_API_KEY／BYBIT_READ_API_SECRET');
+  const out = { days, executions: [], balance: null, positions: [], errors: {} };
+  try { out.executions = await pagedHistory('/v5/execution/list', days, acct); } catch (e) { out.errors.executions = e.message; }
+  try {
+    const w = await bybitCall('GET', '/v5/account/wallet-balance', { accountType: 'UNIFIED' }, { retries: 1, acct });
+    out.balance = Number(w?.list?.[0]?.totalEquity ?? w?.list?.[0]?.totalWalletBalance ?? 0);
+  } catch (e) { out.errors.balance = e.message; }
+  try {
+    const p = await bybitCall('GET', '/v5/position/list', { category: 'linear', settleCoin: 'USDT' }, { retries: 1, acct });
+    out.positions = (p?.list ?? []).filter((x) => Number(x.size) > 0);
+  } catch (e) { out.errors.positions = e.message; }
+  return out;
+}
 
 export async function getPositions(symbol) {
   const r = await bybitCall(
