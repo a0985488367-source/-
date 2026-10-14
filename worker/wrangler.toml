@@ -120,7 +120,12 @@ BREAKOUT_BATCH_SIZE = "20"
 # 對外是共用 IP，一次塞太多請求容易被交易所限流擋掉
 WORKER_SCAN_ENABLED = "true"
 # 2026-09-29 使用者要求：SMC 只盯市值前 10 大（不含穩定幣），只推播不下單
-SMC_SYMBOLS = "BTCUSDT,ETHUSDT,XRPUSDT,BNBUSDT,SOLUSDT,DOGEUSDT,ADAUSDT,TRXUSDT,LINKUSDT,AVAXUSDT"
+# 2026-10-14 使用者選：加到主流 15 檔（跟 coach 回測的第一組一樣，拿掉 TRX）
+SMC_SYMBOLS = "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT,ADAUSDT,AVAXUSDT,LINKUSDT,LTCUSDT,DOTUSDT,NEARUSDT,APTUSDT,ARBUSDT,OPUSDT"
+# 2026-10-14 使用者選：SMC 推播改成看盤教室的「教練提醒」——只說劇本走到哪一步（掃流動性→結構轉向→POI→回踩），
+# 不給進場價、不下單；只推跟 4h 同向的劇本，「成形」跟「到位」各推一次（src/smc/coach.js、runCoach()）。
+# 回測 150 天（research coach）：教練＋大週期同向每筆 -0.05R／-0.04R（兩組幣），原本的 SMC 推播 -0.07R，都沒有穩定優勢
+SMC_PUSH_MODE = "coach"
 # 2026-10-13 使用者選的：SMC 推播「統整週期」——上面兩層大結構同向＋上一層小結構同向（沒在回調）才推，
 # 同一個幣同方向同時到價的週期合併成一則（src/smc/mtf-gate.js）。回測 150 天：推播少約一半、吃損少一半，
 # 但每筆期望值只從 -0.08R 變 -0.07R（只是少虧、少吵，不是變賺）

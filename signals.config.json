@@ -8,12 +8,13 @@
   "minScore": 68,
   "minRR": 2,
 
+  "_推播說明": "2026-10-14 使用者選：SMC 進場區推播改成 Worker 的「教練提醒」（SMC_PUSH_MODE=coach），這裡的計畫／到價／全市場推播關掉，晨報照舊。",
   "notify": {
-    "plan": true,
-    "poiTouch": true,
+    "plan": false,
+    "poiTouch": false,
     "choch": false,
     "sweep": false,
-    "outcomes": true
+    "outcomes": false
   },
 
   "tracking": {
@@ -24,7 +25,7 @@
   },
 
   "market": {
-    "notify": true,
+    "notify": false,
     "minScore": 72,
     "maxPerRun": 3,
     "maxAgeMin": 120,
