@@ -199,6 +199,7 @@ import { fakeoutSignal, FAKEOUT_DEFAULTS } from '../src/strategies/fakeout.js';
 import { handleAiAsk, aiStatus, aiSetBudget } from './ai.js';
 import { UPPER_TFS, GATE_BARS, structureOf, mtfGate } from '../src/smc/mtf-gate.js';
 import { trendExtraSignal, trendExtraIndicators, TREND_EXTRA_STOP_ATR } from '../src/strategies/trend-extra.js';
+import { analyze as coachAnalyze, structure as coachStructure, atrOf as coachAtr, coachState } from '../src/smc/coach.js';
 
 const DEFAULTS = {
   MARKET_URL: 'https://raw.githubusercontent.com/a0985488367-source/-/main/data/market.json',
@@ -291,6 +292,13 @@ const DEFAULTS = {
   // SMC 只推這些週期的進場區（逗號分隔；留空＝全部）。其他週期照樣掃描（App／網頁看得到），只是不推播
   SMC_PUSH_INTERVALS: '',
   SMC_MTF_BLOCK_TTL_SEC: '900', // 被擋掉的進場區多久後再重新判斷一次（上面週期可能轉向）
+  // SMC 推播模式：'plan'＝原本的進場區到價提醒；'coach'＝看盤教室的教練提醒（只說劇本到哪一步，不給進場價、不下單）
+  SMC_PUSH_MODE: 'plan',
+  COACH_BIAS_TF: '4h',           // 教練看大週期方向用哪個週期
+  COACH_BARS: '500',             // 每次分析抓幾根已收盤 K 棒
+  COACH_BATCH: '15',             // 每次 tick 最多分析幾組（幣 × 週期），其餘下次 tick 補
+  COACH_TTL_SEC: '259200',       // 同一次掃蕩的同一個提醒 3 天內只推一次
+  COACH_ONLY_ALIGNED: 'true',    // 只推跟大週期同向的劇本（回測：同向每筆 -0.04～-0.05R，不分方向 -0.07～-0.19R）
 };
 
 /** 突破單、EMA 交叉單這類「另外的策略」（不是 SMC） */
@@ -672,9 +680,13 @@ async function run(env, { dry = false } = {}) {
   const trailingStops = dry ? { checked: 0, moved: 0 } : await updateTrailingStops(env).catch(() => ({ checked: 0, moved: 0, error: true }));
   // 4 小時突破策略跟 SMC 訊號互相獨立（不看 market.json），每根 4h K 棒收盤後判斷一次
   const breakout = await runBreakout(env, { dry }).catch((e) => ({ error: e.message }));
+  // 教練提醒（SMC_PUSH_MODE=coach）：自己抓 K 棒判斷，跟 market.json 無關
+  const coach = await runCoach(env, { dry }).catch((e) => ({ error: e.message }));
 
   const market = await getFreshMarket(env);
   const ageMin = (Date.now() - new Date(market.generatedAt).getTime()) / 60000;
+  // 教練模式：照樣更新掃描結果（App 用），但不推原本的進場區到價提醒
+  if (cfg(env, 'SMC_PUSH_MODE') === 'coach') return { mode: 'coach', coach, ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout };
   if (ageMin > Number(cfg(env, 'MAX_MARKET_AGE_MIN'))) {
     return { skipped: 'market-too-old', ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout };
   }
@@ -1253,6 +1265,88 @@ async function postDiscord(env, payload) {
     return postDiscord(env, payload);
   }
   if (!res.ok && res.status !== 204) throw new Error(`Discord ${res.status}`);
+}
+
+
+/* ------------------------------------------------------- 教練提醒（看盤教室同一套規則） */
+
+const COACH_STEP = ['掃流動性', '結構轉向', 'POI', '回踩 POI', '計畫'];
+
+/** 每個週期有新 K 棒收盤時，對 SMC_SYMBOLS × SMC_PUSH_INTERVALS 跑一次教練劇本；劇本「成形」（掃蕩＋轉向）跟「到位」（回踩 POI）各推一次 */
+async function runCoach(env, { dry = false } = {}) {
+  if (cfg(env, 'SMC_PUSH_MODE') !== 'coach') return null;
+  const symbols = smcSymbols(env);
+  const ivs = String(cfg(env, 'SMC_PUSH_INTERVALS')).split(',').map((x) => x.trim()).filter(Boolean);
+  const intervals = ivs.length ? ivs : ['15m', '30m', '1h'];
+  if (!symbols.length) return { skipped: 'no-symbols' };
+  const now = Date.now(), jobs = [];
+  for (const iv of intervals) {
+    const ms = intervalToMs(iv), lastOpen = Math.floor(now / ms) * ms - ms;
+    for (const sym of symbols) {
+      const k = `coachbar:${sym}:${iv}`;
+      if (env.SMC_KV && (await env.SMC_KV.get(k)) === String(lastOpen)) continue;
+      jobs.push({ sym, iv, ms, lastOpen, k });
+    }
+  }
+  const batch = jobs.slice(0, Number(cfg(env, 'COACH_BATCH')));
+  const biasCache = new Map(), alerts = [], errors = [];
+  const biasTf = cfg(env, 'COACH_BIAS_TF'), bars = Number(cfg(env, 'COACH_BARS'));
+  const closedOnly = (list, ms) => list.filter((c) => c.time + ms <= now).map((c) => ({ t: c.time / 1000, o: +c.open, h: +c.high, l: +c.low, c: +c.close }));
+  await mapLimit(batch, 3, async (job) => {
+    try {
+      if (!biasCache.has(job.sym)) {
+        biasCache.set(job.sym, fetchKlinesAny(env, job.sym, biasTf, 300).then((list) => {
+          const H = closedOnly(list, intervalToMs(biasTf));
+          const tr = coachStructure(H, 3, coachAtr(H)).trend;
+          return tr[H.length - 1] || 0;
+        }));
+      }
+      const [list, bias] = await Promise.all([fetchKlinesAny(env, job.sym, job.iv, bars + 1), biasCache.get(job.sym)]);
+      const W = closedOnly(list, job.ms).slice(-bars);
+      if (W.length < 120) throw new Error('K 棒不夠');
+      const A = coachAnalyze(W, 4, 2), st = coachState(W, A, bias);
+      for (const side of ['L', 'S']) {
+        const r = st[side];
+        if (!r.sweep || r.stage < 2) continue;
+        if (cfg(env, 'COACH_ONLY_ALIGNED') === 'true' && r.bias !== 2) continue;
+        const event = r.stage >= 4 ? 'ready' : 'formed';
+        const key = `coach:${job.sym}:${job.iv}:${side}:${W[r.sweep.u].t}:${event}`;
+        if (env.SMC_KV && await env.SMC_KV.get(key)) continue;
+        alerts.push({ sym: job.sym, iv: job.iv, r, event, key, W, biasTf });
+      }
+      if (env.SMC_KV && !dry) await env.SMC_KV.put(job.k, String(job.lastOpen), { expirationTtl: 3 * 86400 });
+    } catch (e) { errors.push(`${job.sym} ${job.iv}：${e.message}`); }
+  });
+  const sent = [];
+  for (const a of alerts) {
+    if (!dry) {
+      await postDiscord(env, { embeds: [buildCoachEmbed(a, env)] });
+      if (env.SMC_KV) await env.SMC_KV.put(a.key, String(Date.now()), { expirationTtl: Number(cfg(env, 'COACH_TTL_SEC')) });
+    }
+    sent.push(`${a.sym} ${a.iv} ${a.r.d > 0 ? '多' : '空'} ${a.event === 'ready' ? '到位' : '成形'}`);
+  }
+  return { analyzed: batch.length, pending: jobs.length - batch.length, sent, errors };
+}
+
+function buildCoachEmbed({ sym, iv, r, event, W, biasTf }, env = {}) {
+  const long = r.d > 0, side = long ? '多單' : '空單', W2 = (a, b) => (long ? a : b);
+  const done = r.stage;
+  const lines = [
+    `✅ 1. 掃流動性：影線刺破 ${fmt(r.sweep.p)} ${W2('下方的多單止損（SSL）', '上方的空單止損（BSL）')}後收回（${twTime(W[r.sweep.u].t * 1000)}）`,
+    `✅ 2. 結構轉向：收盤${W2('突破', '跌破')} ${fmt(r.ev.p)}，${r.ev.t} 成立`,
+    r.poi ? `✅ 3. POI：轉向那段留下${W2('多方', '空方')} ${r.poi.kind} ${fmt(r.poi.bot)} – ${fmt(r.poi.top)}` : '⬜ 3. POI：這次轉向沒留下乾淨的 FVG／OB，等下一段位移',
+    r.rt != null ? `✅ 4. 回踩 POI：價格已經回到這個區域（${twTime(W[r.rt].t * 1000)}）` : `⬜ 4. 回踩 POI：等價格回到${r.poi ? ` ${fmt(W2(r.poi.top, r.poi.bot))} 附近` : ' POI'}，不要追價`,
+    r.plan ? `⬜ 5. 計畫：你自己決定要不要進。照教練的算法盈虧比約 ${r.plan.rr.toFixed(1)}R（停損放掃出來的${W2('低', '高')}點外、目標放對面流動性）${r.plan.rr < 2 ? '，不到 2R 寧可不做' : ''}` : '⬜ 5. 計畫：回踩到了再評估止損和目標',
+  ];
+  const next = r.stage >= 4 ? '劇本到位：看小週期反應，自己決定要不要進場' : `下一步：${COACH_STEP[done]}`;
+  return {
+    title: `🧭 教練提醒｜${sym} ${iv} ${side}劇本 ${done}/5${event === 'ready' ? '（到位）' : '（成形）'}`,
+    url: tradingViewUrl(sym, iv),
+    color: long ? 0x2cd3a3 : 0xff6e6e,
+    description: [...lines, '', `**${next}**`, (r.bias === 2 ? `大週期 ${biasTf} 跟這個方向同向（順勢）` : r.bias === 1 ? `大週期 ${biasTf} 方向未定` : `⚠️ 大週期 ${biasTf} 方向相反（逆勢，倉位要小）`)].join('\n'),
+    footer: { text: '教練提醒只說劇本走到哪一步，不是進場訊號、不會自動下單。回測 150 天：教練劇本＋大週期同向平均每筆約 -0.05R，沒有穩定優勢。' },
+    timestamp: new Date().toISOString(),
+  };
 }
 
 /* -------------------------------------------------------------- 自動下單（Demo） */
