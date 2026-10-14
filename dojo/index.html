@@ -1353,7 +1353,7 @@ function home(){
      '<button class="mode" type="button" data-go="rep"><span class="ic">'+ICON.rep+'</span><span><b>回放實戰</b><span>K 線逐根播放，你決定做多、做空或觀望</span></span><span class="meta">'+(save.bestReplay?'$'+save.bestReplay.toLocaleString('en-US'):'未挑戰')+'</span></button>'+
      '<button class="mode" type="button" data-go="blz"><span class="ic">'+ICON.blz+'</span><span><b>閃電戰</b><span>60 秒快問快答，連擊越多分數越高</span></span><span class="meta">'+(save.bestBlitz?save.bestBlitz+' 分':'未挑戰')+'</span></button>'+
     '</div>');
-  el.querySelectorAll('[data-go]').forEach(function(b){b.onclick=function(){SFX.tick();({aca:academy,rep:window.Replay,blz:window.Blitz,dia:window.Diag&&Diag.start,drl:window.Diag&&Diag.drillPick,sta:window.Diag&&Diag.stats,adv:window.Adv&&Adv.map,duel:window.Duel&&Duel.lobby,codex:window.Duel&&Duel.codex,kd:window.CC&&CC.lobby,bt:window.BT&&BT.lobby,chq:window.CHQ&&CHQ.intro,td:window.TD&&TD.lobby,mc:window.MCL&&MCL.lobby,tv:window.TVC&&TVC.lobby,tva:window.TVC&&TVC.alerts})[b.dataset.go]()}});
+  el.querySelectorAll('[data-go]').forEach(function(b){b.onclick=function(){SFX.tick();({aca:academy,rep:window.Replay,blz:window.Blitz,dia:window.Diag&&Diag.start,drl:window.Diag&&Diag.drillPick,sta:window.Diag&&Diag.stats,adv:window.Adv&&Adv.map,duel:window.Duel&&Duel.lobby,codex:window.Duel&&Duel.codex,kd:window.CC&&CC.lobby,bt:window.BT&&BT.lobby,chq:window.CHQ&&CHQ.intro,td:window.TD&&TD.lobby,mc:window.MCL&&MCL.lobby})[b.dataset.go]()}});
   if(window.Path)Path.decorate(el);
   heroLoop();
 }
@@ -3902,321 +3902,6 @@ if(orig)Diag.homeCards=function(){var html=orig(),n=LESSONS.filter(function(L){r
   var i=html.indexOf('data-go="td"');if(i<0)return card+html;i=html.lastIndexOf('<button',i);return html.slice(0,i)+card+html.slice(i)};
 })();
 
-/* Chart Coach: a TradingView-style canvas chart (drag, pinch, crosshair, timeframes) on real klines, with a live SMC
-   checklist that says which steps of a long/short setup are done and what is still missing, plus narrated events. */
-(function(){
-var A=window.App,$=A.$,SFX=A.SFX,save=A.save,SM=window.SMCA,BT=window.BT;
-save.tv=save.tv||{n:0,w:0,R:0,sess:0,coin:'BTC',tf:'1h',ov:{st:1,fvg:1,ob:0,liq:1,coach:1}};var TV=save.tv;if(!TV.ov)TV.ov={st:1,fvg:1,ob:0,liq:1,coach:1};if(TV.ov.sess==null)TV.ov.sess=1;
-var COINS=['BTC','ETH','SOL','BNB','XRP','DOGE'],LCOINS=['BTC','ETH','SOL','BNB','XRP','DOGE','ADA','AVAX','LINK','LTC','DOT','NEAR','APT','ARB','OP'],DEC={BTC:1,ETH:2,SOL:2,BNB:1,XRP:4,DOGE:5,ADA:4,AVAX:2,LINK:3,LTC:2,DOT:3,NEAR:3,APT:3,ARB:4,OP:4};
-var WORKER='https://smc-signals.crypto-radar-guardian-24x7.workers.dev';
-var HTF={'15m':[16,'4h'],'30m':[8,'4h'],'1h':[4,'4h'],'4h':[6,'1D']};
-var COL={bg:'#0B1222',grid:'rgba(140,153,184,.08)',ax:'#8C99B8',up:'#2CD3A3',dn:'#FF6E6E',gold:'#F5BF4F',sel:'#8E9DFF',fg:'#E8EDF7',mut:'#8C99B8'};
-function fmt(p,d){return window.fmtP(p,d)}
-function pad(n){return n<10?'0'+n:''+n}
-function tpe(t){var d=new Date((t+8*3600)*1000);return {Y:d.getUTCFullYear(),M:d.getUTCMonth()+1,D:d.getUTCDate(),h:d.getUTCHours(),m:d.getUTCMinutes()}}
-/* sessions (UTC, same as the Discord system): Asia 0-6, London KZ 7-10, NY AM KZ 12-15, NY PM KZ 17:30-20 */
-var SESS=[[0,6,'亞洲盤','rgba(77,132,214,.10)'],[7,10,'倫敦殺區','rgba(44,211,163,.09)'],[12,15,'紐約早盤殺區','rgba(245,191,79,.10)'],[17.5,20,'紐約午盤殺區','rgba(142,157,255,.10)']];
-function sessOf(t){var d=new Date(t*1000),h=d.getUTCHours()+d.getUTCMinutes()/60;for(var k=0;k<SESS.length;k++)if(h>=SESS[k][0]&&h<SESS[k][1])return k+1;return 0}
-function sessName(s){return s>0?SESS[s-1][2]:'非時段'}
-function nextKz(t){var d=new Date(t*1000),h=d.getUTCHours()+d.getUTCMinutes()/60,nx=h<7?7:h<12?12:h<17.5?17.5:31;return t+Math.round((nx-h)*60)*60}
-function tstr(t,full){var x=tpe(t);return (full?x.Y+'/':'')+x.M+'/'+x.D+' '+pad(x.h)+':'+pad(x.m)}
-
-/* ═════════ canvas chart ═════════ */
-function Chart(host,o){
-  var self=this;this.o=o;this.host=host;this.W=host.clientWidth||360;this.bw=8;this.off=8;this.cross=null;this.ov=[];this.C=[];this.cur=0;this.dec=2;
-  host.innerHTML='<div class="tvwrap"><canvas class="tvc"></canvas><div class="tvleg"></div><button class="tvlast" type="button" hidden>最新 →</button><div class="tvzoom"><button type="button" data-z="1">＋</button><button type="button" data-z="-1">－</button></div></div>';
-  this.cv=host.querySelector('canvas');this.leg=host.querySelector('.tvleg');this.lastB=host.querySelector('.tvlast');
-  this.lastB.onclick=function(){self.off=8;self.draw()};
-  host.querySelectorAll('[data-z]').forEach(function(b){b.onclick=function(){self.zoom(+b.dataset.z>0?1.25:.8,null)}});
-  var P={},pinch=null,drag=null;
-  this.cv.addEventListener('pointerdown',function(e){self.cv.setPointerCapture(e.pointerId);P[e.pointerId]={x:e.clientX,y:e.clientY};var ks=Object.keys(P);
-    if(ks.length===2){var a=P[ks[0]],b=P[ks[1]];pinch={d:Math.hypot(a.x-b.x,a.y-b.y),bw:self.bw};drag=null}else{drag={x:e.clientX,y:e.clientY,off:self.off,moved:false}}});
-  this.cv.addEventListener('pointermove',function(e){if(!P[e.pointerId])return;P[e.pointerId]={x:e.clientX,y:e.clientY};var ks=Object.keys(P);
-    if(pinch&&ks.length===2){var a=P[ks[0]],b=P[ks[1]],d=Math.hypot(a.x-b.x,a.y-b.y);self.setBw(pinch.bw*d/pinch.d);return}
-    if(drag){var dx=e.clientX-drag.x;if(Math.abs(dx)>5||Math.abs(e.clientY-drag.y)>5)drag.moved=true;if(drag.moved){if(self.cross&&!drag.cr){self.cross=null}self.off=drag.off-dx/self.bw;self.clamp();self.draw()}}});
-  function up(e){var wasTap=drag&&!drag.moved&&Object.keys(P).length===1;delete P[e.pointerId];if(Object.keys(P).length<2)pinch=null;
-    if(wasTap){var r=self.cv.getBoundingClientRect();var x=e.clientX-r.left,y=e.clientY-r.top;self.cross=self.cross?null:{x:x,y:y};self.draw()}
-    if(!Object.keys(P).length)drag=null}
-  this.cv.addEventListener('pointerup',up);this.cv.addEventListener('pointercancel',up);
-  this.cv.addEventListener('wheel',function(e){e.preventDefault();self.zoom(e.deltaY<0?1.12:.89,e.offsetX)},{passive:false});
-  this.ro=new ResizeObserver(function(){self.draw()});this.ro.observe(host);
-}
-Chart.prototype.setBw=function(b){this.bw=Math.max(2.2,Math.min(28,b));this.clamp();this.draw()};
-Chart.prototype.zoom=function(f){this.setBw(this.bw*f)};
-Chart.prototype.clamp=function(){var n=(this.W-58)/this.bw;this.off=Math.max(-(this.cur-Math.min(n*.5,this.cur)),Math.min(n*.6,this.off))};
-Chart.prototype.set=function(C,cur,dec,ov,sym){this.C=C;this.cur=cur;this.dec=dec;this.ov=ov||[];this.sym=sym||'';this.draw()};
-Chart.prototype.draw=function(){
-  var cv=this.cv,dpr=window.devicePixelRatio||1,W=this.host.clientWidth||360,H=this.o.h||380;this.W=W;
-  if(cv.width!==Math.round(W*dpr)||cv.height!==Math.round(H*dpr)){cv.width=Math.round(W*dpr);cv.height=Math.round(H*dpr);cv.style.width=W+'px';cv.style.height=H+'px'}
-  var x=cv.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);x.fillStyle=COL.bg;x.fillRect(0,0,W,H);
-  var C=this.C,cur=this.cur;if(!C.length)return;
-  var AX=58,TH=20,pw=W-AX,ph=H-TH,bw=this.bw,right=cur+this.off,left=right-pw/bw,i0=Math.max(0,Math.floor(left)),i1=Math.min(cur,Math.ceil(right));
-  this.lastB.hidden=this.off>=4;
-  var lo=1e18,hi=-1e18,i;for(i=i0;i<=i1;i++){lo=Math.min(lo,C[i].l);hi=Math.max(hi,C[i].h)}
-  this.ov.forEach(function(a){if(a.inc)[a.p,a.p1,a.p2].forEach(function(p){if(p!=null){lo=Math.min(lo,p);hi=Math.max(hi,p)}})});
-  var padv=(hi-lo)*.08||1;lo-=padv;hi+=padv*1.3;
-  var X=function(i){return pw-(right-i+.5)*bw},Y=function(p){return 8+(hi-p)/(hi-lo)*(ph-14)},Pv=function(y){return hi-(y-8)/(ph-14)*(hi-lo)};
-  /* grid + price axis */
-  var step=nice((hi-lo)/6);x.font='10.5px "Chakra Petch",ui-monospace,monospace';x.textBaseline='middle';
-  for(var v=Math.ceil(lo/step)*step;v<hi;v+=step){var yy=Math.round(Y(v))+.5;x.strokeStyle=COL.grid;x.beginPath();x.moveTo(0,yy);x.lineTo(pw,yy);x.stroke();x.fillStyle=COL.ax;x.fillText(fmt(v,step<1?this.dec:0),pw+5,yy)}
-  /* time axis */
-  var every=Math.max(1,Math.ceil(70/bw));x.textBaseline='alphabetic';
-  for(i=Math.ceil(i0/every)*every;i<=Math.min(i1+Math.ceil(this.off),cur);i+=every){var xx=X(i);if(xx<20||xx>pw-20)continue;x.strokeStyle=COL.grid;x.beginPath();x.moveTo(Math.round(xx)+.5,0);x.lineTo(Math.round(xx)+.5,ph);x.stroke();
-    var tt=tpe(C[i].t);x.fillStyle=COL.ax;x.textAlign='center';x.fillText((tt.h===0&&tt.m===0)?tt.M+'/'+tt.D:pad(tt.h)+':'+pad(tt.m),xx,H-6)}
-  x.textAlign='left';
-  x.save();x.beginPath();x.rect(0,0,pw,ph);x.clip();
-  /* session bands (intraday only) */
-  if(this.sessOn&&C.length>1&&C[1].t-C[0].t<=3600){var prevS=-1;x.font='600 9.5px "Noto Sans TC",sans-serif';
-    for(i=i0;i<=i1;i++){var ss=sessOf(C[i].t);if(ss>0){x.fillStyle=SESS[ss-1][3];x.fillRect(X(i)-bw/2,0,bw+.6,ph);
-      if(ss!==prevS){x.fillStyle='rgba(232,237,247,.42)';x.fillText(SESS[ss-1][2].replace('殺區',''),Math.max(2,X(i)-bw/2+2),ph-5)}}prevS=ss}}
-  /* overlays below candles */
-  var self=this;this.ov.forEach(function(a){if(a.t==='zone'){var xa=X(a.i1)-bw/2,xb=a.i2!=null?X(a.i2)+bw/2:pw;if(xb<0)return;x.fillStyle=a.fill;x.fillRect(xa,Y(Math.max(a.p1,a.p2)),xb-xa,Math.max(1,Math.abs(Y(a.p1)-Y(a.p2))));
-      if(a.stroke){x.strokeStyle=a.stroke;x.setLineDash([3,3]);x.strokeRect(xa,Y(Math.max(a.p1,a.p2)),xb-xa,Math.abs(Y(a.p1)-Y(a.p2)));x.setLineDash([])}
-      if(a.label){x.fillStyle=a.lc||COL.fg;x.font='600 10px "Noto Sans TC",sans-serif';x.textAlign='right';x.fillText(a.label,Math.min(pw-4,xb-4),Y(Math.max(a.p1,a.p2))+11);x.textAlign='left'}}
-    else if(a.t==='box'){var xs=X(a.i1)-bw/2,xe=a.i2!=null?X(a.i2)+bw/2:Math.min(pw,xs+bw*18);if(xe<0)return;x.fillStyle='rgba(44,211,163,.11)';x.fillRect(xs,Math.min(Y(a.en),Y(a.tp)),xe-xs,Math.abs(Y(a.tp)-Y(a.en)));x.fillStyle='rgba(255,110,110,.11)';x.fillRect(xs,Math.min(Y(a.en),Y(a.sl)),xe-xs,Math.abs(Y(a.sl)-Y(a.en)));
-      x.strokeStyle=COL.fg;x.beginPath();x.moveTo(xs,Y(a.en));x.lineTo(xe,Y(a.en));x.stroke();x.font='600 10px "Noto Sans TC",sans-serif';x.fillStyle=COL.fg;x.fillText(a.label||'',xs+3,Y(a.en)-4)}});
-  /* candles */
-  var cw=Math.max(1,bw*.68);
-  for(i=i0;i<=i1;i++){var k=C[i],u=k.c>=k.o,cx=X(i);x.strokeStyle=x.fillStyle=u?COL.up:COL.dn;x.beginPath();x.moveTo(Math.round(cx)+.5,Y(k.h));x.lineTo(Math.round(cx)+.5,Y(k.l));x.stroke();
-    var yt=Y(Math.max(k.o,k.c)),yb=Y(Math.min(k.o,k.c));x.fillRect(cx-cw/2,yt,cw,Math.max(1,yb-yt))}
-  /* overlays above candles */
-  this.ov.forEach(function(a){
-    if(a.t==='line'){var xa=a.i1!=null?X(a.i1):0,xb=a.i2!=null?X(a.i2):pw,y=Math.round(Y(a.p))+.5;if(xb<6)return;x.strokeStyle=a.c;x.lineWidth=a.w||1;x.setLineDash(a.dash?[4,3]:[]);x.beginPath();x.moveTo(xa,y);x.lineTo(xb,y);x.stroke();x.setLineDash([]);x.lineWidth=1;
-      if(a.label){x.font='600 10px "Noto Sans TC",sans-serif';x.fillStyle=a.c;var tw=x.measureText(a.label).width,lx=a.lr?Math.min(pw-tw-3,xb-tw-3):Math.max(2,xa+3);if(!a.lr&&xa<-20&&a.i2!=null)lx=Math.max(2,xb-tw-3);x.fillText(a.label,lx,a.below?y+11:y-3)}}
-    else if(a.t==='mark'){if(X(a.i)<-4)return;var mx=X(a.i),my=Y(a.p),upm=a.up;x.fillStyle=a.c;x.beginPath();if(upm){x.moveTo(mx,my-4);x.lineTo(mx-4,my-10);x.lineTo(mx+4,my-10)}else{x.moveTo(mx,my+4);x.lineTo(mx-4,my+10);x.lineTo(mx+4,my+10)}x.fill();
-      if(a.label){x.font='700 10px "Noto Sans TC",sans-serif';var w2=x.measureText(a.label).width;x.fillText(a.label,Math.max(2,Math.min(pw-w2-2,mx-w2/2)),upm?my-13:my+21)}}});
-  x.restore();
-  /* last price tag */
-  var lc=C[cur],ly=Y(lc.c);x.strokeStyle=lc.c>=lc.o?COL.up:COL.dn;x.setLineDash([2,3]);x.beginPath();x.moveTo(X(cur),ly);x.lineTo(pw,ly);x.stroke();x.setLineDash([]);
-  tag(x,pw,ly,fmt(lc.c,this.dec),lc.c>=lc.o?COL.up:COL.dn,AX);
-  /* crosshair */
-  var bar=cur;
-  if(this.cross){var ci=Math.round(right-(pw-this.cross.x)/bw-.5);ci=Math.max(i0,Math.min(i1,ci));bar=ci;var cxx=X(ci),cyy=Math.min(ph,Math.max(0,this.cross.y));
-    x.strokeStyle='rgba(232,237,247,.45)';x.setLineDash([4,4]);x.beginPath();x.moveTo(cxx,0);x.lineTo(cxx,ph);x.moveTo(0,cyy);x.lineTo(pw,cyy);x.stroke();x.setLineDash([]);
-    tag(x,pw,cyy,fmt(Pv(cyy),this.dec),'#2A3554',AX);var ts=tstr(C[ci].t,true);x.font='10.5px "Chakra Petch",monospace';var tw2=x.measureText(ts).width+10;x.fillStyle='#2A3554';x.fillRect(Math.max(0,Math.min(pw-tw2,cxx-tw2/2)),ph+1,tw2,TH-2);x.fillStyle=COL.fg;x.fillText(ts,Math.max(5,Math.min(pw-tw2+5,cxx-tw2/2+5)),H-6)}
-  var b=C[bar],ch=(b.c-b.o)/b.o*100;
-  this.leg.innerHTML='<b>'+this.sym+'</b> <span class="mut">'+tstr(b.t,true)+'</span><br>O <i>'+fmt(b.o,this.dec)+'</i> H <i>'+fmt(b.h,this.dec)+'</i> L <i>'+fmt(b.l,this.dec)+'</i> C <i style="color:'+(ch>=0?COL.up:COL.dn)+'">'+fmt(b.c,this.dec)+' ('+(ch>=0?'+':'')+ch.toFixed(2)+'%)</i>';
-};
-function tag(x,pw,y,txt,bg,AX){x.fillStyle=bg;x.fillRect(pw+1,y-8,AX-2,16);x.fillStyle=bg==='#2A3554'?COL.fg:'#0A0F1D';x.font='700 10.5px "Chakra Petch",monospace';x.textBaseline='middle';x.fillText(txt,pw+5,y);x.textBaseline='alphabetic'}
-function nice(r){var m=Math.pow(10,Math.floor(Math.log10(r))),f=r/m;return (f<=1?1:f<=2?2:f<=2.5?2.5:f<=5?5:10)*m}
-
-/* ═════════ coach: where are we in a long / short setup ═════════ */
-function analyzeAt(S){
-  var cur=S.live?S.cur-1:S.cur,s=Math.max(0,cur-700),W=S.C.slice(s,cur+1),A=SM.analyze(W,4,2),g=HTF[S.tf][0],hs=Math.max(0,cur-g*150),H;
-  if(S.live&&S.H&&S.H.length>20)H=S.H;else H=SM.aggregate(S.C.slice(hs,cur+1),cur-hs,g,S.C[1].t-S.C[0].t);
-  var HA=SM.structure(H,3,SM.atr(H)),bias=HA.trend[H.length-1]||0;
-  return {A:A,s:s,W:W,bias:bias}}
-function coach(S,R){
-  var A=R.A,W=R.W,n=W.length,j=n-1,px=W[j].c,a=A.atr[j],s=R.s,out={};
-  var lb=Math.max(0,n-80),rH=-1e18,rL=1e18;for(var i=lb;i<n;i++){rH=Math.max(rH,W[i].h);rL=Math.min(rL,W[i].l)}var eq=(rH+rL)/2;
-  [1,-1].forEach(function(d){
-    var st=[],ann=[],key=d>0?'L':'S',D=function(a,b){return d>0?a:b};
-    /* 1 bias, 2 location */
-    st.push({k:'bias',n:'大週期方向',v:R.bias===d?2:R.bias===0?1:0,t:R.bias===d?HTF[S.tf][1]+' 偏'+D('多','空')+'，順勢':R.bias===0?HTF[S.tf][1]+' 方向未定':HTF[S.tf][1]+' 偏'+D('空','多')+'，這邊是逆勢單，要更嚴格'});
-    var disc=d>0?px<eq:px>eq;
-    st.push({k:'loc',n:'位置（折價／溢價）',v:disc?2:0,t:disc?'在近期區間 50% 的'+D('下方（折價，便宜）','上方（溢價，貴）'):'價格在'+D('溢價區（偏貴）','折價區（偏便宜）')+'，'+D('做多','做空')+'的位置不好，等回到 50% '+D('以下','以上')});
-    /* 3 sweep: latest wick through an untouched swing on the protective side that closed back */
-    var sw=null;A.piv.forEach(function(p){if(p.hi===(d>0?0:1)&&p.k<=j){for(var u=Math.max(p.k,n-45);u<=j;u++){if(u<=p.i)continue;var took=d>0?W[u].l<p.p:W[u].h>p.p;if(!took)continue;
-        var prev=false;for(var q=p.i+1;q<u;q++)if(d>0?W[q].l<p.p:W[q].h>p.p){prev=true;break}if(prev)break;
-        var back=d>0?(W[u].c>p.p||(u<j&&W[u+1].c>p.p)):(W[u].c<p.p||(u<j&&W[u+1].c<p.p));if(back&&(!sw||u>sw.u))sw={u:u,p:p.p,pi:p.i,x:d>0?W[u].l:W[u].h};break}}});
-    if(sw){var ext=sw.x;for(var u2=sw.u;u2<=j;u2++)ext=d>0?Math.min(ext,W[u2].l):Math.max(ext,W[u2].h);
-      for(u2=sw.u+1;u2<=j;u2++)if(d>0?W[u2].c<sw.x:W[u2].c>sw.x){sw.dead=u2;break}sw.ext=ext}
-    var okSw=sw&&!sw.dead;
-    var intra=S.tf!=='4h',dtB=S.C[1].t-S.C[0].t,tNow=S.live?Math.floor(Date.now()/1000):W[j].t+dtB,sCur=sessOf(tNow),sSw=okSw?sessOf(W[sw.u].t):-1;
-    var nowTx=sCur>=2?'現在是'+sessName(sCur)+'（波動大）':'現在是'+sessName(sCur)+'，下個殺區 '+tstr(nextKz(tNow)).split(' ')[1]+' 開始';
-    var sessIt=!intra?{v:1,t:'4h 以上的週期不看時段'}:!okSw?{v:1,t:'掃蕩發生後再看它在哪個時段。'+nowTx+'。最好的掃蕩在倫敦（台灣 15–18 點）或紐約（20–23 點）殺區'}:
-      sSw>=2?{v:2,t:'掃蕩發生在'+sessName(sSw)+'，大資金進場的時段，比較可信。'+nowTx}:sSw===1?{v:0,t:'掃蕩發生在亞洲盤（台灣 8–14 點），波動小、假突破多，要更保守。'+nowTx}:{v:1,t:'掃蕩不在殺區，可信度普通。'+nowTx};
-    st.push({k:'sess',n:'時段（殺區）',v:sessIt.v,t:sessIt.t});
-    st.push({k:'sweep',n:'掃流動性',v:okSw?2:0,t:okSw?'第 '+(j-sw.u)+' 根前掃掉 '+fmt(sw.p,S.dec)+' '+D('下方的 SSL（多單止損）','上方的 BSL（空單止損）')+'，影線刺破又收回':sw&&sw.dead?'剛才那次掃蕩失敗了：收盤'+D('跌破','突破')+'掃出來的'+D('低','高')+'點，劇本重來':'還沒有掃流動性。等價格刺破前'+D('低（SSL）','高（BSL）')+'又收回來'});
-    if(okSw){ann.push({t:'line',i1:sw.pi-0+s,i2:sw.u+s,p:sw.p,c:COL.gold,dash:1,label:D('SSL','BSL')+' 被掃'},{t:'mark',i:sw.u+s,p:sw.x,c:COL.gold,up:d<0,label:'掃'})}
-    /* 4 structure shift after the sweep */
-    var ev=null,iev=null;if(okSw){A.ev.forEach(function(e){if(e.dir===d&&e.i>sw.u&&e.i<=j)ev=ev||e});A.iev.forEach(function(e){if(e.dir===d&&e.i>sw.u&&e.i<=j)iev=iev||e})}
-    var tgtLv=null;if(okSw&&!ev){A.piv.forEach(function(p){if(p.hi===(d>0?1:0)&&p.k<=j&&p.i>Math.max(0,sw.u-40)&&(d>0?p.p>px:p.p<px)&&(p.sw==null||p.sw+0>j))tgtLv=tgtLv&&(d>0?tgtLv.p<p.p:tgtLv.p>p.p)?tgtLv:p})}
-    st.push({k:'shift',n:'結構轉向（CHoCH／BOS）',v:ev?2:iev?1:0,t:!okSw?'等前一步':ev?'收盤'+D('突破','跌破')+' '+fmt(ev.p,S.dec)+'，'+ev.t+' 成立，'+D('多方','空方')+'接手':iev?'內部結構已轉（小擺動點被突破），還要等收盤'+D('突破','跌破')+(tgtLv?' '+fmt(tgtLv.p,S.dec):'外部擺動點')+'才算真正轉向':'等收盤'+D('突破','跌破')+(tgtLv?'最近的 '+D('LH','HL')+' '+fmt(tgtLv.p,S.dec):'前一個'+D('反彈高點','回檔低點'))+'，只有影線不算'});
-    if(ev)ann.push({t:'line',i1:ev.from+s,i2:ev.i+s,p:ev.p,c:D(COL.up,COL.dn),w:1.5,label:ev.t});
-    else if(okSw&&tgtLv)ann.push({t:'line',i1:tgtLv.i+s,p:tgtLv.p,c:COL.sel,dash:1,label:'收盤'+D('突破','跌破')+'這裡 = '+(iev?'外部':'')+'CHoCH',lr:1});
-    /* 5 POI left by the displacement */
-    var poi=null;if(okSw&&ev){A.fv.forEach(function(f){if(f.dir===d&&f.i>=sw.u-1&&f.k<=j&&(f.fill==null||f.fill>j))poi=poi||{kind:'FVG',top:Math.max(f.p1,f.p2),bot:Math.min(f.p1,f.p2),i:f.i,k:f.k}});
-      if(!poi)A.obs.forEach(function(o){if(o.dir===d&&o.i>=sw.u-2&&o.k<=j&&(o.inv==null||o.inv>j))poi=poi||{kind:'OB',top:o.p1,bot:o.p2,i:o.i,k:o.k}})}
-    st.push({k:'poi',n:'POI（FVG／OB）',v:poi?2:0,t:!ev?'等前一步':poi?'轉向那段留下'+D('多方','空方')+' '+poi.kind+'：'+fmt(poi.bot,S.dec)+' – '+fmt(poi.top,S.dec):'這次轉向沒有留下乾淨的 FVG／OB，力道普通。可以等下一個位移，或放棄這筆'});
-    if(poi)ann.push({t:'zone',i1:poi.i+s,p1:poi.top,p2:poi.bot,fill:d>0?'rgba(44,211,163,.16)':'rgba(255,110,110,.16)',stroke:d>0?COL.up:COL.dn,label:'POI '+poi.kind,lc:d>0?COL.up:COL.dn});
-    /* 6 retest */
-    var rt=null;if(poi){for(var u3=poi.k+1;u3<=j;u3++){if(d>0?W[u3].l<=poi.top:W[u3].h>=poi.bot){rt=u3;break}}}
-    var dist=poi?(d>0?(px-poi.top):(poi.bot-px))/a:0;
-    st.push({k:'retest',n:'回踩 POI',v:rt!=null?2:0,t:!poi?'等前一步':rt!=null?'第 '+(j-rt)+' 根前回到 POI，這裡就是進場區':'等價格回到 '+fmt(d>0?poi.top:poi.bot,S.dec)+'。現在離 POI 還有 '+dist.toFixed(1)+' 根 ATR，不要追價'});
-    /* 7 plan */
-    var plan=null;if(poi&&okSw){var en=d>0?poi.top:poi.bot,sl=sw.ext-d*.15*a,tp=null;
-      A.piv.forEach(function(p){if(p.hi===(d>0?1:0)&&p.k<=j&&(p.sw==null||p.sw>j)&&(d>0?p.p>en+.5*a:p.p<en-.5*a))tp=tp==null?p.p:(d>0?Math.min(tp,p.p):Math.max(tp,p.p))});
-      if(tp==null)tp=d>0?rH:rL;var rr=d*(tp-en)/(d*(en-sl));plan={en:en,sl:sl,tp:tp,rr:rr}}
-    st.push({k:'plan',n:'進場計畫（止損／目標）',v:plan?(plan.rr>=2?2:1):0,t:!plan?'等前一步':'進場 '+fmt(plan.en,S.dec)+'・止損 '+fmt(plan.sl,S.dec)+'（掃出來的'+D('低','高')+'點外）・目標 '+fmt(plan.tp,S.dec)+'（對面流動性）・盈虧比 '+plan.rr.toFixed(1)+'R'+(plan.rr<2?'。不到 2R，目標太近，寧可不做':'')});
-    if(plan)ann.push({t:'box',i1:(rt!=null?rt:j)+s,en:plan.en,sl:plan.sl,tp:plan.tp,label:D('多','空')+' '+plan.rr.toFixed(1)+'R'});
-    /* summary */
-    var core=st.slice(3),done=core.filter(function(x){return x.v===2}).length,next=core.filter(function(x){return x.v!==2})[0];
-    var ready=done===5;
-    out[key]={d:d,st:st,ann:ann,done:done,next:next,ready:ready,plan:plan,rt:rt,sw:okSw?sw:null,ev:ev,poi:poi,ctx:st[0].v+st[1].v}});
-  out.eq=eq;out.rH=rH;out.rL=rL;return out}
-
-/* ═════════ screen ═════════ */
-var S=null,tvc=null,timer=0,speed=1,lastKeys=null;
-function lobby(){if(TV.mode==='hist')open(TV.coin,TV.tf,null);else openLive(TV.coin,TV.tf)}
-function open(coin,tf,t){
-  if(COINS.indexOf(coin)<0){A.toast('歷史練習只有 BTC、ETH、SOL、BNB、XRP、DOGE');coin='BTC'}if(tf==='30m')tf='1h';
-  A.screen('<div class="fb center" style="padding:40px 16px"><div class="bt-spin"></div><p class="mut">載入 '+coin+' '+tf+'…</p></div>');
-  BT.load(coin,tf).then(function(C){
-    var cur;if(t!=null){cur=bs(C,t);if(Math.abs(C[cur].t-t)>86400*2){A.toast(tf==='15m'?'15m 只有 2025 年的資料，已跳到最接近的時間':'已跳到最接近的時間')}}
-    else cur=300+Math.floor(Math.random()*(C.length-700));
-    stopLive();S={coin:coin,tf:tf,C:C,cur:cur,dec:DEC[coin],log:[],trades:[],side:null,start:cur};TV.coin=coin;TV.tf=tf;TV.mode='hist';TV.sess++;A.persist();lastKeys=null;
-    layout();step(0);
-  }).catch(function(e){A.screen('<div class="fb"><p class="st no">載入失敗</p><p class="why">'+e.message+'</p><button class="btn wide" id="bk" type="button">回首頁</button></div>');$('#bk').onclick=A.home})}
-function bs(C,t){var lo=0,hi=C.length-1;while(lo<hi){var m=(lo+hi)>>1;if(C[m].t<t)lo=m+1;else hi=m}return Math.max(300,Math.min(C.length-1,lo))}
-function layout(){
-  stop();
-  var el=A.screen('<div class="row"><div><p class="eyebrow">Chart Coach</p><h1 class="h2" style="font-size:20px">看盤教室</h1></div><span class="sp"></span><div class="tvseg" id="mode"><button type="button" data-m="live" class="'+(S.live?'on':'')+'">● 即時</button><button type="button" data-m="hist" class="'+(S.live?'':'on')+'">歷史練習</button></div></div>'+
-   '<div class="tvbar"><div class="tvseg" id="coins">'+(S.live?LCOINS:COINS).map(function(c){return '<button type="button" data-c="'+c+'" class="'+(S.coin===c?'on':'')+'">'+c+'</button>'}).join('')+'</div>'+
-   '<div class="tvseg" id="tfs">'+(S.live?['15m','30m','1h','4h']:['15m','1h','4h']).map(function(t){return '<button type="button" data-t="'+t+'" class="'+(S.tf===t?'on':'')+'">'+t+'</button>'}).join('')+'</div></div>'+
-   '<div class="tvseg tvov">'+[['st','結構'],['fvg','FVG'],['ob','OB'],['liq','流動性'],['sess','時段'],['coach','教練']].map(function(o){return '<button type="button" data-o="'+o[0]+'" class="'+(TV.ov[o[0]]?'on':'')+'">'+o[1]+'</button>'}).join('')+'</div>'+
-   '<div id="tvh"></div>'+
-   (S.live?'<div class="tvlive"><span class="dot"></span><span id="lst">即時・'+S.src+'</span><span class="sp"></span><button class="pill" id="alB" type="button" style="border:0">📣 推播紀錄</button><button class="pill" id="ref" type="button" style="border:0">立即更新</button></div>':'<div class="row"><span class="sp"></span><button class="pill" id="rnd" type="button" style="border:0">🎲 換一段歷史</button></div>')+
-   '<div class="tvctl"'+(S.live?' hidden':'')+'><button class="btn ghost" id="bk1" type="button">◀</button><button class="btn" id="fw1" type="button">下一根 ▶</button><button class="btn ghost" id="play" type="button">▶▶ 播放</button><button class="btn ghost" id="nev" type="button">⏭ 下個事件</button></div>'+
-   '<div class="fb tvcoach"><div class="row"><div class="tvseg" id="side"><button type="button" data-s="L">多單劇本</button><button type="button" data-s="S">空單劇本</button></div><span class="sp"></span><span class="num mut" id="cprog"></span></div><div id="next"></div><div id="steps"></div></div>'+
-   '<div class="fb"><div class="row"><p class="st" style="font-size:15px;margin:0">教練旁白</p><span class="sp"></span><span class="num mut" id="tally" style="font-size:12px"></span></div><div id="log" class="tvlog"></div></div>'+
-   '<p class="hint" style="margin:0">'+(S.live?'即時模式：最後一根是還沒收盤的 K 線，教練只用已收盤的 K 線判斷，每 15 秒更新一次。':'')+'圖表：左右拖曳移動、雙指縮放（或按 ＋／－）、點一下看十字線。時間都是台灣時間；底色是時段（藍＝亞洲、綠＝倫敦、黃＝紐約早盤、紫＝紐約午盤）。教練的劇本是「掃流動性 → 結構轉向 → 留下 POI → 回踩 → 計畫」，每一步都只用當下已收盤的 K 線判斷。</p>'+
-   '<button class="btn ghost wide" id="home" type="button">回首頁</button>');
-  tvc=new Chart($('#tvh'),{h:Math.max(320,Math.min(460,Math.round(innerHeight*.48)))});
-  el.querySelectorAll('[data-c]').forEach(function(b){b.onclick=function(){SFX.tick();if(S.live)openLive(b.dataset.c,S.tf);else open(b.dataset.c,S.tf,S.C[S.cur].t)}});
-  el.querySelectorAll('[data-t]').forEach(function(b){b.onclick=function(){SFX.tick();if(S.live)openLive(S.coin,b.dataset.t);else open(S.coin,b.dataset.t,S.C[S.cur].t)}});
-  el.querySelectorAll('[data-m]').forEach(function(b){b.onclick=function(){SFX.tick();if(b.dataset.m==='live')openLive(S.coin,S.tf);else open(S.coin,S.tf,null)}});
-  if($('#ref'))$('#ref').onclick=function(){liveTick(true)};
-  if($('#alB'))$('#alB').onclick=function(){SFX.tick();alerts()};
-  el.querySelectorAll('[data-o]').forEach(function(b){b.onclick=function(){TV.ov[b.dataset.o]=TV.ov[b.dataset.o]?0:1;b.classList.toggle('on');A.persist();render()}});
-  el.querySelectorAll('[data-s]').forEach(function(b){b.onclick=function(){S.side=b.dataset.s;render()}});
-  if($('#rnd'))$('#rnd').onclick=function(){SFX.tick();open(S.coin,S.tf,null)};
-  $('#bk1').onclick=function(){stop();if(S.cur>S.start-200){S.cur--;S.trades=S.trades.filter(function(t){return t.i<=S.cur});lastKeys=null;render(true)}};
-  $('#fw1').onclick=function(){stop();step(1)};
-  $('#play').onclick=function(){if(timer)stop();else{speed=speed||1;timer=setInterval(function(){if(!step(1,true))stop()},[0,520,260,110][speed]);$('#play').textContent='❚❚ 暫停';$('#play').classList.add('on')}};
-  $('#play').addEventListener('dblclick',function(){speed=speed%3+1;A.toast('播放速度 '+speed+'x')});
-  $('#nev').onclick=function(){stop();for(var k=0;k<300;k++){if(!step(1,true,true))break;if(S._ev)break}render()};
-  $('#home').onclick=A.home;A.onLeave(stop);A.onLeave(stopLive);
-}
-function stop(){if(timer){clearInterval(timer);timer=0}var b=$('#play');if(b){b.textContent='▶▶ 播放';b.classList.remove('on')}}
-var R=null,CO=null;
-function step(n,quiet,noDraw){
-  if(n>0&&S.cur>=S.C.length-1){A.toast('資料到底了');return false}
-  S.cur+=n;R=analyzeAt(S);CO=coach(S,R);S._ev=false;
-  if(n>0)narrate();
-  trackTrades();
-  if(!noDraw)render();return true}
-function narrate(){
-  var keys={};['L','S'].forEach(function(k){var c=CO[k];c.st.forEach(function(s){keys[k+s.k]=s.v})});
-  if(lastKeys){var msgs=[];['L','S'].forEach(function(k){var c=CO[k],nm=k==='L'?'多單':'空單';
-    c.st.slice(3).forEach(function(s,ix){var was=lastKeys[k+s.k],now=s.v;if(now===2&&was!==2)msgs.push([k,'<b>'+nm+'劇本 ✓ '+s.n+'</b>：'+s.t+(c.next?'。<br>下一步：<span class="gold">'+c.next.n+'</span>':'。<br><span class="gold">五步都到位了</span>')]);
-      else if(was===2&&now!==2&&ix===0)msgs.push([k,'<b>'+nm+'劇本重置</b>：'+s.t])});
-    if(c.ready&&!lastKeys[k+'ready'])msgs.push([k,'<b class="gold">'+nm+'劇本完成</b>：'+c.plan.rr.toFixed(1)+'R 的計畫，教練模擬進場']);});
-  msgs.forEach(function(m){S.log.unshift({t:S.C[S.cur].t,side:m[0],h:m[1]})});if(msgs.length){S._ev=true;if(S.log.length>40)S.log.length=40}}
-  keys.Lready=CO.L.ready;keys.Sready=CO.S.ready;lastKeys=keys}
-function trackTrades(){
-  var C=S.C,j=S.live?S.cur-1:S.cur;
-  ['L','S'].forEach(function(k){var c=CO[k];if(c.ready&&c.plan.rr>=2&&!S.trades.some(function(t){return t.side===k&&t.sw===c.sw.u+R.s})&&!S.trades.some(function(t){return !t.res}))S.trades.push({side:k,d:c.d,i:j,sw:c.sw.u+R.s,en:c.plan.en,sl:c.plan.sl,tp:c.plan.tp,rr:c.plan.rr})});
-  S.trades.forEach(function(t){if(t.res||t.i>=j)return;var k=C[j];if(t.d>0?k.l<=t.sl:k.h>=t.sl){t.res=-1;t.x=j}else if(t.d>0?k.h>=t.tp:k.l<=t.tp){t.res=t.rr;t.x=j}
-    if(t.res!=null){var key=S.coin+S.tf+t.i;TV.done=TV.done||{};if(!TV.done[key]){TV.done[key]=1;TV.n++;if(t.res>0)TV.w++;TV.R+=t.res;A.persist()}
-      S.log.unshift({t:k.t,side:t.side,h:'<b style="color:'+(t.res>0?COL.up:COL.dn)+'">模擬單結果 '+(t.res>0?'+':'')+t.res.toFixed(1)+'R</b>：'+(t.res>0?'到達對面流動性':'打到止損，掃蕩後的劇本也會失敗，這很正常')})}})}
-function render(re){
-  if(re){R=analyzeAt(S);CO=coach(S,R)}
-  var side=S.side||(CO.L.done+CO.L.ctx*.3>=CO.S.done+CO.S.ctx*.3?'L':'S'),c=CO[side],s=R.s,A2=R.A,ov=[],j=R.W.length-1;
-  /* market overlays */
-  if(TV.ov.fvg)A2.fv.filter(function(f){return f.k<=j&&(f.fill==null||f.fill>j)&&f.i>j-150}).slice(-6).forEach(function(f){ov.push({t:'zone',i1:f.i+s,p1:f.p1,p2:f.p2,fill:f.dir>0?'rgba(44,211,163,.08)':'rgba(255,110,110,.08)',label:'FVG',lc:'rgba(232,237,247,.5)'})});
-  if(TV.ov.ob)A2.obs.filter(function(o){return o.k<=j&&(o.inv==null||o.inv>j)&&o.i>j-200}).slice(-4).forEach(function(o){ov.push({t:'zone',i1:o.i+s,p1:o.p1,p2:o.p2,fill:'rgba(142,157,255,.1)',stroke:'rgba(142,157,255,.6)',label:o.dir>0?'多方 OB':'空方 OB',lc:COL.sel})});
-  if(TV.ov.liq){A2.eq.filter(function(e){return e.k<=j&&(e.sw==null||e.sw>j)&&e.i>j-200}).forEach(function(e){ov.push({t:'line',i1:e.i+s,p:e.p,c:'rgba(245,191,79,.8)',dash:1,label:(e.hi?'EQH':'EQL')+' $$$',lr:1,below:!e.hi})});
-    var lh=null,ll=null;A2.piv.forEach(function(p){if(p.k<=j&&(p.sw==null||p.sw>j)){if(p.hi)lh=p;else ll=p}});
-    if(lh)ov.push({t:'line',i1:lh.i+s,p:lh.p,c:'rgba(140,153,184,.8)',dash:1,label:'前高 BSL',lr:1});if(ll)ov.push({t:'line',i1:ll.i+s,p:ll.p,c:'rgba(140,153,184,.8)',dash:1,label:'前低 SSL',lr:1,below:1})}
-  if(TV.ov.st){A2.ev.filter(function(e){return e.i<=j&&e.i>j-200}).slice(-6).forEach(function(e){ov.push({t:'line',i1:e.from+s,i2:e.i+s,p:e.p,c:e.t==='CHoCH'?'rgba(255,110,110,.85)':'rgba(44,211,163,.85)',label:e.t,below:e.dir<0})});
-    A2.piv.filter(function(p){return p.k<=j&&p.lab&&p.i>j-200}).slice(-10).forEach(function(p){ov.push({t:'mark',i:p.i+s,p:p.p,c:'rgba(140,153,184,.9)',up:!!p.hi,label:p.lab})})}
-  var openT=S.trades.some(function(t){return t.i<=S.cur&&(t.res==null||t.x>S.cur)});
-  if(TV.ov.coach)ov=ov.concat(c.ann.filter(function(a){return !(openT&&a.t==='box')}));
-  S.trades.forEach(function(t){if(t.i>S.cur)return;ov.push({t:'box',i1:t.i,i2:t.x!=null&&t.x<=S.cur?t.x:null,en:t.en,sl:t.sl,tp:t.tp,label:'模擬'+(t.d>0?'多':'空')+(t.res!=null&&t.x<=S.cur?' '+(t.res>0?'+':'')+t.res.toFixed(1)+'R':'')})});
-  tvc.sessOn=!!TV.ov.sess;tvc.set(S.C,S.cur,S.dec,ov,S.coin+'USDT · '+S.tf);
-  /* coach panel */
-  $('#side').querySelectorAll('button').forEach(function(b){b.classList.toggle('on',b.dataset.s===side)});
-  $('#cprog').textContent=c.done+' / 5 步';
-  var nx=c.next;
-  $('#next').innerHTML=c.ready?'<div class="tvnext ok"><b>劇本到位</b>：'+(c.d>0?'多':'空')+'單計畫 '+c.plan.rr.toFixed(1)+'R。'+(c.st[0].v===0?'但這是逆勢單，倉位要小。':'')+(c.st[2].v===0?'掃蕩在亞洲盤，假突破機率高。':'')+'</div>':
-    '<div class="tvnext"><b>下一步還差：'+nx.n+'</b><br>'+nx.t+'</div>';
-  $('#steps').innerHTML=c.st.map(function(x,i){var ic=x.v===2?'✓':x.v===1?'◐':'○',cl=x.v===2?'ok':x.v===1?'half':'';return '<div class="tvstep '+cl+(i<3?' ctx':'')+'"><span class="tvic">'+ic+'</span><div><b>'+(i<3?'':(i-2)+'. ')+x.n+(i<3?'<span class="pill" style="margin-left:6px">背景</span>':'')+'</b><p>'+x.t+'</p></div></div>'}).join('');
-  $('#log').innerHTML=S.log.length?S.log.map(function(l){return '<div class="tvl"><span class="num mut">'+tstr(l.t)+'</span><span class="pill '+(l.side==='L'?'up':'down')+'">'+(l.side==='L'?'多':'空')+'</span><div>'+l.h+'</div></div>'}).join(''):'<p class="mut" style="margin:0;font-size:13px">按「下一根」或「下個事件」，劇本有進展時教練會在這裡說明。</p>';
-  var ts=S.trades.filter(function(t){return t.res!=null&&t.x<=S.cur}),r=0;ts.forEach(function(t){r+=t.res});
-  $('#tally').textContent='這段模擬 '+ts.length+' 筆 '+(r>=0?'+':'')+r.toFixed(1)+'R・累積 '+TV.n+' 筆 '+(TV.R>=0?'+':'')+TV.R.toFixed(1)+'R';
-}
-
-/* ═════════ live data from the exchanges (browser fetch, first source that answers wins) ═════════ */
-var IV={'15m':['15','15m'],'30m':['30','30m'],'1h':['60','1h'],'4h':['240','4h'],'1D':['D','1d']},SRC=null,ltimer=0;
-function bin(j){return j.map(function(r){return {t:Math.floor(r[0]/1000),o:+r[1],h:+r[2],l:+r[3],c:+r[4]}})}
-function sources(coin,tf,limit){var sym=coin+'USDT';return [
-  {n:'Bybit 永續',u:'https://api.bybit.com/v5/market/kline?category=linear&symbol='+sym+'&interval='+IV[tf][0]+'&limit='+Math.min(limit,1000),p:function(j){if(!j||!j.result||!j.result.list)throw new Error('bad');return j.result.list.map(function(r){return {t:Math.floor(r[0]/1000),o:+r[1],h:+r[2],l:+r[3],c:+r[4]}}).reverse()}},
-  {n:'Binance 永續',u:'https://fapi.binance.com/fapi/v1/klines?symbol='+sym+'&interval='+IV[tf][1]+'&limit='+Math.min(limit,1500),p:bin},
-  {n:'Binance 現貨',u:'https://data-api.binance.vision/api/v3/klines?symbol='+sym+'&interval='+IV[tf][1]+'&limit='+Math.min(limit,1000),p:bin}]}
-function fetchK(coin,tf,limit){
-  var list=sources(coin,tf,limit),order=SRC!=null?[SRC].concat([0,1,2].filter(function(i){return i!==SRC})):[0,1,2],errs=[];
-  function tryN(k){if(k>=order.length)return Promise.reject(new Error(errs.join('；')));var s=list[order[k]],ctl=window.AbortController?new AbortController():null,to=setTimeout(function(){ctl&&ctl.abort()},8000);
-    return fetch(s.u,ctl?{signal:ctl.signal}:{}).then(function(r){clearTimeout(to);if(!r.ok)throw new Error(s.n+' HTTP '+r.status);return r.json()}).then(function(j){var C=s.p(j);if(!C.length)throw new Error(s.n+' 沒有資料');SRC=order[k];return {C:C,src:s.n}})
-      .catch(function(e){clearTimeout(to);errs.push(s.n+'：'+(e&&e.name==='AbortError'?'逾時':e.message||e));return tryN(k+1)})}
-  return tryN(0)}
-function stopLive(){if(ltimer){clearInterval(ltimer);ltimer=0}}
-function openLive(coin,tf,side){
-  stopLive();stop();
-  A.screen('<div class="fb center" style="padding:40px 16px"><div class="bt-spin"></div><p class="mut">連線交易所，載入 '+coin+' '+tf+' 即時 K 線…</p></div>');
-  var htf=HTF[tf][1];
-  Promise.all([fetchK(coin,tf,1000),fetchK(coin,htf==='1D'?'1D':'4h',300)]).then(function(r){
-    var C=r[0].C,H=r[1].C.slice(0,-1);
-    S={coin:coin,tf:tf,C:C,cur:C.length-1,dec:DEC[coin]!=null?DEC[coin]:autoDec(C[C.length-1].c),log:[],trades:[],side:side||null,start:C.length-1,live:true,H:H,src:r[0].src,upd:Date.now()};
-    TV.coin=coin;TV.tf=tf;TV.mode='live';TV.sess++;A.persist();lastKeys=null;
-    layout();step(0);narrate();
-    S.log.unshift({t:C[C.length-1].t,side:CO.L.done>=CO.S.done?'L':'S',h:'<b>開始即時盯盤</b>：多單劇本 '+CO.L.done+'/5、空單劇本 '+CO.S.done+'/5。有新進展時這裡會即時說明。'});render();
-    ltimer=setInterval(function(){liveTick(false)},15000);
-  }).catch(function(e){
-    A.screen('<div class="fb"><p class="st no">連不到交易所的即時行情</p><p class="why">'+String(e.message||e)+'</p><p class="why">'+(window.claude?'放在 Claude 網頁上的版本不允許連到交易所，所以即時行情只能在「網站版」（自己架在 Cloudflare Pages 等網站上）或離線檔版本使用。這裡可以先用歷史行情練習。':'可能是網路不穩，可以稍後再試，或先用歷史行情練習。')+'</p><div class="duo"><button class="btn" id="re" type="button">再試一次</button><button class="btn ghost" id="hist" type="button">用歷史行情</button></div><button class="btn ghost wide" id="bk" type="button">回首頁</button></div>');
-    $('#re').onclick=function(){openLive(coin,tf)};$('#hist').onclick=function(){open(coin,tf,null)};$('#bk').onclick=A.home})}
-function liveTick(manual){
-  if(!S||!S.live)return;var coin=S.coin,tf=S.tf;
-  fetchK(coin,tf,5).then(function(r){if(!S||!S.live||S.coin!==coin||S.tf!==tf)return;
-    var C=S.C,newClosed=0;r.C.forEach(function(k){var last=C[C.length-1];if(k.t===last.t)C[C.length-1]=k;else if(k.t>last.t){C.push(k);newClosed++}});
-    S.cur=C.length-1;S.upd=Date.now();var stt=$('#lst');
-    if(newClosed){if(S.H&&HTF[tf][1]){fetchK(coin,HTF[tf][1]==='1D'?'1D':'4h',300).then(function(h){S.H=h.C.slice(0,-1)}).catch(function(){})}
-      var before=S.log.length;R=analyzeAt(S);CO=coach(S,R);narrate();trackTrades();if(S.log.length>before)SFX.ok();render()}
-    else{tvc.set(S.C,S.cur,S.dec,tvc.ov,S.coin+'USDT · '+S.tf)}
-    if(stt){var d=new Date();stt.textContent='即時・'+r.src+'・更新 '+pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds())}
-    if(manual)A.toast('已更新')
-  }).catch(function(e){var stt=$('#lst');if(stt)stt.textContent='即時・連線中斷，稍後重試'})}
-
-/* ═════════ Discord 教練推播紀錄（Worker /coach） ═════════ */
-function autoDec(p){p=Math.abs(p);return p>=1000?1:p>=100?2:p>=10?3:p>=1?4:p>=0.01?5:7}
-function alerts(){
-  stopLive();stop();
-  A.screen('<div class="fb center" style="padding:40px 16px"><div class="bt-spin"></div><p class="mut">讀取 Discord 推播紀錄…</p></div>');
-  var ctl=window.AbortController?new AbortController():null,to=setTimeout(function(){ctl&&ctl.abort()},10000);
-  fetch(WORKER+'/coach',ctl?{signal:ctl.signal,cache:'no-store'}:{}).then(function(r){clearTimeout(to);if(!r.ok)throw new Error('HTTP '+r.status);return r.json()}).then(function(d){
-    var L=d.alerts||[],dd=function(p,coin){return fmt(p,DEC[coin]!=null?DEC[coin]:autoDec(p))};
-    var el=A.screen('<div class="row"><div><p class="eyebrow">Discord</p><h1 class="h2" style="font-size:20px">教練推播紀錄</h1></div><span class="sp"></span><button class="pill" id="re" type="button" style="border:0">重新整理</button></div>'+
-      '<p class="lead" style="font-size:14px">Discord 收到的教練提醒都在這裡。點一則，直接打開那個幣、那個週期的即時圖，教練會接著告訴你劇本現在走到哪。</p>'+
-      (d.mode!=='coach'?'<div class="fb"><p class="why">Worker 目前不是教練推播模式（SMC_PUSH_MODE='+d.mode+'）。</p></div>':'')+
-      (L.length?'<div class="bt-runs">'+L.map(function(a,i){var coin=a.sym.replace(/USDT$/,''),long=a.side==='L',ready=a.event==='ready';
-        return '<button class="tval" type="button" data-i="'+i+'"><div class="row"><b>'+coin+'</b><span class="pill">'+a.iv+'</span><span class="pill '+(long?'up':'down')+'">'+(long?'多單':'空單')+'劇本 '+a.stage+'/5</span><span class="pill" style="'+(ready?'color:var(--gold)':'')+'">'+(ready?'到位':'成形')+'</span><span class="sp"></span><span class="num mut" style="font-size:11px">'+tstr(a.at/1000)+'</span></div>'+
-          '<p>掃了 '+dd(a.sweep.p,coin)+(a.shift?'・收盤'+(long?'突破':'跌破')+' '+dd(a.shift.p,coin)+'（'+a.shift.t+'）':'')+(a.poi?'・'+a.poi.kind+' '+dd(a.poi.bot,coin)+'–'+dd(a.poi.top,coin):'')+(a.rr!=null?'・約 '+a.rr+'R':'')+'</p></button>'}).join('')+'</div>'
-        :'<div class="fb"><p class="why">還沒有推播紀錄。Worker 每根 K 棒收盤（15m／30m／1h）檢查一次，有「劇本成形」或「到位」才會推。</p></div>')+
-      '<div class="duo"><button class="btn" id="lv" type="button">回即時圖</button><button class="btn ghost" id="hm" type="button">回首頁</button></div>');
-    el.querySelectorAll('[data-i]').forEach(function(b){b.onclick=function(){var a=L[+b.dataset.i];SFX.tick();openLive(a.sym.replace(/USDT$/,''),a.iv,a.side)}});
-    $('#re').onclick=alerts;$('#lv').onclick=function(){openLive(TV.coin,TV.tf)};$('#hm').onclick=A.home;
-  }).catch(function(e){clearTimeout(to);
-    A.screen('<div class="fb"><p class="st no">讀不到推播紀錄</p><p class="why">'+(window.claude?'放在 Claude 網頁上的版本不能連到外部網站，請用網站版（加到主畫面的那個）。':'可能是網路不穩：'+String(e&&e.name==='AbortError'?'逾時':e.message||e))+'</p><div class="duo"><button class="btn" id="re" type="button">再試一次</button><button class="btn ghost" id="hm" type="button">回首頁</button></div></div>');
-    $('#re').onclick=alerts;$('#hm').onclick=A.home})}
-window.TVC={lobby:lobby,open:open,openLive:openLive,alerts:alerts,fetchK:fetchK,_S:function(){return {S:S,CO:CO}}};
-
-var orig=window.Diag&&Diag.homeCards;
-if(orig)Diag.homeCards=function(){var html=orig();
-  var card='<button class="mode" type="button" data-go="tv"><span class="ic"><svg width="26" height="26" viewBox="0 0 26 26"><rect x="2.5" y="3.5" width="21" height="16" rx="2.5" fill="none" stroke="#8E9DFF" stroke-width="2"/><g stroke-width="1.6"><line x1="8" y1="7" x2="8" y2="16" stroke="#FF6E6E"/><rect x="6.5" y="9" width="3" height="4" fill="#FF6E6E"/><line x1="13" y1="6" x2="13" y2="15" stroke="#2CD3A3"/><rect x="11.5" y="8" width="3" height="5" fill="#2CD3A3"/></g><path d="M17 9h4M17 12h3" stroke="#F5BF4F" stroke-width="1.6"/><path d="M8 23h10" stroke="#8E9DFF" stroke-width="2"/></svg></span><span><b>看盤教室</b><span>像 TradingView 的真實圖表，教練即時告訴你劇本還差哪一步</span></span><span class="meta">'+(TV.n?TV.n+' 筆':'NEW')+'</span></button>';
-  card+='<button class="mode" type="button" data-go="tva"><span class="ic"><svg width="26" height="26" viewBox="0 0 26 26"><path d="M4 10v6h4l7 5V5L8 10z" fill="none" stroke="#F5BF4F" stroke-width="2" stroke-linejoin="round"/><path d="M19 9c1.5 1.2 1.5 6.8 0 8M21.5 6.5c3 2.6 3 10.4 0 13" fill="none" stroke="#F5BF4F" stroke-width="1.8" stroke-linecap="round"/></svg></span><span><b>教練推播紀錄</b><span>Discord 收到的提醒都在這，點一則直接看即時圖</span></span><span class="meta">15 檔</span></button>';
-  var i=html.indexOf('data-go="td"');if(i<0)return card+html;i=html.lastIndexOf('<button',i);return html.slice(0,i)+card+html.slice(i)};
-})();
-
 /* Learning path: one curriculum that strings academy chapters, masterclass lessons, the CHoCH lab and the real-data modes
    into units; unit tests reuse the skill drill; result screens get "next step" and cross-links; home is regrouped. */
 (function(){
@@ -4224,7 +3909,7 @@ var A=window.App,$=A.$,SFX=A.SFX,save=A.save,ST=window.Stats;
 function aca(i){return {k:'aca'+i,type:'學院',n:Q.CH[i].n,go:function(){A.lesson(i)},done:function(){return (save.stars[i]||0)>0},meta:function(){var s=save.stars[i]||0;return s?'★'.repeat(s):''}}}
 function mc(id){var L=window.MCL&&MCL.LESSONS.filter(function(x){return x.id===id})[0];return {k:'mc'+id,type:'圖解課',n:L?L.title:id,go:function(){MCL.lesson(L,0)},done:function(){return save.mc&&save.mc.best[id]!=null},meta:function(){var b=save.mc&&save.mc.best[id];return b!=null?b+'%':''}}}
 var Q=window.Q;
-var X={tv:{k:'tv',type:'真實圖表',n:'看盤教室（跟著教練看完一段）',go:function(){TVC.lobby()},done:function(){return save.tv&&save.tv.sess>=2},meta:function(){return save.tv&&save.tv.n?save.tv.n+' 筆模擬':''}},chq:{k:'chq',type:'真實特訓',n:'CHoCH 真假特訓',go:function(){CHQ.intro()},done:function(){return save.chq&&save.chq.runs>0},meta:function(){var c=save.chq;return c&&c.n?Math.round(c.ok/c.n*100)+'%':''}},
+var X={chq:{k:'chq',type:'真實特訓',n:'CHoCH 真假特訓',go:function(){CHQ.intro()},done:function(){return save.chq&&save.chq.runs>0},meta:function(){var c=save.chq;return c&&c.n?Math.round(c.ok/c.n*100)+'%':''}},
   td:{k:'td',type:'真實實戰',n:'多週期實戰演練（3 局）',go:function(){TD.lobby()},done:function(){return save.td&&save.td.n>=3},meta:function(){return save.td&&save.td.n?save.td.n+' 局':''}},
   bt:{k:'bt',type:'真實實戰',n:'市場回測挑戰（打完 1 局挑戰賽）',go:function(){BT.lobby()},done:function(){return save.bt&&save.bt.tot&&save.bt.tot.props>0},meta:function(){var t=save.bt&&save.bt.tot;return t&&t.props?t.pass+'/'+t.props+' 通過':''}}};
 var UNITS=[
@@ -4234,7 +3919,7 @@ var UNITS=[
  {n:'進場與時機',d:'把前面串成完整劇本，決定什麼時候按下去、哪個時段比較有行情。',items:[aca(7),aca(9),mc('kz')],skills:['setup','timing','mtf','risk','kz'],prac:'td'},
  {n:'陷阱與確認',d:'誘導、失效區翻轉、背離：分辨假動作，再用另一個幣確認。',items:[aca(10),aca(11),mc('mb'),mc('smt')],skills:['idm','breaker','mb','smt'],prac:'chq'},
  {n:'大局模型',d:'Power of 3 和造市者模型：把一整段行情看成一個程序。',items:[aca(13),mc('mmxm')],skills:['amd','mmxm'],prac:'td'},
- {n:'實戰整合',d:'全部用在真實行情上：先拆步驟練，再自己完整回測。',items:[X.tv,X.td,X.bt],skills:[],prac:'bt'}];
+ {n:'實戰整合',d:'全部用在真實行情上：先拆步驟練，再自己完整回測。',items:[X.td,X.bt],skills:[],prac:'bt'}];
 /* cross-links: which item teaches what a mistake points at */
 var SKILL_ITEM={structure:'aca0',break:'aca1',choch:'chq',liq:'aca2',sweep:'aca3',irl:'mcirl',ob:'aca4',fvg:'aca5',fvg2:'mcfvg2',dfvg:'aca8',pd:'aca6',ote:'aca12',setup:'aca7',timing:'aca9',kz:'mckz',mtf:'td',risk:'chq',idm:'aca10',breaker:'aca11',mb:'mcmb',smt:'mcsmt',amd:'aca13',mmxm:'mcmmxm'};
 var PAIR={aca1:['chq'],aca3:['mcirl'],aca5:['mcfvg2'],aca9:['mckz'],aca11:['mcmb'],aca13:['mcmmxm'],aca8:['mcfvg2'],mcirl:['aca3'],mcfvg2:['aca5'],mckz:['aca9'],mcmb:['aca11'],mcmmxm:['aca13'],mcsmt:['aca3'],chq:['aca1']};
@@ -4303,7 +3988,7 @@ if(window.MCL){var ol=MCL.lesson;MCL.lesson=function(L,k){ol(L,k);var tries=0;(f
 /* ── home: path card on top, then grouped sections ── */
 function decorate(el){
   var box=el.querySelector('.modes');if(!box)return;var items=all(),dn=items.filter(function(i){return i.done()}).length,nx=next();
-  var groups=[['學習',['aca','mc','chq']],['練習與弱點',['dia','drl','sta','rep','blz']],['真實行情實戰',['tv','tva','td','bt']],['遊戲',['adv','duel','kd','codex']]];
+  var groups=[['學習',['aca','mc','chq']],['練習與弱點',['dia','drl','sta','rep','blz']],['真實行情實戰',['td','bt']],['遊戲',['adv','duel','kd','codex']]];
   var weak=box.querySelector('.weakbox');
   var top=document.createElement('div');top.className='pathcard';
   top.innerHTML='<button class="mode pathmode" type="button" id="goPath"><span class="ic"><svg width="28" height="28" viewBox="0 0 28 28"><path d="M5 23c4-1 3-7 8-8s6-6 10-10" fill="none" stroke="#F5BF4F" stroke-width="2.4" stroke-linecap="round" stroke-dasharray="1 4"/><circle cx="5" cy="23" r="3" fill="#2CD3A3"/><circle cx="23" cy="5" r="3" fill="#F5BF4F"/></svg></span><span><b>學習路線</b><span>'+(nx?'下一步：'+nx.n+'（'+nx.type+'）':'全部完成')+'</span></span><span class="meta">'+dn+' / '+items.length+'</span></button><div class="xpbar" style="margin:6px 2px 0"><i style="width:'+(dn/items.length*100)+'%"></i></div>';
