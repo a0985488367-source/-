@@ -1,4 +1,4 @@
-const V='smc-dojo-v16';
+const V='smc-dojo-v17';
 const CORE=['./','index.html','manifest.webmanifest','icon-192.png','icon-512.png','icon-180.png'];
 const DATA=["BNB_15m.json", "BNB_1h.json", "BNB_4h.json", "BTC_15m.json", "BTC_1h.json", "BTC_4h.json", "DOGE_15m.json", "DOGE_1h.json", "DOGE_4h.json", "ETH_15m.json", "ETH_1h.json", "ETH_4h.json", "SOL_15m.json", "SOL_1h.json", "SOL_4h.json", "XRP_15m.json", "XRP_1h.json", "XRP_4h.json"].map(f=>'mdata/'+f);
 self.addEventListener('install',e=>{e.waitUntil(caches.open(V).then(c=>c.addAll(CORE).then(()=>c.addAll(DATA).catch(()=>{}))).then(()=>self.skipWaiting()))});
