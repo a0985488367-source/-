@@ -8,6 +8,9 @@
 這不是完整的 Pine 編譯器：語法錯誤還是要貼到 TradingView 才抓得到，但邏輯跟原版不一致會在這裡被抓出來。
 
 用法：python3 tradingview/pine2js.py tradingview/smc-plan.pine > out.mjs
+      python3 tradingview/pine2js.py --funcs tradingview/coach.pine > out.mjs
+        --funcs：只轉最上層的函式、自訂型別和數字常數（主程式、輸入、畫圖整段略過；ui 開頭的函式也略過），
+                 給 tests/tradingview-coach-parity.test.mjs 直接呼叫函式比對。
 """
 import re
 import sys
@@ -66,7 +69,11 @@ def expr(code):
     return code
 
 
-def convert(src):
+CONST_RE = re.compile(r'^[A-Z_][A-Z0-9_]*\s*=\s*-?[\d.]+(?:e-?\d+)?$')
+FUNC_RE = re.compile(r'^(\w+)\(([^)]*)\)\s*=>')
+
+
+def convert(src, funcs_only=False):
     lines = src.split('\n')
     out = []
     stack = []  # (indent, kind)
@@ -104,6 +111,14 @@ def convert(src):
             skip_indent = None
 
         close_blocks(indent)
+
+        if funcs_only and indent == 0:
+            fm0 = FUNC_RE.match(code)
+            keep = (fm0 and not fm0.group(1).startswith('ui')) or code.startswith('type ') or CONST_RE.match(code)
+            if not keep:
+                skip_indent = 0
+                idx += 1
+                continue
 
         if code.startswith('//@version'):
             idx += 1
@@ -237,7 +252,11 @@ def convert(src):
 
 
 if __name__ == '__main__':
-    src = open(sys.argv[1], encoding='utf-8').read()
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    src = open(args[0], encoding='utf-8').read()
+    if '--funcs' in sys.argv:
+        print(convert(src, funcs_only=True))
+        sys.exit(0)
     body = convert(src)
     body = body.replace('    if (iShowTable) {', '    __out.result = { n, hasPlan, dirPlan, entry, stop, riskV, targets, scorePlan, gradePlan, validPlan, checks, localScore, noneReason };\n    if (iShowTable) {', 1)
     print(body)

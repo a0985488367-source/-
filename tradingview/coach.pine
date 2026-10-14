@@ -1,0 +1,639 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0
+//
+// SMC 教練 —— 跟 SMC 道場「看盤教室」、Discord「🧭 教練提醒」同一套規則的 TradingView 版本
+//
+// 規則是 src/smc/coach.js 逐行改寫（tests/tradingview-coach-parity.test.mjs 會比對兩邊）：
+//   1 掃流動性：最近 45 根內，影線刺破一個還沒被碰過的擺動低（做多）／高（做空），當根或下一根收回
+//   2 結構轉向：掃蕩之後出現同方向的外部 BOS／CHoCH（擺動點左右各 4 根）
+//   3 POI：掃蕩之後留下、還沒被回補的同方向 FVG（沒有就用 OB）
+//   4 回踩：POI 形成後價格回到 POI
+//   5 計畫：進場＝POI 邊緣、停損＝掃出來的極值外 0.15 ATR、目標＝最近還沒被掃的對面擺動點
+//   背景：大週期方向（15m／30m／1h→4h、2h／4h→1D）、折價／溢價（近 80 根區間 50%）、時段
+// 時段（UTC，跟 src/smc/sessions.js 一樣，台灣時間＝UTC+8）：
+//   亞洲盤 00:00–06:00、倫敦殺區 07:00–10:00、紐約早盤殺區 12:00–15:00、紐約午盤殺區 17:30–20:00
+// 只分析「已收盤」的 K 棒（盤中那根不算），跟 Discord 教練提醒一樣抓 500 根。
+// 請掛在 BYBIT:xxxUSDT.P（Bybit 永續）上。改了 src/smc/coach.js 的規則，這支也要跟著改。
+//
+//@version=6
+indicator("SMC 教練（掃流動性→轉向→POI→回踩→計畫＋時段）", shorttitle = "SMC 教練", overlay = true, max_bars_back = 1000, max_boxes_count = 80, max_lines_count = 80, max_labels_count = 80)
+
+// ───────────────────────────────────────────────────────────── 輸入
+
+iBars      = input.int(500, "分析 K 棒數（已收盤）", minval = 120, maxval = 900, tooltip = "Discord 教練提醒固定用 500 根已收盤 K 棒。改了就會跟推播對不上。")
+iSide      = input.string("自動", "看哪一邊的劇本", options = ["自動", "多單", "空單"], tooltip = "自動：哪一邊走得比較前面就看哪一邊；一樣的話優先看順大週期的那邊。")
+iHtf       = input.string("自動", "大週期方向", options = ["自動", "4h", "1D", "關閉"], tooltip = "自動：15m／30m／1h 看 4h，2h／4h 看 1D（跟道場看盤教室一樣）。")
+G_SESS = "時段"
+iShowSess  = input.bool(true, "圖上標出時段（底色）", group = G_SESS)
+iShowAsia  = input.bool(true, "畫出今天亞洲區間高低（流動性）", group = G_SESS)
+iTz        = input.string("Asia/Taipei", "表格顯示的時區", group = G_SESS)
+G_VIEW = "顯示"
+iShowPlan  = input.bool(true, "劇本到位時畫出進場／停損／目標", group = G_VIEW)
+iTextSize  = input.string("中", "文字大小", options = ["小", "中", "大"], group = G_VIEW)
+iTablePos  = input.string("右上", "教練表位置", options = ["右上", "右中", "右下", "左上", "左下"], group = G_VIEW)
+iOnlyAligned = input.bool(true, "警報只發順大週期的劇本（跟 Discord 一樣）")
+
+// ───────────────────────────────────────────────────────────── 固定參數（= src/smc/coach.js）
+
+EXT_L      = 4
+HTF_L      = 3
+HTF_BARS   = 300
+SWEEP_LOOK = 45
+RANGE_N    = 80
+FVG_MIN    = 0.12
+SL_BUF     = 0.15
+TP_MIN     = 0.5
+
+// ───────────────────────────────────────────────────────────── 時段
+
+// 0 = 非時段、1 = 亞洲盤、2 = 倫敦殺區、3 = 紐約早盤殺區、4 = 紐約午盤殺區
+sessOf(int tms) =>
+    float hf = hour(tms, "UTC") + minute(tms, "UTC") / 60.0
+    int s = 0
+    if hf >= 0 and hf < 6
+        s := 1
+    else if hf >= 7 and hf < 10
+        s := 2
+    else if hf >= 12 and hf < 15
+        s := 3
+    else if hf >= 17.5 and hf < 20
+        s := 4
+    s
+
+// ───────────────────────────────────────────────────────────── 資料
+
+// 取最近 n 根 K 棒（off = 從第幾根往前算；0 = 目前這根），陣列 0 = 最舊
+getWindow(int n, int off) =>
+    o = array.new<float>(n, na)
+    h = array.new<float>(n, na)
+    l = array.new<float>(n, na)
+    c = array.new<float>(n, na)
+    t = array.new<int>(n, 0)
+    if n > 0
+        for k = 0 to n - 1
+            bi = off + n - 1 - k
+            o.set(k, open[bi])
+            h.set(k, high[bi])
+            l.set(k, low[bi])
+            c.set(k, close[bi])
+            t.set(k, time[bi])
+    [o, h, l, c, t]
+
+// ATR（coach.js atrOf：前 14 根用平均，之後 Wilder 平滑）
+atrOf(array<float> h, array<float> l, array<float> c) =>
+    n = h.size()
+    a = array.new<float>(n, 0.0)
+    float s = 0.0
+    if n > 0
+        for i = 0 to n - 1
+            float tr = h.get(i) - l.get(i)
+            if i > 0
+                tr := math.max(tr, math.abs(h.get(i) - c.get(i - 1)), math.abs(l.get(i) - c.get(i - 1)))
+            if i < 14
+                s += tr
+                a.set(i, s / (i + 1))
+            else
+                a.set(i, (a.get(i - 1) * 13 + tr) / 14)
+    a
+
+// 擺動點＋BOS／CHoCH（coach.js structure）
+// 回傳：擺動點 [位置, 價格, 確認的那根, 是不是高點, 第一次被刺破的那根（-1 = 還沒）]、
+//       結構事件 [方向, 突破那根, 價格, 1 = BOS 2 = CHoCH, 擺動點位置]、最後的趨勢、最後擺動高／低的價格和有沒有被突破過
+structureOf(array<float> h, array<float> l, array<float> c, int L) =>
+    n = h.size()
+    pI = array.new<int>()
+    pP = array.new<float>()
+    pK = array.new<int>()
+    pHi = array.new<int>()
+    pSw = array.new<int>()
+    eDir = array.new<int>()
+    eI = array.new<int>()
+    eP = array.new<float>()
+    eT = array.new<int>()
+    eFrom = array.new<int>()
+    int trend = 0
+    int lastH = -1
+    int lastL = -1
+    bool usedH = false
+    bool usedL = false
+    if n > 0
+        for j = 0 to n - 1
+            q = j - L
+            if q >= L
+                bool isH = true
+                bool isL = true
+                for m = 1 to L
+                    if not (h.get(q) > h.get(q - m) and h.get(q) >= h.get(q + m))
+                        isH := false
+                    if not (l.get(q) < l.get(q - m) and l.get(q) <= l.get(q + m))
+                        isL := false
+                if isH
+                    pI.push(q)
+                    pP.push(h.get(q))
+                    pK.push(j)
+                    pHi.push(1)
+                    pSw.push(-1)
+                    lastH := pI.size() - 1
+                    usedH := false
+                if isL
+                    pI.push(q)
+                    pP.push(l.get(q))
+                    pK.push(j)
+                    pHi.push(0)
+                    pSw.push(-1)
+                    lastL := pI.size() - 1
+                    usedL := false
+            float cj = c.get(j)
+            if lastH >= 0 and not usedH and cj > pP.get(lastH)
+                usedH := true
+                eT.push(trend < 0 ? 2 : 1)
+                eDir.push(1)
+                eI.push(j)
+                eP.push(pP.get(lastH))
+                eFrom.push(pI.get(lastH))
+                trend := 1
+            if lastL >= 0 and not usedL and cj < pP.get(lastL)
+                usedL := true
+                eT.push(trend > 0 ? 2 : 1)
+                eDir.push(-1)
+                eI.push(j)
+                eP.push(pP.get(lastL))
+                eFrom.push(pI.get(lastL))
+                trend := -1
+    if pI.size() > 0
+        for k = 0 to pI.size() - 1
+            for j2 = pK.get(k) to n - 1
+                if pHi.get(k) == 1 ? h.get(j2) > pP.get(k) : l.get(j2) < pP.get(k)
+                    pSw.set(k, j2)
+                    break
+    float lastHp = lastH >= 0 ? pP.get(lastH) : na
+    float lastLp = lastL >= 0 ? pP.get(lastL) : na
+    [pI, pP, pK, pHi, pSw, eDir, eI, eP, eT, eFrom, trend, lastHp, usedH, lastLp, usedL]
+
+// FVG（coach.js analyze 的 fv）：[方向, 中間那根, 上緣, 下緣, 確認的那根, 被回補的那根（-1 = 還沒）]
+fvgsOf(array<float> h, array<float> l, array<float> atr) =>
+    n = h.size()
+    fDir = array.new<int>()
+    fI = array.new<int>()
+    fTop = array.new<float>()
+    fBot = array.new<float>()
+    fK = array.new<int>()
+    fFill = array.new<int>()
+    if n > 2
+        for j = 2 to n - 1
+            if l.get(j) > h.get(j - 2) and l.get(j) - h.get(j - 2) > FVG_MIN * atr.get(j)
+                fDir.push(1)
+                fI.push(j - 1)
+                fTop.push(l.get(j))
+                fBot.push(h.get(j - 2))
+                fK.push(j)
+                fFill.push(-1)
+            if h.get(j) < l.get(j - 2) and l.get(j - 2) - h.get(j) > FVG_MIN * atr.get(j)
+                fDir.push(-1)
+                fI.push(j - 1)
+                fTop.push(l.get(j - 2))
+                fBot.push(h.get(j))
+                fK.push(j)
+                fFill.push(-1)
+    if fDir.size() > 0
+        for k = 0 to fDir.size() - 1
+            if fK.get(k) + 1 <= n - 1
+                for j2 = fK.get(k) + 1 to n - 1
+                    if fDir.get(k) > 0 ? l.get(j2) <= fBot.get(k) : h.get(j2) >= fTop.get(k)
+                        fFill.set(k, j2)
+                        break
+    [fDir, fI, fTop, fBot, fK, fFill]
+
+// OB（coach.js analyze 的 obs）：每個外部結構事件，起漲／起跌點往回 6 根內最後一根反向 K 棒
+obsOf(array<float> o, array<float> h, array<float> l, array<float> c, array<int> eDir, array<int> eI, array<int> eFrom) =>
+    n = h.size()
+    oDir = array.new<int>()
+    oI = array.new<int>()
+    oTop = array.new<float>()
+    oBot = array.new<float>()
+    oK = array.new<int>()
+    oInv = array.new<int>()
+    if eDir.size() > 0
+        for k = 0 to eDir.size() - 1
+            d = eDir.get(k)
+            int m = eFrom.get(k)
+            for u = eFrom.get(k) to eI.get(k)
+                if d > 0 ? l.get(u) < l.get(m) : h.get(u) > h.get(m)
+                    m := u
+            for u = m to math.max(0, m - 6)
+                if d > 0 ? c.get(u) < o.get(u) : c.get(u) > o.get(u)
+                    oDir.push(d)
+                    oI.push(u)
+                    oTop.push(h.get(u))
+                    oBot.push(l.get(u))
+                    oK.push(eI.get(k))
+                    oInv.push(-1)
+                    break
+    if oDir.size() > 0
+        for k = 0 to oDir.size() - 1
+            if oK.get(k) + 1 <= n - 1
+                for j2 = oK.get(k) + 1 to n - 1
+                    if oDir.get(k) > 0 ? c.get(j2) < oBot.get(k) : c.get(j2) > oTop.get(k)
+                        oInv.set(k, j2)
+                        break
+    [oDir, oI, oTop, oBot, oK, oInv]
+
+// 一邊的劇本（coach.js coachState，d = 1 做多、-1 做空），只用到最後一根（已收盤）
+// 回傳：[階段 0～4, 到位, 掃蕩那根, 被掃的價位, 掃蕩影線, 掃出來的極值, 結構事件編號, POI 種類（0 無 1 FVG 2 OB）,
+//        POI 上緣, POI 下緣, POI 那根, POI 確認那根, 回踩那根, 進場, 停損, 目標, 盈虧比, 折溢價對]
+coachSide(array<float> h, array<float> l, array<float> c, array<float> atr, array<int> pI, array<float> pP, array<int> pK, array<int> pHi, array<int> pSw, array<int> eDir, array<int> eI, array<int> fDir, array<int> fI, array<float> fTop, array<float> fBot, array<int> fK, array<int> fFill, array<int> oDir, array<int> oI, array<float> oTop, array<float> oBot, array<int> oK, array<int> oInv, int d) =>
+    n = h.size()
+    j = n - 1
+    float px = c.get(j)
+    float a = atr.get(j)
+    float rH = -1e18
+    float rL = 1e18
+    for i = math.max(0, n - RANGE_N) to j
+        rH := math.max(rH, h.get(i))
+        rL := math.min(rL, l.get(i))
+    float eqm = (rH + rL) / 2
+    bool disc = d > 0 ? px < eqm : px > eqm
+    // 1 掃流動性
+    int swU = -1
+    float swP = na
+    float swX = na
+    if pI.size() > 0
+        for k = 0 to pI.size() - 1
+            if pHi.get(k) != (d > 0 ? 0 : 1) or pK.get(k) > j
+                continue
+            float p = pP.get(k)
+            int pAt = pI.get(k)
+            for u = math.max(pK.get(k), n - SWEEP_LOOK) to j
+                if u <= pAt
+                    continue
+                bool pierce = d > 0 ? l.get(u) < p : h.get(u) > p
+                if not pierce
+                    continue
+                bool prev = false
+                if u - 1 >= pAt + 1
+                    for q = pAt + 1 to u - 1
+                        if d > 0 ? l.get(q) < p : h.get(q) > p
+                            prev := true
+                            break
+                if prev
+                    break
+                float nxt = u < j ? c.get(u + 1) : na
+                bool back = d > 0 ? (c.get(u) > p or nxt > p) : (c.get(u) < p or nxt < p)
+                if back and (swU < 0 or u > swU)
+                    swU := u
+                    swP := p
+                    swX := d > 0 ? l.get(u) : h.get(u)
+                break
+    float ext = swX
+    bool dead = false
+    if swU >= 0
+        for u = swU to j
+            ext := d > 0 ? math.min(ext, l.get(u)) : math.max(ext, h.get(u))
+        if swU + 1 <= j
+            for u = swU + 1 to j
+                if d > 0 ? c.get(u) < swX : c.get(u) > swX
+                    dead := true
+                    break
+    bool okSw = swU >= 0 and not dead
+    // 2 結構轉向
+    int ev = -1
+    if okSw and eDir.size() > 0
+        for k = 0 to eDir.size() - 1
+            if eDir.get(k) == d and eI.get(k) > swU and eI.get(k) <= j
+                ev := k
+                break
+    // 3 POI
+    int pk = 0
+    float pTop = na
+    float pBot = na
+    int pAtI = -1
+    int pAtK = -1
+    if okSw and ev >= 0
+        if fDir.size() > 0
+            for k = 0 to fDir.size() - 1
+                if fDir.get(k) == d and fI.get(k) >= swU - 1 and fK.get(k) <= j and (fFill.get(k) < 0 or fFill.get(k) > j)
+                    pk := 1
+                    pTop := fTop.get(k)
+                    pBot := fBot.get(k)
+                    pAtI := fI.get(k)
+                    pAtK := fK.get(k)
+                    break
+        if pk == 0 and oDir.size() > 0
+            for k = 0 to oDir.size() - 1
+                if oDir.get(k) == d and oI.get(k) >= swU - 2 and oK.get(k) <= j and (oInv.get(k) < 0 or oInv.get(k) > j)
+                    pk := 2
+                    pTop := oTop.get(k)
+                    pBot := oBot.get(k)
+                    pAtI := oI.get(k)
+                    pAtK := oK.get(k)
+                    break
+    // 4 回踩
+    int rt = -1
+    if pk > 0 and pAtK + 1 <= j
+        for u = pAtK + 1 to j
+            if d > 0 ? l.get(u) <= pTop : h.get(u) >= pBot
+                rt := u
+                break
+    int stage = not okSw ? 0 : ev < 0 ? 1 : pk == 0 ? 2 : rt < 0 ? 3 : 4
+    // 5 計畫
+    float en = na
+    float sl = na
+    float tp = na
+    float rr = na
+    bool ready = false
+    if pk > 0 and rt >= 0
+        en := d > 0 ? pTop : pBot
+        sl := ext - d * SL_BUF * a
+        float tg = na
+        for k = 0 to pI.size() - 1
+            float pp = pP.get(k)
+            if pHi.get(k) == (d > 0 ? 1 : 0) and pK.get(k) <= j and (pSw.get(k) < 0 or pSw.get(k) > j) and (d > 0 ? pp > en + TP_MIN * a : pp < en - TP_MIN * a)
+                tg := na(tg) ? pp : d > 0 ? math.min(tg, pp) : math.max(tg, pp)
+        if na(tg)
+            tg := d > 0 ? rH : rL
+        tp := tg
+        float risk = d * (en - sl)
+        if risk > 0
+            rr := d * (tp - en) / risk
+            ready := rr > 0
+    [stage, ready, okSw ? swU : -1, swP, swX, ext, ev, pk, pTop, pBot, pAtI, pAtK, rt, en, sl, tp, rr, disc]
+
+// 大週期方向：最近 nBars 根已收盤的高週期 K 棒，擺動點左右各 3 根的結構趨勢（1 多 -1 空 0 未定）
+htfTrendCalc(int nBars, int htfMs) =>
+    float out = na
+    // 只在最後幾根高週期 K 棒算，歷史 K 棒不用算（省時間）
+    if timenow - time_close <= 3 * htfMs
+        n = math.min(nBars, bar_index + 1)
+        if n >= 30
+            [o, h, l, c, t] = getWindow(n, 0)
+            [pI, pP, pK, pHi, pSw, eDir, eI, eP, eT, eFrom, trend, lastHp, usedH, lastLp, usedL] = structureOf(h, l, c, HTF_L)
+            out := trend
+    out
+
+// ───────────────────────────────────────────────────────────── 文字小工具（ui 開頭的不參與比對）
+
+uiTfName(string tf) =>
+    switch tf
+        "1" => "1m"
+        "3" => "3m"
+        "5" => "5m"
+        "15" => "15m"
+        "30" => "30m"
+        "60" => "1h"
+        "120" => "2h"
+        "240" => "4h"
+        "360" => "6h"
+        "720" => "12h"
+        "D" => "1D"
+        "1D" => "1D"
+        "W" => "1W"
+        "1W" => "1W"
+        => tf
+
+uiHtfOf(string tf, string mode) =>
+    string out = ""
+    if mode == "4h"
+        out := "240"
+    else if mode == "1D"
+        out := "D"
+    else if mode == "自動"
+        sec = timeframe.in_seconds(tf)
+        out := sec <= 3600 ? "240" : sec <= 14400 ? "D" : sec <= 86400 ? "W" : ""
+    out
+
+uiPos(string s) =>
+    switch s
+        "右中" => position.middle_right
+        "右下" => position.bottom_right
+        "左上" => position.top_left
+        "左下" => position.bottom_left
+        => position.top_right
+
+uiSize(string s, int step) =>
+    idx = (s == "小" ? 1 : s == "中" ? 2 : 3) + step
+    idx <= 0 ? size.tiny : idx == 1 ? size.small : idx == 2 ? size.normal : size.large
+
+uiSessName(int s) =>
+    switch s
+        1 => "亞洲盤"
+        2 => "倫敦殺區"
+        3 => "紐約早盤殺區"
+        4 => "紐約午盤殺區"
+        => "非時段"
+
+uiPx(float p) =>
+    str.tostring(p, format.mintick)
+
+// 分析視窗第 k 根（0 = 最舊）在圖上的 bar_index
+xAt(int n, int off, int k) =>
+    bar_index - off - (n - 1 - k)
+
+// ───────────────────────────────────────────────────────────── 大週期
+
+HTF_TF = uiHtfOf(timeframe.period, iHtf)
+HTF_ON = HTF_TF != "" and timeframe.in_seconds(HTF_TF) > timeframe.in_seconds(timeframe.period)
+HTF_MS = HTF_ON ? timeframe.in_seconds(HTF_TF) * 1000 : 0
+// f()[1] + lookahead_on：拿「上一根已收盤的高週期 K 棒」算出來的值（Worker 抓 300 根、去掉盤中那根）
+float htfRaw = request.security(syminfo.tickerid, HTF_ON ? HTF_TF : timeframe.period, htfTrendCalc(HTF_BARS - 1, HTF_MS)[1], lookahead = barmerge.lookahead_on)
+int htfBias = HTF_ON and not na(htfRaw) ? int(htfRaw) : 0
+
+// ───────────────────────────────────────────────────────────── 時段底色＋亞洲區間
+
+IS_INTRA = timeframe.in_seconds(timeframe.period) <= 3600
+sNow = sessOf(time)
+color sessCol = sNow == 1 ? color.new(#2b6cb0, 92) : sNow == 2 ? color.new(#2f855a, 88) : sNow == 3 ? color.new(#b7791f, 88) : sNow == 4 ? color.new(#805ad5, 90) : na
+bgcolor(iShowSess and IS_INTRA ? sessCol : na, title = "時段底色")
+
+var float asiaH = na
+var float asiaL = na
+var int asiaStart = na
+var int asiaEnd = na
+if IS_INTRA
+    if sNow == 1 and sessOf(time[1]) != 1
+        asiaH := high
+        asiaL := low
+        asiaStart := bar_index
+        asiaEnd := bar_index
+    else if sNow == 1
+        asiaH := math.max(asiaH, high)
+        asiaL := math.min(asiaL, low)
+        asiaEnd := bar_index
+
+// ───────────────────────────────────────────────────────────── 主分析（只在最後一根算）
+
+COL_BULL = color.new(#26a69a, 0)
+COL_BEAR = color.new(#ef5350, 0)
+COL_TEXT = color.new(#d1d4dc, 0)
+COL_DIM  = color.new(#8b97a8, 0)
+COL_GOLD = color.new(#e0b04a, 0)
+
+var table panel = table.new(uiPos(iTablePos), 2, 16, bgcolor = color.new(#131722, 8), frame_color = color.new(#434651, 0), frame_width = 1, border_color = color.new(#2a2e39, 0), border_width = 1)
+var string keyL = ""
+var string keyS = ""
+
+if barstate.islast
+    for b in box.all
+        b.delete()
+    for ln in line.all
+        ln.delete()
+    for lb in label.all
+        lb.delete()
+    table.clear(panel, 0, 0, 1, 15)
+    tsz = uiSize(iTextSize, 0)
+    tszS = uiSize(iTextSize, -1)
+
+    // 盤中那根不算（跟 Discord 教練提醒一樣只看已收盤的 K 棒）
+    off = barstate.isconfirmed ? 0 : 1
+    n = math.min(iBars, bar_index + 1 - off)
+
+    if n >= 120
+        [o, h, l, c, t] = getWindow(n, off)
+        atr = atrOf(h, l, c)
+        [pI, pP, pK, pHi, pSw, eDir, eI, eP, eT, eFrom, trend, lastHp, usedH, lastLp, usedL] = structureOf(h, l, c, EXT_L)
+        [fDir, fI, fTop, fBot, fK, fFill] = fvgsOf(h, l, atr)
+        [oDir, oI, oTop, oBot, oK, oInv] = obsOf(o, h, l, c, eDir, eI, eFrom)
+        [stL, rdL, swUL, swPL, swXL, extL, evL, pkL, ptL, pbL, piL, pkkL, rtL, enL, slL, tpL, rrL, discL] = coachSide(h, l, c, atr, pI, pP, pK, pHi, pSw, eDir, eI, fDir, fI, fTop, fBot, fK, fFill, oDir, oI, oTop, oBot, oK, oInv, 1)
+        [stS, rdS, swUS, swPS, swXS, extS, evS, pkS, ptS, pbS, piS, pkkS, rtS, enS, slS, tpS, rrS, discS] = coachSide(h, l, c, atr, pI, pP, pK, pHi, pSw, eDir, eI, fDir, fI, fTop, fBot, fK, fFill, oDir, oI, oTop, oBot, oK, oInv, -1)
+
+        // 看哪一邊：自動＝階段高的；一樣就看順大週期的；再一樣看掃蕩比較近的
+        int d = iSide == "多單" ? 1 : iSide == "空單" ? -1 : stL > stS ? 1 : stS > stL ? -1 : htfBias != 0 ? htfBias : swUL >= swUS ? 1 : -1
+        stage = d > 0 ? stL : stS
+        ready = d > 0 ? rdL : rdS
+        swU = d > 0 ? swUL : swUS
+        swP = d > 0 ? swPL : swPS
+        ext = d > 0 ? extL : extS
+        ev = d > 0 ? evL : evS
+        pk = d > 0 ? pkL : pkS
+        pTop = d > 0 ? ptL : ptS
+        pBot = d > 0 ? pbL : pbS
+        pAtI = d > 0 ? piL : piS
+        rt = d > 0 ? rtL : rtS
+        en = d > 0 ? enL : enS
+        sl = d > 0 ? slL : slS
+        tp = d > 0 ? tpL : tpS
+        rr = d > 0 ? rrL : rrS
+        disc = d > 0 ? discL : discS
+        colD = d > 0 ? COL_BULL : COL_BEAR
+        side = d > 0 ? "多單" : "空單"
+        biasV = htfBias == d ? 2 : htfBias == 0 ? 1 : 0
+        int sSw = -1
+        if swU >= 0
+            sSw := sessOf(t.get(swU))
+        bool sessOk = sSw >= 2
+
+        // ── 圖上：掃蕩、結構轉向、POI、計畫
+        if swU >= 0
+            line.new(xAt(n, off, swU) - 12, swP, xAt(n, off, swU) + 3, swP, color = color.new(COL_GOLD, 10), style = line.style_dashed, width = 1)
+            label.new(xAt(n, off, swU), ext, (d > 0 ? "掃 SSL" : "掃 BSL") + (IS_INTRA ? "\n" + uiSessName(sSw) : ""), style = d > 0 ? label.style_label_up : label.style_label_down, color = color.new(COL_GOLD, 15), textcolor = color.new(#131722, 0), size = tszS)
+        if ev >= 0
+            line.new(xAt(n, off, eFrom.get(ev)), eP.get(ev), xAt(n, off, eI.get(ev)), eP.get(ev), color = colD, width = 1)
+            label.new(math.round((xAt(n, off, eFrom.get(ev)) + xAt(n, off, eI.get(ev))) / 2), eP.get(ev), eT.get(ev) == 2 ? "CHoCH" : "BOS", style = d > 0 ? label.style_label_down : label.style_label_up, color = color.new(colD, 100), textcolor = colD, size = tszS)
+        if pk > 0
+            box.new(xAt(n, off, pAtI), pTop, bar_index + 3, pBot, border_color = color.new(colD, 30), bgcolor = color.new(colD, 82), text = (pk == 1 ? "FVG" : "OB") + " POI", text_color = color.new(COL_TEXT, 10), text_size = tszS, text_halign = text.align_left, text_valign = text.align_center)
+        if ready and iShowPlan
+            xL = bar_index + 4
+            xR = bar_index + 30
+            box.new(xL, math.max(en, tp), xR, math.min(en, tp), border_color = color.new(COL_BULL, 100), bgcolor = color.new(COL_BULL, 85))
+            box.new(xL, math.max(en, sl), xR, math.min(en, sl), border_color = color.new(COL_BEAR, 100), bgcolor = color.new(COL_BEAR, 85))
+            label.new(xR, en, "進場 " + uiPx(en) + "（掛單）", style = label.style_label_left, color = colD, textcolor = color.white, size = tsz)
+            label.new(xR, sl, "停損 " + uiPx(sl) + "  -" + str.tostring(math.abs(en - sl) / en * 100, "#.##") + "%", style = label.style_label_left, color = COL_BEAR, textcolor = color.white, size = tsz)
+            label.new(xR, tp, "目標 " + uiPx(tp) + "  " + str.tostring(rr, "#.#") + "R", style = label.style_label_left, color = color.new(COL_BULL, 25), textcolor = color.white, size = tsz)
+        if iShowAsia and IS_INTRA and not na(asiaStart) and sNow != 1
+            line.new(asiaStart, asiaH, bar_index + 6, asiaH, color = color.new(#2b6cb0, 20), style = line.style_dotted)
+            line.new(asiaStart, asiaL, bar_index + 6, asiaL, color = color.new(#2b6cb0, 20), style = line.style_dotted)
+            label.new(bar_index + 6, asiaH, "亞洲高 $$$", style = label.style_label_left, color = color.new(#2b6cb0, 100), textcolor = color.new(#5b9bd5, 0), size = tszS)
+            label.new(bar_index + 6, asiaL, "亞洲低 $$$", style = label.style_label_left, color = color.new(#2b6cb0, 100), textcolor = color.new(#5b9bd5, 0), size = tszS)
+
+        // ── 教練表
+        string nextStep = ""
+        int row = 0
+        table.cell(panel, 0, row, "🧭 SMC 教練", text_color = COL_TEXT, text_size = tsz, text_halign = text.align_left)
+        table.cell(panel, 1, row, syminfo.ticker + " · " + uiTfName(timeframe.period), text_color = COL_DIM, text_size = tszS, text_halign = text.align_right)
+        row += 1
+        table.cell(panel, 0, row, side + "劇本", text_color = colD, text_size = tsz, text_halign = text.align_left)
+        table.cell(panel, 1, row, str.tostring(stage + (ready ? 1 : 0)) + "/5 " + (ready ? "到位" : stage >= 2 ? "成形" : "觀察中"), text_color = ready ? COL_GOLD : COL_TEXT, text_size = tsz, text_halign = text.align_right)
+        // 五步
+        string s1 = "等影線刺破一個前" + (d > 0 ? "低" : "高") + "再收回"
+        if swU >= 0
+            s1 := "✓ 掃了 " + uiPx(swP) + (d > 0 ? " 下方 SSL" : " 上方 BSL")
+        lvl = d > 0 ? lastHp : lastLp
+        lvlUsed = d > 0 ? usedH : usedL
+        string s2 = "—"
+        if ev >= 0
+            s2 := "✓ " + (eT.get(ev) == 2 ? "CHoCH" : "BOS") + " 突破 " + uiPx(eP.get(ev))
+        else if swU >= 0
+            s2 := na(lvl) or lvlUsed ? "等新的擺動" + (d > 0 ? "高" : "低") + "出現後收盤突破" : "等收盤" + (d > 0 ? "站上 " : "跌破 ") + uiPx(lvl)
+        string s3 = "—"
+        if pk > 0
+            s3 := "✓ " + (pk == 1 ? "FVG " : "OB ") + uiPx(pBot) + "–" + uiPx(pTop)
+        else if ev >= 0
+            s3 := "等突破那段留下 FVG／OB"
+        string s4 = "—"
+        if rt >= 0
+            s4 := "✓ 已回踩 POI"
+        else if pk > 0
+            s4 := "等價格回到 " + uiPx(pBot) + "–" + uiPx(pTop)
+        string s5 = "—"
+        if ready
+            s5 := "進 " + uiPx(en) + " 停 " + uiPx(sl) + " 目 " + uiPx(tp) + "（" + str.tostring(rr, "#.#") + "R）"
+        else if stage == 4
+            s5 := "盈虧比算不出來，先不做"
+        names = array.from("1 掃流動性", "2 結構轉向", "3 POI", "4 回踩", "5 計畫")
+        texts = array.from(s1, s2, s3, s4, s5)
+        for k = 0 to 4
+            row += 1
+            bool done = k < 4 ? stage > k : ready
+            bool isNext = not done and (k == 0 or (k < 4 ? stage == k : stage == 4))
+            if isNext and nextStep == ""
+                nextStep := texts.get(k)
+            table.cell(panel, 0, row, names.get(k), text_color = done ? colD : isNext ? COL_GOLD : COL_DIM, text_size = tszS, text_halign = text.align_left)
+            table.cell(panel, 1, row, texts.get(k), text_color = done ? COL_TEXT : isNext ? COL_GOLD : COL_DIM, text_size = tszS, text_halign = text.align_right)
+        // 背景：大週期、位置、時段
+        row += 1
+        table.cell(panel, 0, row, "大週期 " + (HTF_ON ? uiTfName(HTF_TF) : ""), text_color = COL_DIM, text_size = tszS, text_halign = text.align_left)
+        table.cell(panel, 1, row, not HTF_ON ? "關閉" : biasV == 2 ? "✓ 偏" + (d > 0 ? "多" : "空") + "，順勢" : biasV == 1 ? "方向未定" : "✗ 偏" + (d > 0 ? "空" : "多") + "，逆勢要更嚴格", text_color = biasV == 2 ? COL_BULL : biasV == 1 ? COL_DIM : COL_BEAR, text_size = tszS, text_halign = text.align_right)
+        row += 1
+        table.cell(panel, 0, row, "位置", text_color = COL_DIM, text_size = tszS, text_halign = text.align_left)
+        table.cell(panel, 1, row, disc ? "✓ " + (d > 0 ? "折價區（便宜）" : "溢價區（貴）") : "✗ " + (d > 0 ? "溢價區，做多偏貴" : "折價區，做空偏便宜"), text_color = disc ? COL_BULL : COL_BEAR, text_size = tszS, text_halign = text.align_right)
+        row += 1
+        table.cell(panel, 0, row, "⏰ 時段", text_color = COL_DIM, text_size = tszS, text_halign = text.align_left)
+        table.cell(panel, 1, row, not IS_INTRA ? "2h 以上不看時段" : swU < 0 ? "掃蕩後再看" : sessOk ? "✓ 掃蕩在" + uiSessName(sSw) : sSw == 1 ? "✗ 掃蕩在亞洲盤（假突破多）" : "✗ 掃蕩不在殺區", text_color = not IS_INTRA or swU < 0 ? COL_DIM : sessOk ? COL_BULL : COL_BEAR, text_size = tszS, text_halign = text.align_right)
+        if IS_INTRA
+            // 現在在哪個時段、下一個殺區什麼時候開始
+            int sCur = sessOf(timenow)
+            float hNow = hour(timenow, "UTC") + minute(timenow, "UTC") / 60.0
+            float hNext = hNow < 7 ? 7.0 : hNow < 12 ? 12.0 : hNow < 17.5 ? 17.5 : 31.0
+            int toNext = int(math.round((hNext - hNow) * 60))
+            int tNext = timenow + toNext * 60000
+            row += 1
+            table.cell(panel, 0, row, "現在", text_color = COL_DIM, text_size = tszS, text_halign = text.align_left)
+            table.cell(panel, 1, row, sCur >= 2 ? uiSessName(sCur) + "（波動大）" : uiSessName(sCur) + " · 下個殺區 " + str.format_time(tNext, "HH:mm", iTz) + "（" + str.tostring(math.floor(toNext / 60)) + "h" + str.tostring(toNext % 60) + "m 後）", text_color = sCur >= 2 ? COL_GOLD : COL_DIM, text_size = tszS, text_halign = text.align_right)
+        row += 1
+        table.cell(panel, 0, row, "下一步", text_color = COL_GOLD, text_size = tszS, text_halign = text.align_left)
+        table.cell(panel, 1, row, ready ? (biasV == 2 and disc ? "條件齊了，照計畫掛單" : "條件齊了，但背景有 ✗，倉位減半或跳過") : nextStep, text_color = COL_GOLD, text_size = tszS, text_halign = text.align_right)
+        row += 1
+        oStage = d > 0 ? stS : stL
+        oReady = d > 0 ? rdS : rdL
+        table.cell(panel, 0, row, (d > 0 ? "空單" : "多單") + "劇本", text_color = COL_DIM, text_size = tszS, text_halign = text.align_left)
+        table.cell(panel, 1, row, str.tostring(oStage + (oReady ? 1 : 0)) + "/5", text_color = COL_DIM, text_size = tszS, text_halign = text.align_right)
+        row += 1
+        table.cell(panel, 0, row, "僅供學習，回測沒有穩定優勢", text_color = COL_DIM, text_size = size.tiny, text_halign = text.align_left)
+        table.merge_cells(panel, 0, row, 1, row)
+
+        // ── 警報：劇本成形（第 2 步）或到位（第 5 步），每個劇本各發一次；只在 K 棒收盤時
+        if barstate.isconfirmed
+            for dd in array.from(1, -1)
+                st2 = dd > 0 ? stL : stS
+                rd2 = dd > 0 ? rdL : rdS
+                sw2 = dd > 0 ? swUL : swUS
+                b2 = htfBias == dd ? 2 : htfBias == 0 ? 1 : 0
+                if st2 >= 2 and sw2 >= 0 and (not iOnlyAligned or b2 == 2)
+                    key = str.tostring(dd) + ":" + str.tostring(t.get(sw2)) + ":" + (rd2 ? "ready" : "formed")
+                    if key != (dd > 0 ? keyL : keyS)
+                        if dd > 0
+                            keyL := key
+                        else
+                            keyS := key
+                        alert("🧭 " + syminfo.ticker + " " + uiTfName(timeframe.period) + " " + (dd > 0 ? "多單" : "空單") + "劇本 " + str.tostring(st2 + (rd2 ? 1 : 0)) + "/5（" + (rd2 ? "到位" : "成形") + "）", alert.freq_once_per_bar_close)
+    else
+        table.cell(panel, 0, 0, "🧭 SMC 教練", text_color = COL_TEXT, text_size = tsz)
+        table.cell(panel, 1, 0, "K 棒不夠（至少 120 根）", text_color = COL_DIM, text_size = tszS)
