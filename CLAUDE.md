@@ -18,6 +18,8 @@
   改了 `src/smc/` 的規則要同步改 Pine 版，`tests/tradingview-parity.test.mjs` 會比對兩邊結果。
 - `coach/` 是獨立的「SMC 教練」手機 App（掃描板＋圖表教練＋時段），直接 import `src/smc/coach.js`、`src/smc/sessions.js`，
   規則只有一份；`dojo/` 是 SMC 道場學習 App。兩個都靠 GitHub Pages（pages.yml）上線。
+  教練 App 的戰績（`/coach-live`）、盯這單（`/watch`）、交易日誌（`/journal`）後端在 `worker/coach-extras.js`；
+  日誌經 Executor 的 `GET /journal` 讀使用者真實帳戶（唯讀金鑰 `BYBIT_READ_API_KEY/SECRET`，用 executor-deploy.yml 同步到 Fly）。
 - 策略／評分規則的改動要先用 `scripts/research/` 的回測（GitHub Actions `research.yml`）驗證，
   前後半段資料都成立才上線；這個環境連不到交易所，回測只能在 Actions 上跑。
   **策略改動要先把回測數據給使用者看，由使用者決定要不要上線**（只動回測工具的可以直接合併）。

@@ -5,6 +5,7 @@
 #   BYBIT_LIVE_API_KEY      真實帳戶的 API Key（只開合約交易權限，不要開提現／轉帳）
 #   BYBIT_LIVE_API_SECRET   真實帳戶的 API Secret
 #   BYBIT_DEMO_API_KEY／BYBIT_DEMO_API_SECRET（選用，切回 Demo 時才需要）
+#   BYBIT_READ_API_KEY／BYBIT_READ_API_SECRET（選用）你自己手動下單那個帳戶的「唯讀」金鑰，給 SMC 教練 App 的交易日誌用
 # App 名稱從 EXECUTOR_URL（https://<App 名稱>.fly.dev）自動取出；網址不是 fly.dev 的話，
 # 另外在 Variables 分頁設定 FLY_APP。金鑰只會傳給 Fly.io，log 裡不會出現內容。
 name: 部署 Executor（切換 Demo／真錢）
@@ -88,6 +89,20 @@ jobs:
           echo "::add-mask::$K"; echo "::add-mask::$S"
           flyctl secrets set --stage -a "$APP" "BYBIT_API_KEY=$K" "BYBIT_API_SECRET=$S" "LIVE_TRADING=$EXPECT" > /dev/null
           echo "✅ 已設定 LIVE_TRADING=$EXPECT 和對應的金鑰（部署後生效）"
+
+      - name: 設定交易日誌的唯讀金鑰（有設定才做，任何模式都會同步）
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          READ_KEY: ${{ secrets.BYBIT_READ_API_KEY }}
+          READ_SECRET: ${{ secrets.BYBIT_READ_API_SECRET }}
+        run: |
+          # 使用者自己手動下單的真實帳戶，只開「讀取」權限的 API Key，給 SMC 教練 App 的交易日誌用
+          trim() { printf '%s' "$1" | tr -d '[:space:]'; }
+          K="$(trim "$READ_KEY")"; S="$(trim "$READ_SECRET")"
+          if [ -z "$K" ] || [ -z "$S" ]; then echo "ℹ️ 沒有 BYBIT_READ_API_KEY／BYBIT_READ_API_SECRET，交易日誌先不開"; exit 0; fi
+          echo "::add-mask::$K"; echo "::add-mask::$S"
+          flyctl secrets set --stage -a "$APP" "BYBIT_READ_API_KEY=$K" "BYBIT_READ_API_SECRET=$S" > /dev/null
+          echo "✅ 已設定交易日誌唯讀金鑰（長度 ${#K}／${#S}，部署後生效）"
 
       - name: 部署
         working-directory: executor

@@ -6,7 +6,7 @@ import { config } from './config.js';
 import {
   getBalance, getInstrument, getPositions, setLeverage, setStopLoss,
   cancelAllOrders, placeReduceOnlyLimit, placeMarketEntry, bybitCall,
-  getExecutions, getClosedPnl,
+  getExecutions, getClosedPnl, getJournal,
 } from './bybit.js';
 
 const json = (res, status, obj) => {
@@ -208,6 +208,28 @@ export async function handleHistory(req, res, query) {
     }));
   } catch (e) { out.errors.closedPnl = e.message; }
   return json(res, 200, out);
+}
+
+/**
+ * GET /journal?days=30 —— 交易日誌：使用者真實帳戶（唯讀金鑰）的成交明細、權益、持倉。
+ * 只查不寫；沒設定唯讀金鑰時回 configured=false。
+ */
+export async function handleJournal(req, res, query) {
+  const days = Math.min(90, Math.max(1, Math.round(Number(query.days) || 30)));
+  try {
+    const j = await getJournal(days);
+    return json(res, 200, {
+      configured: true, days, balance: j.balance, errors: j.errors,
+      positions: j.positions.map((p) => ({ symbol: p.symbol, side: p.side, size: Number(p.size), avgPrice: Number(p.avgPrice), leverage: Number(p.leverage), liqPrice: Number(p.liqPrice) || null, stopLoss: Number(p.stopLoss) || null, takeProfit: Number(p.takeProfit) || null, unrealisedPnl: Number(p.unrealisedPnl) })),
+      executions: j.executions.map((e) => ({
+        symbol: e.symbol, side: e.side, orderId: e.orderId, orderLinkId: e.orderLinkId, orderType: e.orderType,
+        stopOrderType: e.stopOrderType, execType: e.execType, execPrice: Number(e.execPrice), execQty: Number(e.execQty),
+        execFee: Number(e.execFee), closedSize: Number(e.closedSize ?? 0), isMaker: e.isMaker, execTime: Number(e.execTime),
+      })),
+    });
+  } catch (e) {
+    return json(res, 200, { configured: false, error: e.message });
+  }
 }
 
 /** GET /balance */

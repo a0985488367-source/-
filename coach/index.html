@@ -101,6 +101,13 @@ h1 { margin: 0; font-size: 22px; font-weight: 900; }
 .setup.cold { opacity: .8; }
 .setup.done { background: transparent; border-style: dashed; }
 .stg.up { color: var(--bull); } .stg.dn { color: var(--bear); } .stg.mut { color: var(--mut); }
+.kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 10px 0; }
+.kpis div { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 8px 4px; text-align: center; }
+.kpis b { display: block; font: 700 16px "Chakra Petch", monospace; } .kpis span { font-size: 11px; color: var(--mut); }
+.up { color: var(--bull); } .dn { color: var(--bear); }
+.tt.st th { font-size: 11px; color: var(--mut); font-weight: 500; text-align: right; padding: 4px; } .tt.st td { text-align: right; } .tt.st td:first-child, .tt.st th:first-child { text-align: left; }
+.watchbtn { display: block; width: 100%; text-align: center; padding: 12px; border-radius: 12px; border: 1px solid var(--gold); color: var(--gold); background: rgba(245,191,79,.06); font-weight: 700; margin-bottom: 10px; }
+.watchbtn:disabled { opacity: .7; }
 .cell.ended { color: var(--mut); background: transparent; border: 1px dashed var(--line); font-size: 12px; }
 .step { display: flex; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); }
 .step .ic { width: 22px; height: 22px; flex: none; border-radius: 50%; display: grid; place-items: center; font-size: 12px; background: var(--panel2); color: var(--dim); }
