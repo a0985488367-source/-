@@ -111,6 +111,7 @@ export function coachState(W, A, bias) {
     }
     const okSw = sw && !sw.dead;
     r.sweep = okSw ? sw : null;
+    if (sw && sw.dead) r.dead = { u: sw.u, p: sw.p, at: sw.dead }; // 最近一次掃蕩已經被收盤破掉（給 coachFollow 看劇本怎麼結束）
     let ev = null;
     if (okSw) for (const e of A.ev) if (e.dir === d && e.i > sw.u && e.i <= j) { ev = e; break; }
     let poi = null;
@@ -135,4 +136,79 @@ export function coachState(W, A, bias) {
     out[d > 0 ? 'L' : 'S'] = r;
   }
   return out;
+}
+
+/**
+ * 劇本後續：這個劇本現在還能不能做（給 SMC 教練 App 顯示用，不影響 coachState 的階段和 Discord 推播）。
+ * 計畫固定用「回踩那根收盤當下」算出來的進場／停損／目標（之後停損不會跟著新低移動），再往後逐根看：
+ *   wait    還沒到第 3 步，沒有計畫
+ *   pending POI 已留下、還沒回踩 → 可以在進場價掛限價單等
+ *   missed  還沒回踩就先走到目標 → 錯過了
+ *   near    已回踩、現在離進場價不到 ranR（預設 0.5R） → 還來得及
+ *   ran     已回踩、往獲利方向跑超過 ranR → 不追，等回到進場價
+ *   deep    已回踩、往停損方向超過 ranR（還沒打到停損） → 靠近停損，先別進
+ *   tp／sl  已到目標／已打到停損（回踩那根先算停損） → 劇本結束
+ *   stale   回踩後超過 maxAge 根都沒結果 → 算結束
+ *   fail    收盤破掉掃出來的影線（掃蕩失敗），劇本作廢；coachState 這時已經回到第 0 步，這裡用 r.dead 把剛結束的劇本找回來
+ * 另外回傳兩邊最近還沒被掃的流動性（下一個可能的劇本從這裡開始）。
+ */
+export function coachFollow(W, A, r, opt = {}) {
+  const ranR = opt.ranR ?? 0.5, maxAge = opt.maxAge ?? 48;
+  const n = W.length, j = n - 1, px = W[j].c, d = r.d;
+  let ssl = null, bsl = null;
+  for (const p of A.piv) {
+    if (p.k > j || p.sw != null) continue;
+    if (!p.hi && p.p < px && (ssl == null || p.p > ssl)) ssl = p.p;
+    if (p.hi && p.p > px && (bsl == null || p.p < bsl)) bsl = p.p;
+  }
+  const out = { status: 'wait', next: { ssl, bsl } };
+  let deadAt = null;
+  if (r.stage === 0 && r.dead && r.dead.at > 0) {
+    // 掃蕩剛被破掉：回到破掉前一根，看那時候劇本走到哪
+    const prev = coachState(W.slice(0, r.dead.at), A, 0)[d > 0 ? 'L' : 'S'];
+    if (!prev.sweep || prev.sweep.u !== r.dead.u || prev.stage < 3) return out;
+    deadAt = out.deadAt = r.dead.at;
+    r = prev;
+    out.fromDead = true;
+  }
+  if (r.stage < 3 || !r.sweep || !r.poi) return out;
+  out.stage = r.stage;
+  const plan = planAt(W, A, r, r.rt != null ? r.rt : (deadAt != null ? deadAt - 1 : j));
+  if (!plan) return out;
+  out.plan = plan;
+  const risk = d * (plan.en - plan.sl);
+  const end = deadAt != null ? deadAt : j;
+  if (r.rt == null) {
+    for (let u = r.poi.k + 1; u <= end; u++) {
+      if (d > 0 ? W[u].h >= plan.tp : W[u].l <= plan.tp) { out.status = 'missed'; out.at = u; return out; }
+    }
+    if (deadAt != null) { out.status = 'fail'; out.at = deadAt; return out; }
+    out.status = 'pending';
+    return out;
+  }
+  for (let u = r.rt; u <= end; u++) {
+    if (d > 0 ? W[u].l <= plan.sl : W[u].h >= plan.sl) { out.status = 'sl'; out.at = u; out.res = -1; return out; }
+    if (u > r.rt && (d > 0 ? W[u].h >= plan.tp : W[u].l <= plan.tp)) { out.status = 'tp'; out.at = u; out.res = d * (plan.tp - plan.en) / risk; return out; }
+  }
+  if (deadAt != null) { out.status = 'fail'; out.at = deadAt; out.res = d * (W[deadAt].c - plan.en) / risk; return out; }
+  out.cur = d * (px - plan.en) / risk;
+  if (j - r.rt > maxAge) { out.status = 'stale'; out.at = j; return out; }
+  out.status = out.cur > ranR ? 'ran' : out.cur < -ranR ? 'deep' : 'near';
+  return out;
+}
+
+/** coachState 的計畫，但停在第 at 根（只用 at 以前看得到的擺動點和極值） */
+function planAt(W, A, r, at) {
+  const d = r.d, a = A.atr[at], sw = r.sweep, poi = r.poi;
+  let ext = sw.x;
+  for (let u = sw.u; u <= at; u++) ext = d > 0 ? Math.min(ext, W[u].l) : Math.max(ext, W[u].h);
+  let rH = -1e18, rL = 1e18;
+  for (let i = Math.max(0, at - 79); i <= at; i++) { rH = Math.max(rH, W[i].h); rL = Math.min(rL, W[i].l); }
+  const en = d > 0 ? poi.top : poi.bot, sl = ext - d * 0.15 * a;
+  let tp = null;
+  for (const p of A.piv) if (p.hi === (d > 0 ? 1 : 0) && p.k <= at && (p.sw == null || p.sw > at) && (d > 0 ? p.p > en + 0.5 * a : p.p < en - 0.5 * a)) tp = tp == null ? p.p : (d > 0 ? Math.min(tp, p.p) : Math.max(tp, p.p));
+  if (tp == null) tp = d > 0 ? rH : rL;
+  const risk = d * (en - sl), rr = d * (tp - en) / risk;
+  if (!(risk > 0 && rr > 0)) return null;
+  return { en, sl, tp, rr, at };
 }

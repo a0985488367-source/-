@@ -3,7 +3,7 @@
  * 規則直接用 src/smc/coach.js（跟 Discord 教練提醒、道場看盤教室同一份），時段用 src/smc/sessions.js。
  * 行情由手機直接向交易所拿（Bybit 永續 → Binance 永續 → Binance 現貨），第一次抓 500 根，之後每根收盤只補最新幾根。
  */
-import { analyze, structure, atrOf, coachState } from '../src/smc/coach.js';
+import { analyze, structure, atrOf, coachState, coachFollow } from '../src/smc/coach.js';
 import { sessionOf } from '../src/smc/sessions.js';
 
 const COINS = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'DOGE', 'ADA', 'AVAX', 'LINK', 'LTC', 'DOT', 'NEAR', 'APT', 'ARB', 'OP'];
@@ -88,12 +88,22 @@ function computeBias(coin) {
   h.bias = Hc.length >= 30 ? (structure(Hc, 3, atrOf(Hc)).trend[Hc.length - 1] || 0) : 0;
   h.lastOpen = h.C[h.C.length - 1].t * 1000;
 }
-function sideSum(r, W) {
-  return {
+/* 劇本結束的幾種情況（coachFollow），結束超過 RECENT 根就當作沒有劇本、等新的掃蕩 */
+const ENDED = { tp: '到目標', sl: '打到停損', missed: '沒回踩就走了', stale: '放太久沒結果', fail: '掃蕩失敗' };
+const RECENT = 24;
+const isEnded = (x) => x.fs in ENDED;
+function sideSum(r, W, f) {
+  const j = W.length - 1, age = f.at != null ? j - f.at : null;
+  const x = {
     stage: r.stage, ready: r.ready, bias: r.bias, disc: r.disc,
-    sess: r.sweep ? sessIdx(W[r.sweep.u].t * 1000) : -1, swT: r.sweep ? W[r.sweep.u].t : null, swP: r.sweep ? r.sweep.p : null,
-    ev: r.ev ? r.ev.t : null, poi: r.poi ? { kind: r.poi.kind, top: r.poi.top, bot: r.poi.bot } : null, rr: r.plan ? r.plan.rr : null,
+    sess: r.sweep ? sessIdx(W[r.sweep.u].t * 1000) : -1, swT: r.sweep ? W[r.sweep.u].t : (r.dead ? W[r.dead.u].t : null), swP: r.sweep ? r.sweep.p : null,
+    ev: r.ev ? r.ev.t : null, poi: r.poi ? { kind: r.poi.kind, top: r.poi.top, bot: r.poi.bot } : null,
+    fs: f.status, fres: f.res ?? null, fcur: f.cur ?? null, fAt: f.at != null ? W[f.at].t : null, ssl: f.next.ssl, bsl: f.next.bsl,
+    rr: f.plan ? f.plan.rr : r.plan ? r.plan.rr : null, en: f.plan ? f.plan.en : null, sl: f.plan ? f.plan.sl : null, tp: f.plan ? f.plan.tp : null,
   };
+  if (f.fromDead) x.stage = f.stage;
+  if (isEnded(x) && age > RECENT) { x.fs = 'old'; x.stage = 0; x.ready = false; } // 結束很久了：等新的掃蕩
+  return x;
 }
 function compute(coin, tf) {
   const k = key(coin, tf), d = D[k]; if (!d) return;
@@ -101,20 +111,22 @@ function compute(coin, tf) {
   const W = d.C.filter((c) => c.t * 1000 + ms <= now).slice(-BARS);
   if (W.length < 120) { R[k] = { err: 'K 棒不夠' }; return; }
   const A = analyze(W, 4, 2), bias = H[coin] ? H[coin].bias : 0, st = coachState(W, A, bias);
+  const f = { L: coachFollow(W, A, st.L), S: coachFollow(W, A, st.S) };
   const prev = R[k];
-  R[k] = { coin, tf, W, A, st, bias, biasOk: !!H[coin], px: d.C[d.C.length - 1].c, closedT: W[W.length - 1].t, L: sideSum(st.L, W), S: sideSum(st.S, W) };
+  R[k] = { coin, tf, W, A, st, f, bias, biasOk: !!H[coin], px: d.C[d.C.length - 1].c, closedT: W[W.length - 1].t, L: sideSum(st.L, W, f.L), S: sideSum(st.S, W, f.S) };
   if (booted && prev && prev.L) detect(k, prev, R[k]);
 }
 function detect(k, a, b) {
   for (const s of ['L', 'S']) {
     const x = a[s], y = b[s], same = x.swT === y.swT;
     let ev = null;
-    if (y.ready && !(x.ready && same)) ev = 'ready';
-    else if (y.stage >= 2 && !(x.stage >= 2 && same)) ev = 'formed';
+    if (isEnded(y) && !(isEnded(x) && same && x.fs === y.fs)) ev = 'end';
+    else if (y.fs === 'near' && !(x.fs === 'near' && same)) ev = 'ready';
+    else if (y.stage >= 2 && !isEnded(y) && y.fs !== 'old' && !(x.stage >= 2 && same)) ev = 'formed';
     if (!ev) continue;
-    const e = { at: Date.now(), coin: b.coin, tf: b.tf, side: s, ev, stage: y.stage, bias: y.bias, sess: y.sess, rr: y.rr };
+    const e = { at: Date.now(), coin: b.coin, tf: b.tf, side: s, ev, stage: y.stage, bias: y.bias, sess: y.sess, rr: y.rr, fs: y.fs, fres: y.fres };
     events.unshift(e); events = events.slice(0, 40); store.set('smc-coach-events', events);
-    toast(`${e.coin} ${e.tf} ${s === 'L' ? '多單' : '空單'}劇本 ${y.ready ? '5/5 到位' : y.stage + '/5 成形'}${y.bias === 2 ? '（順勢）' : ''}`, () => openDetail(e.coin, e.tf, s));
+    toast(`${e.coin} ${e.tf} ${sideName(s)}劇本 ${evText(e)}`, () => openDetail(e.coin, e.tf, s));
   }
 }
 let saveT = 0;
@@ -176,13 +188,35 @@ function sessTxt(s) {
   if (s === 1) return ['掃蕩在亞洲盤（假突破多）', 0];
   return ['掃蕩不在殺區', 1];
 }
-function stageLabel(x) { return x.ready ? '到位' : x.stage >= 2 ? '成形' : x.stage === 1 ? '掃完' : '觀察'; }
+const resTxt = (r) => (r == null ? '' : ` ${r >= 0 ? '+' : ''}${r.toFixed(1)}R`);
+function evText(e) {
+  if (e.ev === 'end') return `${ENDED[e.fs]}${resTxt(e.fres)}`;
+  if (e.ev === 'ready') return `已回踩，可進場${e.bias === 2 ? '（順勢）' : ''}`;
+  return `${e.stage}/5 成形${e.bias === 2 ? '（順勢）' : ''}`;
+}
+function stageLabel(x) {
+  const L = { pending: '等回踩', near: '可進場', ran: '已跑・不追', deep: '靠近停損', ...ENDED };
+  return L[x.fs] || (x.stage >= 2 ? '成形' : x.stage === 1 ? '掃完' : '觀察');
+}
 function dots(x) { const n = x.ready ? 5 : x.stage; let h = ''; for (let i = 0; i < 5; i++) h += `<i class="${i < n ? 'on' : ''}"></i>`; return `<span class="dots">${h}</span>`; }
-function score(x) { return (x.ready ? (x.rr >= 2 ? 5 : 4.5) : x.stage) * 10 + (x.bias === 2 ? 3 : x.bias === 1 ? 1 : 0) + (x.disc ? 1 : 0) + (x.sess >= 2 ? 1 : 0); }
+function score(x) {
+  if (isEnded(x) || x.fs === 'old') return 0;
+  const base = { near: 5, pending: 4, ran: 3, deep: 2.5 }[x.fs] ?? x.stage;
+  return (base - (x.rr != null && x.rr < 2 ? 0.6 : 0)) * 10 + (x.bias === 2 ? 3 : x.bias === 1 ? 1 : 0) + (x.disc ? 1 : 0) + (x.sess >= 2 ? 1 : 0);
+}
 function nextShort(x) {
-  if (x.ready) return x.rr < 2 ? '到位但不到 2R，先跳過' : x.bias === 2 && x.disc ? '條件齊了，照計畫掛單' : '條件齊了，但背景有 ✗';
+  const low = x.rr != null && x.rr < 2 ? `（只有 ${x.rr.toFixed(1)}R，不到 2R 寧可不做）` : '';
+  switch (x.fs) {
+    case 'pending': return `可以掛 ${fmt(x.en)} 等回踩${low}`;
+    case 'near': return `已回踩、離進場價 ${resTxt(x.fcur).trim()}，還來得及${low}`;
+    case 'ran': return `回踩後已經跑了${resTxt(x.fcur)}，不追，等回到 ${fmt(x.en)}`;
+    case 'deep': return `往停損方向走了${resTxt(x.fcur)}，靠近停損，先別進`;
+  }
+  if (isEnded(x)) return nextAfter(x);
   return ['等掃流動性', '等收盤突破結構', '等留下 FVG／OB', '等回踩 POI', '等計畫'][x.stage];
 }
+/** 劇本結束後：下一個機會從哪裡開始 */
+function nextAfter(x) { return `接下來：做多等掃下方 ${fmt(x.ssl)}、做空等掃上方 ${fmt(x.bsl)}`; }
 
 /* ═════════ 時段列 ═════════ */
 function nextKz(nowMs) {
@@ -231,30 +265,37 @@ function boardHtml() {
     const r = getSum(key(c, tf)); if (!r) continue;
     for (const s of ['L', 'S']) {
       const x = r[s];
-      if (x.stage < 2) continue;
+      if (x.stage < 2 || x.fs === 'old') continue;
       if (P.aligned && x.bias !== 2) continue;
       if (P.kz && x.sess < 2) continue;
       items.push({ c, tf, s, x, fresh: r.fresh });
     }
   }
   items.sort((a, b) => score(b.x) - score(a.x));
+  const active = items.filter((it) => !isEnded(it.x)), ended = items.filter((it) => isEnded(it.x)).sort((a, b) => b.x.fAt - a.x.fAt);
   const filt = `<div class="filters"><div class="seg2">${['all', ...TFS].map((t) => `<button data-tf="${t}" class="${P.tf === t ? 'on' : ''}">${t === 'all' ? '全部' : t}</button>`).join('')}</div>
     <button class="chip ${P.aligned ? 'on' : ''}" data-f="aligned">只看順勢</button><button class="chip ${P.kz ? 'on' : ''}" data-f="kz">只看殺區掃蕩</button></div>`;
-  const cards = items.length ? items.map(({ c, tf, s, x, fresh }) => {
-    const st = sessTxt(x.sess), d = s === 'L' ? 1 : -1;
-    return `<button class="setup ${x.ready && x.rr >= 2 ? 'ready' : ''} ${fresh ? '' : 'stale'}" data-open="${c}|${tf}|${s}">
-      <div class="row"><b class="sym">${c}</b><span class="mut">${tf}</span><span class="side ${s}">${sideName(s)}</span><span class="sp"></span>${dots(x)}<b class="stg ${x.ready ? 'gold' : ''}">${x.ready ? 5 : x.stage}/5 ${stageLabel(x)}</b></div>
+  const cards = active.length ? active.map(({ c, tf, s, x, fresh }) => {
+    const st = sessTxt(x.sess), d = s === 'L' ? 1 : -1, hot = x.fs === 'near' && x.rr >= 2;
+    return `<button class="setup ${hot ? 'ready' : ''} ${x.fs === 'ran' || x.fs === 'deep' ? 'cold' : ''} ${fresh ? '' : 'stale'}" data-open="${c}|${tf}|${s}">
+      <div class="row"><b class="sym">${c}</b><span class="mut">${tf}</span><span class="side ${s}">${sideName(s)}</span><span class="sp"></span>${dots(x)}<b class="stg ${hot ? 'gold' : ''}">${x.ready ? 5 : x.stage}/5 ${stageLabel(x)}</b></div>
       <div class="badges"><span class="b${x.bias === 2 ? ' ok' : x.bias === 0 ? ' no' : ''}">${x.bias === 2 ? '✓' : x.bias === 0 ? '✗' : '◐'} ${biasTxt(x.bias, d)}</span><span class="b${x.disc ? ' ok' : ' no'}">${x.disc ? '✓' : '✗'} ${x.disc ? (d > 0 ? '折價' : '溢價') : (d > 0 ? '溢價' : '折價')}</span><span class="b${st[1] === 2 ? ' ok' : st[1] === 0 ? ' no' : ''}">⏰ ${st[0]}</span></div>
-      <div class="nx">下一步：${nextShort(x)}${x.rr ? `・約 ${x.rr.toFixed(1)}R` : ''}</div></button>`;
-  }).join('') : `<div class="card mut">${booted || cache ? '目前沒有走到第 2 步以上的劇本' + (P.aligned || P.kz ? '（篩選條件下）' : '') + '。下面的總表可以看每個幣在第幾步。' : '載入中…'}</div>`;
+      <div class="nx">下一步：${nextShort(x)}${x.rr && x.fs !== 'ran' && x.fs !== 'deep' && x.rr >= 2 ? `・約 ${x.rr.toFixed(1)}R` : ''}</div></button>`;
+  }).join('') : `<div class="card mut">${booted || cache ? '目前沒有還能做的劇本' + (P.aligned || P.kz ? '（篩選條件下）' : '') + '。下面的總表可以看每個幣在第幾步。' : '載入中…'}</div>`;
+  const endCards = ended.length ? `<p class="h3">剛結束（最近 ${RECENT} 根內，不能再進）</p>` + ended.map(({ c, tf, s, x, fresh }) => `<button class="setup done ${fresh ? '' : 'stale'}" data-open="${c}|${tf}|${s}">
+      <div class="row"><b class="sym">${c}</b><span class="mut">${tf}</span><span class="side ${s}">${sideName(s)}</span><span class="sp"></span><b class="stg ${x.fs === 'tp' ? 'up' : x.fs === 'sl' || x.fs === 'fail' ? 'dn' : 'mut'}">${ENDED[x.fs]}${resTxt(x.fres)}</b></div>
+      <div class="nx mut">${x.fAt ? hm(x.fAt) + ' 結束・' : ''}${nextAfter(x)}</div></button>`).join('') : '';
   const grid = `<div class="grid"><div class="gh"><span></span>${TFS.map((t) => `<span>${t}</span>`).join('')}</div>${COINS.map((c) => `<div class="gr"><b>${c}</b>${TFS.map((tf) => {
     const r = getSum(key(c, tf));
     if (!r) return `<span class="cell mut">${R[key(c, tf)] && R[key(c, tf)].err ? '✗' : '…'}</span>`;
-    const s = score(r.L) >= score(r.S) ? 'L' : 'S', x = r[s], n = x.ready ? 5 : x.stage;
-    return `<button class="cell ${n >= 2 ? s : ''} ${x.ready ? 'ready' : ''} ${r.fresh ? '' : 'stale'}" data-open="${c}|${tf}|${s}">${n ? `${s === 'L' ? '多' : '空'} ${n}` : '—'}${x.bias === 2 && n >= 2 ? '<i>順</i>' : ''}</button>`;
+    let s = score(r.L) >= score(r.S) ? 'L' : 'S', x = r[s];
+    if (score(x) === 0) { const e = ['L', 'S'].find((q) => isEnded(r[q])); if (e) { s = e; x = r[e]; } else { s = r.L.stage >= r.S.stage ? 'L' : 'S'; x = r[s]; } }
+    if (isEnded(x)) return `<button class="cell ended ${r.fresh ? '' : 'stale'}" data-open="${c}|${tf}|${s}">${s === 'L' ? '多' : '空'} ${x.fs === 'tp' ? '✓完' : '✗完'}</button>`;
+    const n = x.ready ? 5 : x.stage, hot = x.fs === 'near';
+    return `<button class="cell ${n >= 2 ? s : ''} ${hot ? 'ready' : ''} ${r.fresh ? '' : 'stale'}" data-open="${c}|${tf}|${s}">${n ? `${s === 'L' ? '多' : '空'} ${n}` : '—'}${x.bias === 2 && n >= 2 ? '<i>順</i>' : ''}</button>`;
   }).join('')}</div>`).join('')}</div>`;
-  const evs = events.length ? `<div class="card"><p class="h3">最新動態（App 開著時）</p>${events.slice(0, 8).map((e) => `<button class="ev" data-open="${e.coin}|${e.tf}|${e.side}"><span class="mut small">${hm(e.at / 1000)}</span><span class="side ${e.side}">${e.coin} ${e.tf} ${sideName(e.side)}</span><span>${e.ev === 'ready' ? '5/5 到位' : e.stage + '/5 成形'}${e.bias === 2 ? '・順勢' : ''}${e.sess >= 2 ? '・' + SESS_NAME[e.sess].replace('殺區', '') : ''}</span></button>`).join('')}</div>` : '';
-  return `${filt}<p class="h3">劇本進行中（第 2 步以上）</p>${cards}${evs}<p class="h3">全部幣種（每格顯示走得比較前面的那一邊）</p>${grid}
+  const evs = events.length ? `<div class="card"><p class="h3">最新動態（App 開著時）</p>${events.slice(0, 8).map((e) => `<button class="ev" data-open="${e.coin}|${e.tf}|${e.side}"><span class="mut small">${hm(e.at / 1000)}</span><span class="side ${e.side}">${e.coin} ${e.tf} ${sideName(e.side)}</span><span>${evText(e)}${e.ev !== 'end' && e.sess >= 2 ? '・' + SESS_NAME[e.sess].replace('殺區', '') : ''}</span></button>`).join('')}</div>` : '';
+  return `${filt}<p class="h3">還能做的劇本（第 2 步以上）</p>${cards}${endCards}${evs}<p class="h3">全部幣種（每格顯示走得比較前面的那一邊）</p>${grid}
     <p class="foot mut small">教練只說劇本走到哪一步，不是進場訊號。回測 150 天、15 檔：教練劇本＋4h 同向平均每筆約 -0.05R，沒有穩定優勢。</p>`;
 }
 function helpHtml() {
@@ -264,6 +305,7 @@ function helpHtml() {
     <li><b>POI</b>：突破那段留下的 FVG（沒有就用 OB）。</li>
     <li><b>回踩</b>：價格回到 POI。</li>
     <li><b>計畫</b>：進場＝POI 邊緣、停損＝掃出來的極值外 0.15 ATR、目標＝最近還沒被掃的對面擺動點。</li></ol>
+    <p class="h3">劇本走到後面會怎樣</p><p>回踩那根收盤時把進場／停損／目標固定下來，之後逐根追蹤：<b>可以先掛單</b>（POI 出來還沒回踩）、<b>已回踩・還來得及</b>（離進場價 0.5R 內）、<b>已經跑了・不追</b>（往獲利方向超過 0.5R）、<b>靠近停損</b>。到目標、打到停損、沒回踩就走掉、掃蕩被收盤破掉、回踩後 48 根沒結果，都算<b>結束</b>，移到「剛結束」，並告訴你下一個劇本要等價格去掃哪裡。</p>
     <p class="h3">背景三項</p><p>4h 方向（順勢／逆勢）、位置（近 80 根區間的折價／溢價）、⏰ 時段（掃蕩有沒有發生在倫敦或紐約殺區）。</p>
     <p class="h3">時段（台灣時間，固定 UTC，不跟夏令時間變）</p>
     <table class="tt"><tr><td><span class="sw s1"></span>亞洲盤</td><td>08:00–14:00</td><td>波動小，常畫出區間</td></tr><tr><td><span class="sw s2"></span>倫敦殺區</td><td>15:00–18:00</td><td>常去掃亞洲高／低</td></tr><tr><td><span class="sw s3"></span>紐約早盤殺區</td><td>20:00–23:00</td><td>一天波動最大</td></tr><tr><td><span class="sw s4"></span>紐約午盤殺區</td><td>01:30–04:00</td><td>常見反轉</td></tr></table>
@@ -323,7 +365,7 @@ async function liveTick() {
 window.addEventListener('popstate', () => { if (view === 'detail') { view = 'board'; clearInterval(dTimer); chart = null; renderBoard(); } });
 
 function stepsOf(R0, s) {
-  const W = R0.W, A = R0.A, r = R0.st[s], d = s === 'L' ? 1 : -1, j = W.length - 1, a = A.atr[j], px = W[j].c, D2 = (x, y) => (d > 0 ? x : y);
+  const W = R0.W, A = R0.A, r = R0.st[s], f = R0.f[s], d = s === 'L' ? 1 : -1, j = W.length - 1, a = A.atr[j], px = W[j].c, D2 = (x, y) => (d > 0 ? x : y);
   const out = [];
   const sw = r.sweep;
   out.push(sw ? { ok: 2, t: `影線刺破 ${fmt(sw.p)} ${D2('下方 SSL（多單止損）', '上方 BSL（空單止損）')}後收回・${mdhm(W[sw.u].t)}` } : { ok: 0, t: `等價格刺破前${D2('低（SSL）', '高（BSL）')}又收回來` });
@@ -332,7 +374,9 @@ function stepsOf(R0, s) {
   out.push(r.ev ? { ok: 2, t: `收盤${D2('突破', '跌破')} ${fmt(r.ev.p)}，${r.ev.t} 成立` } : { ok: 0, t: !sw ? '等前一步' : `等收盤${D2('突破', '跌破')}${lvl != null ? '最近的擺動點 ' + fmt(lvl) : '下一個擺動點'}，只有影線不算` });
   out.push(r.poi ? { ok: 2, t: `留下${D2('多方', '空方')} ${r.poi.kind} ${fmt(r.poi.bot)} – ${fmt(r.poi.top)}` } : { ok: 0, t: !r.ev ? '等前一步' : '這次轉向沒留下乾淨的 FVG／OB，等下一段位移' });
   out.push(r.rt != null ? { ok: 2, t: `已回到 POI・${mdhm(W[r.rt].t)}` } : { ok: 0, t: !r.poi ? '等前一步' : `等價格回到 ${fmt(D2(r.poi.top, r.poi.bot))}，現在還差 ${(Math.abs(px - D2(r.poi.top, r.poi.bot)) / a).toFixed(1)} 根 ATR，不要追價` });
-  out.push(r.plan ? { ok: r.plan.rr >= 2 ? 2 : 1, t: `進場 ${fmt(r.plan.en)}・停損 ${fmt(r.plan.sl)}・目標 ${fmt(r.plan.tp)}・${r.plan.rr.toFixed(1)}R${r.plan.rr < 2 ? '（不到 2R，寧可不做）' : ''}` } : { ok: 0, t: r.stage >= 4 ? '盈虧比算不出來，先不做' : '回踩到了再算停損和目標' });
+  const pl = f.plan;
+  out.push(pl && r.rt != null ? { ok: pl.rr >= 2 ? 2 : 1, t: `進場 ${fmt(pl.en)}・停損 ${fmt(pl.sl)}・目標 ${fmt(pl.tp)}・${pl.rr.toFixed(1)}R${pl.rr < 2 ? '（不到 2R，寧可不做）' : ''}（回踩那根算好的，之後不會變）` }
+    : pl ? { ok: 0, t: `預計：進場 ${fmt(pl.en)}・停損 ${fmt(pl.sl)}・目標 ${fmt(pl.tp)}・${pl.rr.toFixed(1)}R，可以先掛限價單` } : { ok: 0, t: r.stage >= 4 ? '盈虧比算不出來，先不做' : '有 POI 之後再算停損和目標' });
   return out;
 }
 function renderDetail() {
@@ -343,27 +387,44 @@ function renderDetail() {
   if (d) { $('#dpx').textContent = fmt(d.C[d.C.length - 1].c); $('#dst').textContent = `${d.src}・${hm(Date.now() / 1000)}`; }
   if (R0 && R0.err) { $('#coach').innerHTML = `<div class="card no">這個週期沒有資料：${esc(R0.err)}</div>`; return; }
   if (!R0 || !R0.W) { if (!$('#coach').innerHTML) $('#coach').innerHTML = '<div class="card mut">載入中…</div>'; return; }
-  const x = R0[side], r = R0.st[side], dd = side === 'L' ? 1 : -1, steps = stepsOf(R0, side), st = sessTxt(x.sess);
+  const x = R0[side], r = R0.st[side], f = R0.f[side], dd = side === 'L' ? 1 : -1, steps = stepsOf(R0, side), st = sessTxt(x.sess);
+  const ended = isEnded(x), old = x.fs === 'old', other = side === 'L' ? 'S' : 'L', ox = R0[other];
   const n = x.ready ? 5 : x.stage, nextI = steps.findIndex((s, i) => (i < 4 ? i >= x.stage : !x.ready));
   const now = Date.now(), sc = sessIdx(now), nk = nextKz(now);
-  let next = x.ready && x.rr < 2 ? `5 步到位，但盈虧比只有 ${x.rr.toFixed(1)}R（目標太近），寧可不做，等下一個劇本。` : x.ready ? (x.bias === 2 && x.disc && x.sess >= 2 ? '條件都齊了：照計畫掛單，停損一定要放。' : '5 步到位，但背景有 ✗（' + [x.bias !== 2 ? '大週期' : '', !x.disc ? '位置' : '', x.sess < 2 ? '時段' : ''].filter(Boolean).join('、') + '），倉位減半或跳過。') : steps[nextI] ? `${STEP_N[nextI]}：${steps[nextI].t}` : '';
+  const bad = [x.bias !== 2 ? '大週期' : '', !x.disc ? '位置' : '', x.sess < 2 ? '時段' : ''].filter(Boolean).join('、');
+  const pl = f.plan, low = pl && pl.rr < 2;
+  let head = '下一步還差', cls = '', next = steps[nextI] ? `${STEP_N[nextI]}：${steps[nextI].t}` : '';
+  if (x.fs === 'pending') { head = '可以先掛單'; next = `POI 已經出來、還沒回踩：可以在 ${fmt(pl.en)} 掛限價單等，停損 ${fmt(pl.sl)}、目標 ${fmt(pl.tp)}（${pl.rr.toFixed(1)}R）。${low ? '不到 2R，寧可不做。' : ''}價格先走到目標就算錯過，取消掛單。`; }
+  if (x.fs === 'near') { head = '已回踩，還來得及'; cls = low ? '' : 'ok'; next = `現在離進場價${resTxt(f.cur)}（在 0.5R 內），還能照計畫進：進場 ${fmt(pl.en)}・停損 ${fmt(pl.sl)}・目標 ${fmt(pl.tp)}（${pl.rr.toFixed(1)}R）。` + (low ? '但不到 2R，寧可不做。' : bad ? `背景有 ✗（${bad}），倉位減半或跳過。` : '背景都對，停損一定要放。'); }
+  if (x.fs === 'ran') { head = '已經跑了，不要追'; cls = 'warn'; next = `回踩之後已經往${dd > 0 ? '上' : '下'}跑了${resTxt(f.cur)}，現在進盈虧比太差。等價格回到 ${fmt(pl.en)} 附近再考慮（停損 ${fmt(pl.sl)} 不變）；先到目標 ${fmt(pl.tp)} 就結束。`; }
+  if (x.fs === 'deep') { head = '靠近停損，先別進'; cls = 'warn'; next = `回踩之後往停損方向走了${resTxt(f.cur)}，離停損 ${fmt(pl.sl)} 很近。已經在場內的照計畫，沒進的不要現在進。`; }
+  if (ended || old) {
+    head = old ? '這邊目前沒有劇本' : `這個劇本已經結束：${ENDED[x.fs]}${resTxt(x.fres)}`; cls = 'end';
+    const why = { tp: '價格已經到目標', sl: '價格打到停損', missed: '還沒回踩就先走到目標，錯過了', stale: '回踩後很久都沒走到目標或停損', fail: '收盤破掉掃出來的影線，這次掃蕩是假的' }[x.fs];
+    next = (old ? '' : `${why}${x.fAt ? '（' + mdhm(x.fAt) + '）' : ''}，不能再照這個劇本進場。`) + `接下來還有沒有機會：${dd > 0 ? `做多要等價格再掃一次下方流動性 ${fmt(x.ssl)} 並收回` : `做空要等價格再掃一次上方流動性 ${fmt(x.bsl)} 並收回`}，才會開始新的劇本。` +
+      (ox && ox.stage >= 1 && !isEnded(ox) && ox.fs !== 'old' ? `反方向的${sideName(other)}劇本現在 ${ox.ready ? 5 : ox.stage}/5（${stageLabel(ox)}），可以切過去看。` : '');
+  }
+  const showSteps = !(ended || old);
   $('#coach').innerHTML = `<div class="card">
-    <div class="row"><b>${coin} ${tf} ${sideName(side)}劇本</b><span class="sp"></span>${dots(x)}<b class="${x.ready ? 'gold' : ''}">${n}/5 ${stageLabel(x)}</b></div>
-    <div class="next ${x.ready ? 'ok' : ''}"><b>${x.ready ? '劇本到位' : '下一步還差'}</b><br>${esc(next)}</div>
-    ${steps.map((s, i) => `<div class="step ${s.ok === 2 ? 'ok' : s.ok === 1 ? 'half' : ''} ${i === nextI && !x.ready ? 'cur' : ''}"><span class="ic">${s.ok === 2 ? '✓' : s.ok === 1 ? '◐' : i === nextI ? '▶' : '○'}</span><div><b>${i + 1}. ${STEP_N[i]}</b><p>${esc(s.t)}</p></div></div>`).join('')}
+    <div class="row"><b>${coin} ${tf} ${sideName(side)}劇本</b><span class="sp"></span>${showSteps ? dots(x) : ''}<b class="${x.fs === 'near' && !low ? 'gold' : ''}">${showSteps ? n + '/5 ' : ''}${stageLabel(x)}</b></div>
+    <div class="next ${cls}"><b>${head}</b><br>${esc(next)}</div>
+    ${showSteps ? steps.map((s, i) => `<div class="step ${s.ok === 2 ? 'ok' : s.ok === 1 ? 'half' : ''} ${i === nextI && !x.ready ? 'cur' : ''}"><span class="ic">${s.ok === 2 ? '✓' : s.ok === 1 ? '◐' : i === nextI ? '▶' : '○'}</span><div><b>${i + 1}. ${STEP_N[i]}</b><p>${esc(s.t)}</p></div></div>`).join('') : ''}
     <p class="h3">背景</p>
     <div class="step ctx ${x.bias === 2 ? 'ok' : x.bias === 0 ? 'bad' : 'half'}"><span class="ic">${x.bias === 2 ? '✓' : x.bias === 0 ? '✗' : '◐'}</span><div><b>大週期 4h</b><p>${R0.biasOk ? biasTxt(x.bias, dd) + (x.bias === 0 ? '，要更嚴格、倉位要小' : '') : '4h 行情沒抓到，先當方向未定'}</p></div></div>
     <div class="step ctx ${x.disc ? 'ok' : 'bad'}"><span class="ic">${x.disc ? '✓' : '✗'}</span><div><b>位置（折價／溢價）</b><p>${x.disc ? `在近 80 根區間 50% 的${dd > 0 ? '下方（折價，便宜）' : '上方（溢價，貴）'}` : `價格在${dd > 0 ? '溢價區，做多偏貴' : '折價區，做空偏便宜'}，等回到 50% ${dd > 0 ? '以下' : '以上'}`}</p></div></div>
     <div class="step ctx ${st[1] === 2 ? 'ok' : st[1] === 0 ? 'bad' : 'half'}"><span class="ic">${st[1] === 2 ? '✓' : st[1] === 0 ? '✗' : '◐'}</span><div><b>⏰ 時段</b><p>${st[0]}${x.sess >= 2 ? '，大資金進場的時段，比較可信' : ''}。現在是${SESS_NAME[sc]}${sc >= 2 ? '（波動大）' : `，下個殺區 ${hm(nk.at / 1000)} 開始`}。</p></div></div>
   </div>`;
   // 圖表：已收盤的 W 對到含盤中那根的 C
-  const C = d.C, base = C.findIndex((c) => c.t === R0.W[0].t), ann = [];
+  const C = d.C, base = C.findIndex((c) => c.t === R0.W[0].t), ann = [], W0c = (i) => R0.W[i].c;
   if (base >= 0) {
     const I = (i) => i + base;
     if (r.sweep) { ann.push({ t: 'line', i1: I(r.sweep.u) - 14, i2: I(r.sweep.u) + 2, p: r.sweep.p, c: COL.gold, dash: 1, label: dd > 0 ? 'SSL 被掃' : 'BSL 被掃' }); ann.push({ t: 'mark', i: I(r.sweep.u), p: r.sweep.x, c: COL.gold, up: dd < 0, label: '掃' }); }
     if (r.ev) ann.push({ t: 'line', i1: I(r.ev.i) - 8, i2: I(r.ev.i), p: r.ev.p, c: dd > 0 ? COL.up : COL.dn, w: 1.6, label: r.ev.t });
     if (r.poi) ann.push({ t: 'zone', i1: I(r.poi.i), p1: r.poi.top, p2: r.poi.bot, fill: dd > 0 ? 'rgba(44,211,163,.16)' : 'rgba(255,110,110,.16)', stroke: dd > 0 ? COL.up : COL.dn, label: 'POI ' + r.poi.kind });
-    if (r.plan) ann.push({ t: 'plan', i1: I(r.plan.rt), en: r.plan.en, sl: r.plan.sl, tp: r.plan.tp, label: `${dd > 0 ? '多' : '空'} ${r.plan.rr.toFixed(1)}R` });
+    if (f.plan && !old) ann.push({ t: 'plan', i1: I(r.rt != null ? r.rt : f.plan.at), en: f.plan.en, sl: f.plan.sl, tp: f.plan.tp, label: `${dd > 0 ? '多' : '空'} ${f.plan.rr.toFixed(1)}R${ended ? '・' + ENDED[x.fs] : r.rt == null ? '・掛單' : ''}` });
+    if (f.at != null && ended) ann.push({ t: 'mark', i: I(f.at), p: x.fs === 'tp' ? f.plan.tp : x.fs === 'sl' ? f.plan.sl : W0c(f.at), c: x.fs === 'tp' ? COL.up : COL.dn, up: x.fs === 'tp' ? dd < 0 : dd > 0, label: '' });
+    const nx = dd > 0 ? x.ssl : x.bsl;
+    if (nx != null && (ended || old || r.stage === 0)) ann.push({ t: 'line', i1: C.length - 30, i2: C.length + 3, p: nx, c: COL.sel, dash: 1, label: `下一個${dd > 0 ? ' SSL' : ' BSL'}：等掃這裡` });
   }
   if (chart && !chart.fitted && base >= 0) {
     // 第一次打開：縮放到看得到掃蕩那根（往前多留 12 根）

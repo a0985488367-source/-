@@ -96,6 +96,12 @@ h1 { margin: 0; font-size: 22px; font-weight: 900; }
 .zoom button { min-width: 34px; height: 30px; padding: 0 8px; border-radius: 8px; background: rgba(23,34,59,.92); border: 1px solid var(--line); text-align: center; font-size: 13px; }
 .next { margin: 10px 0; padding: 10px 12px; border-radius: 10px; background: rgba(245,191,79,.08); border: 1px solid rgba(245,191,79,.35); font-size: 14px; }
 .next.ok { background: rgba(44,211,163,.08); border-color: rgba(44,211,163,.4); }
+.next.warn { background: rgba(255,110,110,.07); border-color: rgba(255,110,110,.35); }
+.next.end { background: rgba(142,157,255,.08); border-color: rgba(142,157,255,.4); }
+.setup.cold { opacity: .8; }
+.setup.done { background: transparent; border-style: dashed; }
+.stg.up { color: var(--bull); } .stg.dn { color: var(--bear); } .stg.mut { color: var(--mut); }
+.cell.ended { color: var(--mut); background: transparent; border: 1px dashed var(--line); font-size: 12px; }
 .step { display: flex; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); }
 .step .ic { width: 22px; height: 22px; flex: none; border-radius: 50%; display: grid; place-items: center; font-size: 12px; background: var(--panel2); color: var(--dim); }
 .step.ok .ic { background: rgba(44,211,163,.18); color: var(--bull); } .step.half .ic { color: var(--gold); } .step.bad .ic { color: var(--bear); background: rgba(255,110,110,.14); }

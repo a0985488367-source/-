@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { analyze, coachState } from '../src/smc/coach.js';
+import { analyze, coachState, coachFollow } from '../src/smc/coach.js';
 import worker from '../worker/index.js';
 
 /* dojo/ 裡打包的 Binance BTC 1h 真實 K 棒（壓縮格式）解回 {t,o,h,l,c} */
@@ -39,6 +39,31 @@ test('教練劇本：只用已收盤 K 棒，階段跟欄位一致', () => {
     }
   }
   assert.ok(formed > 10 && ready > 5, `應該找得到劇本（成形 ${formed}、到位 ${ready}）`);
+});
+
+test('劇本後續：到目標／停損／不追的判斷跟之後的 K 棒一致', () => {
+  const seen = {};
+  for (let j = 600; j < 6000; j += 2) {
+    const W = BTC.slice(j - 499, j + 1), A = analyze(W, 4, 2), st = coachState(W, A, 0);
+    for (const r of [st.L, st.S]) {
+      const f = coachFollow(W, A, r), d = r.d;
+      seen[f.status] = (seen[f.status] || 0) + 1;
+      assert.ok(f.next && (f.next.ssl == null || f.next.ssl < W.at(-1).c) && (f.next.bsl == null || f.next.bsl > W.at(-1).c), '下一個流動性在現價兩邊');
+      if (f.fromDead) { assert.equal(r.stage, 0); assert.ok(['fail', 'tp', 'sl', 'missed'].includes(f.status), f.status); continue; }
+      if (r.stage < 3) { assert.equal(f.status, 'wait'); continue; }
+      if (!f.plan) continue;
+      const { en, sl, tp } = f.plan;
+      assert.ok(d * (en - sl) > 0 && d * (tp - en) > 0, '計畫方向正確');
+      if (f.status === 'tp') assert.ok(d > 0 ? W[f.at].h >= tp : W[f.at].l <= tp);
+      if (f.status === 'sl') assert.ok(d > 0 ? W[f.at].l <= sl : W[f.at].h >= sl);
+      if (['near', 'ran', 'deep'].includes(f.status)) {
+        for (let u = r.rt; u < W.length; u++) assert.ok(d > 0 ? W[u].l > sl : W[u].h < sl, '還在場內就不該碰過停損');
+        assert.equal(f.status, f.cur > 0.5 ? 'ran' : f.cur < -0.5 ? 'deep' : 'near');
+      }
+      if (f.status === 'pending') assert.equal(r.rt, null);
+    }
+  }
+  for (const s of ['wait', 'pending', 'missed', 'near', 'ran', 'tp', 'sl']) assert.ok(seen[s] > 3, `應該出現 ${s}：${JSON.stringify(seen)}`);
 });
 
 /* ---------------------------------------------------------- Worker 教練模式 */
