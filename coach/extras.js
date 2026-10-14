@@ -126,8 +126,8 @@ async function loadJournal(force) {
 }
 function setupHtml(err) {
   return `<div class="card help"><p class="h3" style="margin-top:0">還沒接上你的 Bybit 帳戶</p><p class="small mut">${C0.esc(err || '')}</p><ol>
-    <li>Bybit App →「API」→ 新增 API Key →「系統生成」，<b>權限只勾「讀取」</b>（合約、統一帳戶），不要勾交易、不要勾提現。</li>
-    <li>GitHub 網頁（手機也可以）→ 這個 repo → Settings → Secrets and variables → Actions → New repository secret，新增兩個：<b>BYBIT_READ_API_KEY</b>、<b>BYBIT_READ_API_SECRET</b>。</li>
+    <li>GitHub Secrets 要有你那個 Bybit 真實帳戶的金鑰：<b>BYBIT_LIVE_API_KEY／BYBIT_LIVE_API_SECRET</b>（之前切真錢用的那組就可以），或另外開一組只有「讀取」權限的 <b>BYBIT_READ_API_KEY／BYBIT_READ_API_SECRET</b>（比較安全，有的話優先用）。</li>
+    <li>金鑰如果有綁 IP，要把 Executor 的 IP 加進去，不然 Bybit 會拒絕。</li>
     <li>回來跟 Claude 說「設好了」，我會幫你重新部署 Executor，日誌就會出現。</li></ol>
     <p class="small mut">沒綁 IP 的唯讀金鑰 Bybit 大約 3 個月會過期，到時候重做一次就好。</p></div>`;
 }
@@ -205,7 +205,9 @@ function renderJournal(done, total) {
     ['進場時段', Object.keys(SESS).map((k) => grp(SESS[k], (t) => chk(t).sess === k))],
   ];
   const worstG = rows.flatMap(([, g]) => g).filter((g) => g.n >= 3).sort((a, b) => a.net - b.net)[0];
-  el.innerHTML = `<div class="filters"><button class="chip ${jFilter === 'manual' ? 'on' : ''}" data-jf="manual">只看手動單</button><button class="chip ${jFilter === 'all' ? 'on' : ''}" data-jf="all">全部</button>
+  const errs = Object.entries(jData.errors || {}).filter(([, v]) => v);
+  const errHtml = errs.length ? `<div class="card no"><b>Bybit 回報錯誤</b>${errs.map(([k, v]) => `<p class="small">${{ executions: '成交紀錄', balance: '餘額', positions: '持倉' }[k] || k}：${C0.esc(v)}</p>`).join('')}<p class="small mut">常見原因：金鑰打錯、金鑰過期、金鑰綁了 IP 但沒加 Executor 的 IP、或沒有「合約／統一帳戶」的讀取權限。</p></div>` : '';
+  el.innerHTML = errHtml + `<div class="filters"><button class="chip ${jFilter === 'manual' ? 'on' : ''}" data-jf="manual">只看手動單</button><button class="chip ${jFilter === 'all' ? 'on' : ''}" data-jf="all">全部</button>
       <span class="sp"></span><button class="chip" id="jre">重新讀取</button></div>
     <div class="kpis"><div><b>${bal ? bal.toFixed(1) : '—'}U</b><span>現在權益</span></div><div><b>${n}</b><span>${jDays} 天交易</span></div><div><b>${n ? pct(wins.length / n) : '—'}</b><span>勝率</span></div><div><b class="${net >= 0 ? 'up' : 'dn'}">${usd(net)}</b><span>淨損益</span></div></div>
     ${n ? `<div class="card"><p class="h3" style="margin-top:0">風險（照你的倉位）</p>

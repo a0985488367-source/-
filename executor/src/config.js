@@ -28,8 +28,8 @@ export const config = {
   hmacSecret: required('EXECUTOR_HMAC_SECRET'),
   // 交易日誌用：使用者自己手動下單的真實帳戶「唯讀」金鑰（選用）。只拿來查成交紀錄和餘額，
   // 永遠打正式網 api.bybit.com，跟上面下單用的帳戶（Demo 或真錢）完全分開。
-  journalApiKey: (process.env.BYBIT_READ_API_KEY || '').trim(),
-  journalApiSecret: (process.env.BYBIT_READ_API_SECRET || '').trim(),
+  journalApiKey: (process.env.BYBIT_READ_API_KEY || (liveTrading ? process.env.BYBIT_API_KEY : '') || '').trim(),
+  journalApiSecret: (process.env.BYBIT_READ_API_SECRET || (liveTrading ? process.env.BYBIT_API_SECRET : '') || '').trim(),
   discordWebhookUrl: process.env.DISCORD_WEBHOOK_URL || '',
 
   healthCheckIntervalMin: Number(process.env.HEALTH_CHECK_INTERVAL_MIN || 5),
