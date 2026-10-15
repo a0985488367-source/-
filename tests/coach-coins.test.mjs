@@ -45,3 +45,17 @@ test('App 搜尋後加幣／移除；Bybit 沒有的幣不能加；最多 20 個
   assert.equal(g.body.coins.length, 30);
   assert.equal(g.body.all.length, 80);
 });
+
+test('Bybit 連不到時改用 OKX 永續成交額排名', async () => {
+  const f = async (u) => {
+    if (u.includes('okx')) return { ok: true, json: async () => ({ code: '0', data: [{ instId: 'ETH-USDT-SWAP', volCcy24h: '10', last: '3000' }, { instId: 'BTC-USDT-SWAP', volCcy24h: '1', last: '60000' }, { instId: 'USDC-USDT-SWAP', volCcy24h: '1e9', last: '1' }, { instId: 'BTC-USD-SWAP', volCcy24h: '1e9', last: '1' }] }) };
+    return { ok: false, status: 403 };
+  };
+  const all = await bybitUniverse(f);
+  assert.deepEqual(all.map((x) => x.s), ['BTCUSDT', 'ETHUSDT']);
+  const env = { SMC_KV: makeKv() };
+  const x = await coachCoins(env, { base: [], topN: 50, fetchImpl: f });
+  assert.equal(x.src, 'okx');
+  const r = await handleCoachCoins(new Request('https://w/coach-coins', { method: 'POST', body: JSON.stringify({ add: 'SUI' }) }), env, { base: [], topN: 50, fetchImpl: f });
+  assert.equal(r.status, 200, 'OKX 名單不完整，不擋 Bybit 才有的幣');
+});
