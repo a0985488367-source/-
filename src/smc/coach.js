@@ -78,7 +78,7 @@ export function aggregate(C,upto,g,dt){
  *   1 掃流動性：最近 45 根內，影線刺破一個還沒被碰過的擺動低（做多）／高（做空），當根或下一根收回
  *   2 結構轉向：掃蕩之後出現同方向的外部 BOS／CHoCH（擺動點左右各 4 根）
  *   3 POI：掃蕩之後留下、還沒被回補的同方向 FVG（沒有就用 OB）
- *   4 回踩：POI 形成後價格回到 POI
+ *   4 回踩：POI 形成、而且結構轉向收盤之後，價格回到 POI
  *   5 計畫：進場＝POI 邊緣、停損＝掃出來的極值外 0.15 ATR、目標＝最近還沒被掃的對面擺動點（沒有就用近 80 根區間極值）
  *   背景：大週期方向 bias（另外算）、折價／溢價（近 80 根區間 50%）
  */
@@ -120,8 +120,8 @@ export function coachState(W, A, bias, opt = {}) {
       if (!poi) for (const o of A.obs) if (o.dir === d && o.i >= sw.u - 2 && o.k <= j && (o.inv == null || o.inv > j)) { poi = { kind: 'OB', top: o.p1, bot: o.p2, i: o.i, k: o.k }; break; }
     }
     let rt = null;
-    // afterShift（研究中）：回踩一定要在結構轉向收盤之後才算；預設 false＝原本規則（POI 形成後碰到就算）
-    if (poi) for (let u = Math.max(poi.k, opt.afterShift && ev ? ev.i : -1) + 1; u <= j; u++) if (d > 0 ? W[u].l <= poi.top : W[u].h >= poi.bot) { rt = u; break; }
+    // 回踩一定要在結構轉向收盤之後才算（2026-10-15 使用者決定換上線；afterShift:false＝舊規則，只給回測比較用）
+    if (poi) for (let u = Math.max(poi.k, opt.afterShift !== false && ev ? ev.i : -1) + 1; u <= j; u++) if (d > 0 ? W[u].l <= poi.top : W[u].h >= poi.bot) { rt = u; break; }
     r.ev = ev ? { p: ev.p, t: ev.t, i: ev.i } : null;
     r.poi = poi;
     r.rt = rt;

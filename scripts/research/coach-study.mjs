@@ -36,7 +36,7 @@ const MIN_RR = Number(opt('min-rr', 2));
 const MAKER = Number(opt('maker-fee', 0.0002));
 const TAKER = Number(opt('taker-fee', 0.00055));
 const OUT = opt('out', 'data/research/coach-study.json');
-const AFTER_SHIFT = opt('after-shift', '0') === '1'; // 回踩一定要在結構轉向之後（2026-10-15 ADA 15m 推播比顯示晚的問題）
+const AFTER_SHIFT = opt('after-shift', '1') === '1'; // 回踩一定要在結構轉向之後（2026-10-15 ADA 15m 推播比顯示晚的問題）
 const MS = { '5m': 3e5, '15m': 9e5, '30m': 18e5, '1h': 36e5, '2h': 72e5, '4h': 144e5, '6h': 216e5, '1d': 864e5 };
 const log = (...a) => console.log(...a);
 const toC = (k) => ({ t: k.time / 1000, time: k.time, o: k.open, h: k.high, l: k.low, c: k.close });

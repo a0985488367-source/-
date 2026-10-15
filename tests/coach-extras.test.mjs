@@ -103,7 +103,7 @@ test('每日戰報：台灣 8 點推一次、同一天不重複，內容有總�
   const { maybeDailyReport } = await import('../worker/coach-extras.js');
   const env = { SMC_KV: makeKv() };
   const now = Date.UTC(2026, 9, 15, 0, 4), sec = now / 1000;
-  await env.SMC_KV.put('coachlive:done', JSON.stringify([
+  await env.SMC_KV.put('coachlive2:done', JSON.stringify([
     { sym: 'BTCUSDT', iv: '15m', side: 'L', r: 2.1, rr: 2.2, bias: 2, rtT: sec - 40000, endT: sec - 30000 },
     { sym: 'ETHUSDT', iv: '1h', side: 'S', r: -1.03, rr: 1.5, bias: 1, rtT: sec - 20000, endT: sec - 10000 },
     { sym: 'SOLUSDT', iv: '30m', side: 'S', r: 3, rr: 3, bias: 2, rtT: sec - 300000, endT: sec - 200000 },

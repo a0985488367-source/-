@@ -328,8 +328,10 @@ coachSide(array<float> h, array<float> l, array<float> c, array<float> atr, arra
                     break
     // 4 回踩
     int rt = -1
-    if pk > 0 and pAtK + 1 <= j
-        for u = pAtK + 1 to j
+    // 回踩一定要在 POI 形成、而且結構轉向收盤之後
+    int rtFrom = math.max(pAtK, ev >= 0 ? eI.get(ev) : -1) + 1
+    if pk > 0 and rtFrom <= j
+        for u = rtFrom to j
             if d > 0 ? l.get(u) <= pTop : h.get(u) >= pBot
                 rt := u
                 break
