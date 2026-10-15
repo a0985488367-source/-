@@ -105,6 +105,8 @@ export async function handleCoachAuto(request, env, { executorCall } = {}) {
         // 帳戶上現在的持倉（含不是教練下的）跟教練掛單，看停損／止盈有沒有真的掛上
         positions: (st?.positions || []).map((p) => ({ symbol: p.symbol, side: p.side, size: p.size, avgPrice: p.avgPrice, leverage: p.leverage, liqPrice: p.liqPrice, stopLoss: p.stopLoss, takeProfit: p.takeProfit, coach: trades.some((t) => t.account === a && t.sym === p.symbol && t.state === 'open') })),
         orders: st?.orders || [],
+        // Bybit 自己算的已平倉損益（最近 3 天，含手續費）：查帳用
+        closedPnl: (st?.closedPnl || []).slice(0, 60).map((p) => ({ symbol: p.symbol, side: p.side, qty: p.qty, pnl: p.closedPnl, entry: p.avgEntryPrice, exit: p.avgExitPrice, at: p.updatedTime })),
       };
     }
   }
