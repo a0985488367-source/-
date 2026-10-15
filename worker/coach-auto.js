@@ -80,7 +80,12 @@ export async function handleCoachAuto(request, env, { executorCall } = {}) {
     for (const a of accountsOf(cfg.mode)) {
       let st;
       try { st = await executorCall(env, 'GET', '/coach/state', { query: { account: a } }); } catch (e) { st = { error: e.message }; }
-      accounts[a] = { equity: st?.equity ?? null, error: st?.error || (st && !st.configured ? '帳戶沒設定金鑰' : null) || Object.values(st?.errors || {})[0] || null, pausedUntil: pausedOf(cfg, a) };
+      accounts[a] = {
+        equity: st?.equity ?? null, error: st?.error || (st && !st.configured ? '帳戶沒設定金鑰' : null) || Object.values(st?.errors || {})[0] || null, pausedUntil: pausedOf(cfg, a),
+        // 帳戶上現在的持倉（含不是教練下的）跟教練掛單，看停損／止盈有沒有真的掛上
+        positions: (st?.positions || []).map((p) => ({ symbol: p.symbol, side: p.side, size: p.size, avgPrice: p.avgPrice, stopLoss: p.stopLoss, takeProfit: p.takeProfit, coach: trades.some((t) => t.account === a && t.sym === p.symbol && t.state === 'open') })),
+        orders: st?.orders || [],
+      };
     }
   }
   const first = Object.values(accounts)[0] || {};
