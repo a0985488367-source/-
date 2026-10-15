@@ -5,9 +5,11 @@
  *   ＋使用者在 App 搜尋後自己加的（KV coach:extra，最多 20 個）
  * App 掃描板、Discord 教練提醒、教練自動下單都用同一份名單。
  */
-const TOP_KEY = 'coach:top';
+const TOP_KEY = 'coach:top2';
 const EXTRA_KEY = 'coach:extra';
 export const EXTRA_MAX = 20;
+// Bybit instruments-info 的 symbolType：一般幣是空的，股票／ETF／商品會有標記（例如 xStocks），這些不是教練要看的
+const NON_CRYPTO = /stock|etf|commodit|metal|forex|index|tradfi/i;
 const SKIP = new Set(['USDC', 'USDE', 'FDUSD', 'DAI', 'TUSD', 'USDD', 'PYUSD', 'BUSD', 'USD1', 'RLUSD', 'USDT0', 'XAUT', 'PAXG', 'EUR', 'USTC']);
 
 async function kvJson(env, key, dflt) {
@@ -19,7 +21,7 @@ async function kvJson(env, key, dflt) {
 export async function bybitUniverse(fetchImpl = fetch, viaExecutor = null) {
   const errs = [];
   if (viaExecutor) {
-    try { const r = await viaExecutor(); if (r && Array.isArray(r.list) && r.list.length) return r.list; errs.push(r?.error || 'Executor 沒回名單'); } catch (e) { errs.push('Executor ' + e.message); }
+    try { const r = await viaExecutor(); if (r && Array.isArray(r.list) && r.list.length) return r.list.filter((x) => !SKIP.has(x.s.replace(/USDT$/, '')) && !NON_CRYPTO.test(x.t || '')).map((x) => ({ ...x, src: 'bybit' })); errs.push(r?.error || 'Executor 沒回名單'); } catch (e) { errs.push('Executor ' + e.message); }
   }
   for (const host of ['https://api.bybit.com', 'https://api.bytick.com']) {
     try { return await bybitFrom(host, fetchImpl); } catch (e) { errs.push(e.message); }
@@ -65,13 +67,13 @@ export async function coachCoins(env, { base = [], topN = 50, fetchImpl = fetch,
   if (!top || top.day !== day || top.n !== topN || (top.src === 'okx' && now - (top.at || 0) > 3600e3)) {
     try {
       const all = await bybitUniverse(fetchImpl, viaExecutor);
-      top = { day, n: topN, list: all.slice(0, topN).map((x) => x.s), all: all.map((x) => x.s), src: all[0]?.src || 'bybit', at: now };
+      top = { day, n: topN, list: all.slice(0, topN).map((x) => x.s), all: all.map((x) => x.s), src: all[0]?.src || 'bybit', at: now, types: [...new Set(all.slice(0, 120).map((x) => `${x.t || '-'}`))].slice(0, 20), sample: all.slice(0, topN).filter((x) => x.t).map((x) => `${x.s}:${x.t}`).slice(0, 30) };
       if (env.SMC_KV) await env.SMC_KV.put(TOP_KEY, JSON.stringify(top), { expirationTtl: 7 * 86400 });
     } catch { top = top || { day: null, list: [], all: [] }; }
   }
   const extra = await kvJson(env, EXTRA_KEY, []);
   const coins = [...new Set([...base, ...top.list, ...extra])];
-  return { coins, base, top: top.list, extra, all: top.all || [], day: top.day, src: top.src || null };
+  return { coins, base, top: top.list, extra, all: top.all || [], day: top.day, src: top.src || null, types: top.types || [], typed: top.sample || [] };
 }
 
 /** GET（公開）回傳名單＋全部可以搜的幣；POST { add } / { remove }（要 App 密碼，index.js 先檢查） */
