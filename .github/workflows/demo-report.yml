@@ -10,6 +10,9 @@ on:
       days:
         description: '往前查幾天（最多 90）'
         default: '30'
+      strategy:
+        description: '明細只列某個策略（st 超級趨勢、coach 教練、bo 突破…空白＝全部）'
+        default: ''
 
 jobs:
   report:
@@ -25,4 +28,5 @@ jobs:
           EXECUTOR_URL: ${{ secrets.EXECUTOR_URL }}
           EXECUTOR_HMAC_SECRET: ${{ secrets.EXECUTOR_HMAC_SECRET }}
           DAYS: ${{ inputs.days }}
+          ONLY_STRATEGY: ${{ inputs.strategy }}
         run: node scripts/demo-report.mjs

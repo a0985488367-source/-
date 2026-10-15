@@ -74,8 +74,9 @@ const day = (ms) => new Date(ms + 8 * 3_600_000).toISOString().slice(5, 16).repl
   // Actions 的 log 下載不到時，用 notice（每則最多 10 則）把明細帶出來
   if (process.env.GITHUB_ACTIONS) {
     const enc = (x) => x.replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
-    const ln = rows.map((t) => `${day(t.openTime)}→${day(t.closeTime)} ${STRATEGY_NAMES[t.strategy]} ${t.symbol.replace(/USDT$/, '')} ${t.dir === 'long' ? '多' : '空'} ${u(t.pnl)} ${t.orderLinkId || '(無編號)'} 出場=${t.exitBy || '?'}`);
-    ln.push(...stillOpen.map((t) => `還開著 ${day(t.openTime)} ${STRATEGY_NAMES[t.strategy]} ${t.symbol.replace(/USDT$/, '')} ${t.dir === 'long' ? '多' : '空'} ${t.orderLinkId || '(無編號)'}`));
+    const only = process.env.ONLY_STRATEGY || '';
+    const ln = rows.filter((t) => !only || t.strategy === only).map((t) => `${day(t.openTime)}→${day(t.closeTime)} ${STRATEGY_NAMES[t.strategy]} ${t.symbol.replace(/USDT$/, '')} ${t.dir === 'long' ? '多' : '空'} ${u(t.pnl)} ${t.orderLinkId || '(無編號)'} 出場=${t.exitBy || '?'}`);
+    ln.push(...stillOpen.filter((t) => !only || t.strategy === only).map((t) => `還開著 ${day(t.openTime)} ${STRATEGY_NAMES[t.strategy]} ${t.symbol.replace(/USDT$/, '')} ${t.dir === 'long' ? '多' : '空'} ${t.orderLinkId || '(無編號)'}`));
     for (let i = 0; i < ln.length && i < 400; i += 40) console.log(`::notice title=明細 ${i / 40 + 1}::${enc(ln.slice(i, i + 40).join('\n'))}`);
   }
   if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\n') + '\n');
