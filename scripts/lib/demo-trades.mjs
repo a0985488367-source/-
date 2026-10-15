@@ -5,7 +5,7 @@
  * 回到 0 就是「平倉」；損益＝每次減倉的（成交價 − 平均成本）× 數量，再扣掉這筆交易所有的手續費。
  * 策略看開倉那筆的 orderLinkId（下單時的 signal_id）：
  *   bo:… 突破、ema:… EMA 交叉、macd:… MACD 零軸、fo:… 假突破反手、vb:… 放量突破、st:… 超級趨勢、
- *   gc:… 黃金交叉、其他非空的是 SMC（幣名大寫開頭）、空的是手動或不明。
+ *   gc:… 黃金交叉、cc:… SMC 教練自動下單、其他非空的是 SMC（幣名大寫開頭）、空的是手動或不明。
  * 查詢區間開始前就已經開著的部位（第一筆就是減倉）會略過，只算完整開平的交易。
  */
 
@@ -18,13 +18,14 @@ export function strategyOf(orderLinkId) {
   if (id.startsWith('vb:')) return 'vol';
   if (id.startsWith('st:')) return 'st';
   if (id.startsWith('gc:')) return 'gc';
+  if (id.startsWith('cc:')) return 'coach';
   if (id) return 'smc';
   return 'manual';
 }
 
 export const STRATEGY_NAMES = {
   smc: 'SMC', breakout: '突破', ema: 'EMA 交叉', macd: 'MACD 零軸', fakeout: '假突破反手',
-  vol: '放量突破', st: '超級趨勢', gc: '黃金交叉', manual: '手動／不明',
+  vol: '放量突破', st: '超級趨勢', gc: '黃金交叉', coach: 'SMC 教練', manual: '手動／不明',
 };
 
 export function rebuildTrades(executions) {

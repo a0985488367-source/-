@@ -48,7 +48,7 @@ const day = (ms) => new Date(ms + 8 * 3_600_000).toISOString().slice(5, 16).repl
   log('');
   log('| 策略 | 筆數 | 勝率 | 淨損益 | 平均賺 | 平均賠 | 賺賠比（總賺÷總賠） | 最長連虧 | 最大一筆虧損 | 手續費 |');
   log('|---|---|---|---|---|---|---|---|---|---|');
-  const groups = ['smc', 'breakout', 'ema', 'macd', 'fakeout', 'vol', 'st', 'gc', 'manual'];
+  const groups = ['smc', 'breakout', 'ema', 'macd', 'fakeout', 'vol', 'st', 'gc', 'coach', 'manual'];
   for (const g of [...groups, 'all']) {
     const xs = g === 'all' ? trades : trades.filter((t) => t.strategy === g);
     if (!xs.length) continue;
@@ -65,10 +65,18 @@ const day = (ms) => new Date(ms + 8 * 3_600_000).toISOString().slice(5, 16).repl
   }
   log('');
   log('### 每筆明細（新到舊，台灣時間）');
-  log('| 平倉時間 | 策略 | 幣種 | 方向 | 進場均價 | 出場價 | 淨損益 |');
-  log('|---|---|---|---|---|---|---|');
-  for (const t of [...trades].sort((a, b) => b.closeTime - a.closeTime)) {
-    log(`| ${day(t.closeTime)} | ${STRATEGY_NAMES[t.strategy]} | ${t.symbol.replace(/USDT$/, '')} | ${t.dir === 'long' ? '多' : '空'} | ${+t.avg.toPrecision(6)} | ${t.exitPrice} | ${u(t.pnl)} |`);
+  log('| 開倉時間 | 平倉時間 | 策略 | 幣種 | 方向 | 進場均價 | 出場價 | 淨損益 | 下單編號 |');
+  log('|---|---|---|---|---|---|---|---|---|');
+  const rows = [...trades].sort((a, b) => b.closeTime - a.closeTime);
+  for (const t of rows) {
+    log(`| ${day(t.openTime)} | ${day(t.closeTime)} | ${STRATEGY_NAMES[t.strategy]} | ${t.symbol.replace(/USDT$/, '')} | ${t.dir === 'long' ? '多' : '空'} | ${+t.avg.toPrecision(6)} | ${t.exitPrice} | ${u(t.pnl)} | ${t.orderLinkId || '-'} |`);
+  }
+  // Actions 的 log 下載不到時，用 notice（每則最多 10 則）把明細帶出來
+  if (process.env.GITHUB_ACTIONS) {
+    const enc = (x) => x.replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+    const ln = rows.map((t) => `${day(t.openTime)}→${day(t.closeTime)} ${STRATEGY_NAMES[t.strategy]} ${t.symbol.replace(/USDT$/, '')} ${t.dir === 'long' ? '多' : '空'} ${u(t.pnl)} ${t.orderLinkId || '(無編號)'}`);
+    ln.push(...stillOpen.map((t) => `還開著 ${day(t.openTime)} ${STRATEGY_NAMES[t.strategy]} ${t.symbol.replace(/USDT$/, '')} ${t.dir === 'long' ? '多' : '空'} ${t.orderLinkId || '(無編號)'}`));
+    for (let i = 0; i < ln.length && i < 400; i += 40) console.log(`::notice title=明細 ${i / 40 + 1}::${enc(ln.slice(i, i + 40).join('\n'))}`);
   }
   if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\n') + '\n');
   if (process.env.REPORT_JSON) fs.writeFileSync(process.env.REPORT_JSON, JSON.stringify({ trades, stillOpen: stillOpen.length }, null, 2));
