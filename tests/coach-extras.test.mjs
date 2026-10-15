@@ -98,3 +98,23 @@ test('交易日誌：把 Executor 的成交明細還原成交易', async () => {
   const no = await journalResponse({}, 30, async () => ({}));
   assert.equal(no.configured, false);
 });
+
+test('每日戰報：台灣 8 點推一次、同一天不重複，內容有總計 R', async () => {
+  const { maybeDailyReport } = await import('../worker/coach-extras.js');
+  const env = { SMC_KV: makeKv() };
+  const now = Date.UTC(2026, 9, 15, 0, 4), sec = now / 1000;
+  await env.SMC_KV.put('coachlive:done', JSON.stringify([
+    { sym: 'BTCUSDT', iv: '15m', side: 'L', r: 2.1, rr: 2.2, bias: 2, rtT: sec - 40000, endT: sec - 30000 },
+    { sym: 'ETHUSDT', iv: '1h', side: 'S', r: -1.03, rr: 1.5, bias: 1, rtT: sec - 20000, endT: sec - 10000 },
+    { sym: 'SOLUSDT', iv: '30m', side: 'S', r: 3, rr: 3, bias: 2, rtT: sec - 300000, endT: sec - 200000 },
+  ]));
+  const msgs = [];
+  const deps = { postDiscord: async (e, p) => msgs.push(p.embeds[0]), now };
+  assert.equal((await maybeDailyReport(env, { ...deps, now: Date.UTC(2026, 9, 15, 3, 0) })).skipped, 'not-time');
+  const r = await maybeDailyReport(env, deps);
+  assert.equal(r.sent, true);
+  assert.match(msgs[0].description, /2 筆・勝率 50%・總計 \*\*\+1\.1R\*\*/);
+  assert.match(msgs[0].description, /開始記錄以來.*3 筆・總計 \+4\.1R/);
+  assert.equal((await maybeDailyReport(env, deps)).skipped, 'already-sent');
+  assert.equal(msgs.length, 1);
+});
