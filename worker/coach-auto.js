@@ -37,14 +37,25 @@ export function dayStart(now = Date.now()) { return Math.floor(now / 86400e3) * 
 /**
  * 倉位大小（純函式）：每筆固定風險 riskU（打到停損虧多少 U）
  *   名目價值＝riskU ÷ 停損距離（最多 maxNotional，超過就縮，實際風險變小）
- *   槓桿＝最多 maxLev，而且停損距離 × 槓桿 ≤ 0.8（停損一定比強平近）；保證金＝名目價值 ÷ 槓桿
+ *   槓桿＝最多 maxLev，而且強平距離（≈ 1/槓桿 − 維持保證金率，抓 1%）≥ 停損距離 × 1.3（停損一定比強平先打到，還留空間）
+ *   ※ 2026-10-15 以前用「停損距離 × 槓桿 ≤ 0.8」，沒扣維持保證金，SOL 空單停損剛好落在強平價上；保證金＝名目價值 ÷ 槓桿
  *   保證金加上已經開著的單超過可用權益 95% 就不下
  */
+/** 停損距離 stopDist（比例）下最多能開幾倍：強平距離（扣維持保證金率，抓 1%）≥ 停損距離 × 1.3 */
+export function safeLev(stopDist, maxLev = 50) { return Math.max(1, Math.min(maxLev, Math.floor(1 / (stopDist * LIQ_X + MMR)))); }
+const LIQ_X = 1.3, MMR = 0.01;
+/** 強平價有沒有在停損外面而且留一點空間（至少再多停損距離的 15%），不夠就要降槓桿 */
+export function liqSafe({ side, en, sl, liq }) {
+  if (!(liq > 0)) return true;
+  const gap = Math.abs(en - sl) * 0.15;
+  return side === 'L' ? liq <= sl - gap : liq >= sl + gap;
+}
+
 export function sizeCoachOrder({ equity, en, sl, riskU = 20, maxLev = 50, maxNotional = 6000, usedMargin = 0 }) {
   if (!(equity > 0 && en > 0 && sl > 0 && en !== sl)) return { skip: '資料不足' };
   const stopDist = Math.abs(en - sl) / en;
   const notional = Math.min(riskU / stopDist, maxNotional);
-  const lev = Math.max(1, Math.min(maxLev, Math.floor(0.8 / stopDist)));
+  const lev = safeLev(stopDist, maxLev);
   const margin = notional / lev, qty = notional / en;
   if (usedMargin + margin > equity * 0.95) return { skip: `保證金不夠（要 ${margin.toFixed(0)}U，已用 ${usedMargin.toFixed(0)}U）`, margin };
   return { stopDist, lev, notional, qty, margin, riskU: qty * Math.abs(en - sl), riskPct: qty * Math.abs(en - sl) / equity };
@@ -85,7 +96,7 @@ export async function handleCoachAuto(request, env, { executorCall } = {}) {
       accounts[a] = {
         equity: st?.equity ?? null, error: st?.error || (st && !st.configured ? '帳戶沒設定金鑰' : null) || Object.values(st?.errors || {})[0] || null, pausedUntil: pausedOf(cfg, a),
         // 帳戶上現在的持倉（含不是教練下的）跟教練掛單，看停損／止盈有沒有真的掛上
-        positions: (st?.positions || []).map((p) => ({ symbol: p.symbol, side: p.side, size: p.size, avgPrice: p.avgPrice, stopLoss: p.stopLoss, takeProfit: p.takeProfit, coach: trades.some((t) => t.account === a && t.sym === p.symbol && t.state === 'open') })),
+        positions: (st?.positions || []).map((p) => ({ symbol: p.symbol, side: p.side, size: p.size, avgPrice: p.avgPrice, leverage: p.leverage, liqPrice: p.liqPrice, stopLoss: p.stopLoss, takeProfit: p.takeProfit, coach: trades.some((t) => t.account === a && t.sym === p.symbol && t.state === 'open') })),
         orders: st?.orders || [],
       };
     }
@@ -149,8 +160,18 @@ export async function runCoachAuto(env, { candidates = [], executorCall, postDis
       dirty = true;
       continue;
     }
+    // open：強平價太靠近停損（或在停損裡面）→ 降槓桿／補保證金，每筆最多試 3 次
+    const op = st.positions.find((p) => p.symbol === t.sym);
+    if (op && !dry && (t.liqFix || 0) < 3 && !liqSafe({ side: t.side, en: op.avgPrice || t.en, sl: t.sl, liq: op.liqPrice })) {
+      const px = op.avgPrice || t.en, dist = Math.abs(px - t.sl) / px, lev = safeLev(dist, cfg.maxLev);
+      const notional = op.size * px, addMargin = Math.max(0, notional / lev - (op.positionIM || notional / (op.leverage || lev)));
+      t.liqFix = (t.liqFix || 0) + 1; dirty = true;
+      let r; try { r = await executorCall(env, 'POST', '/coach/leverage', { body: { account: t.account, symbol: t.sym, leverage: lev, addMargin: Math.round(addMargin * 100 + 50) / 100 } }); } catch (e) { r = { ok: false, error: e.message }; }
+      if (r.ok && !r.unchanged) { t.lev = r.leverage; t.margin = notional / r.leverage; await say(`🛟 ${tag}：強平價 ${fmtP(op.liqPrice)} 太靠近停損 ${fmtP(t.sl)}，槓桿 ${op.leverage}x → ${r.leverage}x${r.liqPrice ? `，強平價移到 ${fmtP(r.liqPrice)}` : ''}（${r.how === 'add-margin' ? `補了約 ${addMargin.toFixed(1)}U 保證金` : '交易所自動補保證金'}）`); }
+      else if (!r.ok) { out.errors.push(`${t.id} 降槓桿失敗：${r.error}`); if (t.liqFix >= 3) await say(`⚠️ ${tag}：強平價 ${fmtP(op.liqPrice)} 在停損 ${fmtP(t.sl)} 附近，自動降槓桿失敗（${r.error}），請手動補保證金或降槓桿`); }
+    }
     // open：持倉不見了＝停損或目標打到了（或使用者手動平倉）
-    if (!st.positions.some((p) => p.symbol === t.sym)) {
+    if (!op) {
       const pnl = st.closedPnl.filter((p) => p.symbol === t.sym && p.updatedTime >= (t.fillAt || t.placedAt) - 60e3).reduce((a, p) => a + p.closedPnl, 0);
       const r = t.riskU > 0 ? pnl / t.riskU : 0;
       Object.assign(t, { state: 'closed', closedAt: now, pnl: Math.round(pnl * 100) / 100, r: Math.round(r * 100) / 100 });

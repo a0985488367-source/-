@@ -83,6 +83,36 @@ export async function handleCoachOrder(req, res, b) {
   }
 }
 
+/**
+ * POST /coach/leverage —— 已經開著的教練倉位「降槓桿」，把強平價推到停損外面（停損要比強平先打到）
+ * 先試 set-leverage（逐倉會自動補保證金）；交易所不讓改的話，逐倉就直接追加保證金 addMargin。只能往低改。
+ */
+export async function handleCoachLeverage(req, res, b) {
+  const acct = coachAccount(b.account);
+  if (!acct) return json(res, 400, { error: '帳戶沒有設定金鑰' });
+  const symbol = String(b.symbol || ''), lev = Math.round(Number(b.leverage)), add = Number(b.addMargin) || 0;
+  if (!/^[A-Z0-9]{2,20}USDT$/.test(symbol) || !(lev >= 1)) return json(res, 400, { error: '參數不對' });
+  try {
+    const pos = ((await call(acct, 'GET', '/v5/position/list', { category: 'linear', symbol }))?.list ?? []).find((p) => Number(p.size) > 0);
+    if (!pos) return json(res, 200, { ok: false, error: '沒有持倉' });
+    if (lev >= Number(pos.leverage)) return json(res, 200, { ok: true, unchanged: true, leverage: Number(pos.leverage), liqPrice: Number(pos.liqPrice) || null });
+    let how = 'set-leverage', err1 = null;
+    try {
+      await call(acct, 'POST', '/v5/position/set-leverage', { category: 'linear', symbol, buyLeverage: String(lev), sellLeverage: String(lev) }, 0);
+    } catch (e) {
+      err1 = e.message;
+      if (!(add > 0 && add < 500)) throw e;
+      await call(acct, 'POST', '/v5/position/add-margin', { category: 'linear', symbol, margin: add.toFixed(2), positionIdx: Number(pos.positionIdx) || 0 }, 0);
+      how = 'add-margin';
+    }
+    const after = ((await call(acct, 'GET', '/v5/position/list', { category: 'linear', symbol }))?.list ?? []).find((p) => Number(p.size) > 0);
+    logger.info('教練倉位降槓桿', { account: acct.kind, symbol, lev, how, err1 });
+    return json(res, 200, { ok: true, how, leverage: Number(after?.leverage) || lev, liqPrice: Number(after?.liqPrice) || null, firstError: err1 });
+  } catch (e) {
+    return json(res, 200, { ok: false, error: e.message, code: e.code });
+  }
+}
+
 /** POST /coach/cancel —— 只取消 cc: 開頭的單 */
 export async function handleCoachCancel(req, res, b) {
   const acct = coachAccount(b.account);
@@ -107,7 +137,7 @@ export async function handleCoachState(req, res, q) {
   await tryDo('equity', async () => { const w = await call(acct, 'GET', '/v5/account/wallet-balance', { accountType: 'UNIFIED' }); out.equity = Number(w?.list?.[0]?.totalEquity ?? w?.list?.[0]?.totalWalletBalance ?? 0); });
   await tryDo('positions', async () => {
     out.positions = ((await call(acct, 'GET', '/v5/position/list', { category: 'linear', settleCoin: 'USDT' }))?.list ?? []).filter((p) => Number(p.size) > 0)
-      .map((p) => ({ symbol: p.symbol, side: p.side, size: Number(p.size), avgPrice: Number(p.avgPrice), leverage: Number(p.leverage), stopLoss: Number(p.stopLoss) || null, takeProfit: Number(p.takeProfit) || null, unrealisedPnl: Number(p.unrealisedPnl), updatedTime: Number(p.updatedTime) }));
+      .map((p) => ({ symbol: p.symbol, side: p.side, size: Number(p.size), avgPrice: Number(p.avgPrice), leverage: Number(p.leverage), liqPrice: Number(p.liqPrice) || null, positionIM: Number(p.positionIM) || null, tradeMode: Number(p.tradeMode), stopLoss: Number(p.stopLoss) || null, takeProfit: Number(p.takeProfit) || null, unrealisedPnl: Number(p.unrealisedPnl), updatedTime: Number(p.updatedTime) }));
   });
   await tryDo('orders', async () => {
     out.orders = ((await call(acct, 'GET', '/v5/order/realtime', { category: 'linear', settleCoin: 'USDT', limit: '50' }))?.list ?? [])

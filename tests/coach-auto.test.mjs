@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { sizeCoachOrder, runCoachAuto, handleCoachAuto, dayStart } from '../worker/coach-auto.js';
+import { sizeCoachOrder, runCoachAuto, handleCoachAuto, dayStart, safeLev, liqSafe } from '../worker/coach-auto.js';
 
 function makeKv() {
   const m = new Map();
@@ -20,15 +20,18 @@ function fakeExecutor() {
 }
 const cand = (over = {}) => ({ id: 'cc:SOL:15m:L:1', sym: 'SOLUSDT', iv: '15m', ms: 9e5, side: 'L', en: 150, sl: 148.5, tp: 154, rr: 2.6, bias: 2, disc: true, sessKz: false, ...over });
 
-test('倉位大小：每筆固定風險 20U，槓桿 ≤50 而且停損比強平近，保證金不夠就不下', () => {
+test('倉位大小：每筆固定風險 20U，強平距離 ≥ 停損 1.3 倍，保證金不夠就不下', () => {
   const a = sizeCoachOrder({ equity: 220, en: 100, sl: 99 });
   assert.ok(Math.abs(a.riskU - 20) < 1e-9, '打到停損虧 20U');
   assert.equal(a.notional, 2000);
-  assert.equal(a.lev, 50);
-  assert.equal(a.margin, 40);
+  assert.equal(a.lev, 43, '停損 1% → 1/(1.3%+1%) = 43x');
+  assert.ok(Math.abs(a.margin - 2000 / 43) < 1e-9);
   const far = sizeCoachOrder({ equity: 220, en: 100, sl: 95 });
-  assert.equal(far.lev, 16, '停損 5% → 槓桿 ≤ 0.8/0.05 = 16');
-  assert.ok(far.lev * 0.05 <= 0.8);
+  assert.equal(far.lev, 13, '停損 5% → 1/(6.5%+1%) = 13x');
+  // 實際案例：SOL 空單 103.02 停損 ≈105.07（2%），舊算法開 40x 強平剛好在停損上；新算法 27x，強平約 +2.7～3.2%
+  const sol = safeLev(0.0199);
+  assert.equal(sol, 27);
+  assert.ok(1 / sol - 0.01 >= 0.0199 * 1.3);
   const near = sizeCoachOrder({ equity: 220, en: 100, sl: 99.8, maxNotional: 6000 });
   assert.equal(near.notional, 6000, '名目價值有上限');
   assert.ok(near.riskU < 20, '縮了之後實際風險變小');
@@ -78,7 +81,7 @@ test('煞車：當天虧 5 筆就暫停（虧 4 筆還會繼續下）；同時�
   const deps = { executorCall: ex.call, postDiscord: async (e, p) => msgs.push(p.content), fetchKlines: async () => [], now };
   await env.SMC_KV.put('coachauto:cfg', JSON.stringify({ mode: 'demo' }));
   // 最多 5 筆
-  const many = ['A', 'B', 'C', 'D', 'E', 'F', 'G'].map((s, i) => cand({ id: `cc:${s}:15m:L:${i}`, sym: `${s}USDT` }));
+  const many = ['A', 'B', 'C', 'D', 'E', 'F', 'G'].map((s, i) => cand({ id: `cc:${s}:15m:L:${i}`, sym: `${s}USDT`, sl: 147 }));
   const r = await runCoachAuto(env, { ...deps, candidates: many });
   assert.equal(r.placed.length, 5);
   // 過了有效時間還沒成交 → 取消
@@ -124,4 +127,22 @@ test('真錢條件可以一鍵切換：liveLoose 打開後逆勢、不到 2R 的
   await handleCoachAuto(new Request('https://w/coach-auto', { method: 'POST', body: JSON.stringify({ liveLoose: true }) }), env);
   await runCoachAuto(env, { ...deps, candidates: [cand({ id: 'cc:y', sym: 'YUSDT', bias: 0, rr: 1.5 })] });
   assert.equal(ex.calls.filter((c) => c.path === '/coach/order').length, 1, '寬鬆時下');
+});
+
+test('強平價太靠近停損：判斷正確，開著的教練倉位會自動降槓桿', async () => {
+  assert.equal(liqSafe({ side: 'S', en: 103.02, sl: 105.07, liq: 105.07 }), false, 'SOL 那張：強平就在停損上');
+  assert.equal(liqSafe({ side: 'S', en: 103.02, sl: 105.07, liq: 105.5 }), true);
+  assert.equal(liqSafe({ side: 'L', en: 100, sl: 99, liq: 98.4 }), true);
+  assert.equal(liqSafe({ side: 'L', en: 100, sl: 99, liq: 98.9 }), false);
+  const env = { SMC_KV: makeKv(), EXECUTOR_URL: 'x' }, ex = fakeExecutor(), msgs = [];
+  await env.SMC_KV.put('coachauto:cfg', JSON.stringify({ mode: 'live' }));
+  await env.SMC_KV.put('coachauto:trades', JSON.stringify([{ id: 'cc:SOL:15m:S:1', account: 'live', sym: 'SOLUSDT', iv: '15m', ms: 9e5, side: 'S', en: 103.02, sl: 105.07, tp: 101.4, state: 'open', qty: 10.2, riskU: 20.9, lev: 40, placedAt: 1, fillAt: 1 }]));
+  ex.positions = [{ symbol: 'SOLUSDT', side: 'Sell', size: 10.2, avgPrice: 103.02, leverage: 40, liqPrice: 105.07, positionIM: 26.3 }];
+  const base = ex.call;
+  ex.call = async (e, m, path, o = {}) => (path === '/coach/leverage' ? (ex.calls.push({ path, body: o.body }), { ok: true, how: 'set-leverage', leverage: o.body.leverage, liqPrice: 106.1 }) : base(e, m, path, o));
+  await runCoachAuto(env, { executorCall: ex.call, postDiscord: async (e, p) => msgs.push(p.content), fetchKlines: async () => [], now: Date.UTC(2026, 9, 15, 8) });
+  const c = ex.calls.find((x) => x.path === '/coach/leverage');
+  assert.equal(c.body.leverage, 27);
+  assert.ok(c.body.addMargin > 10 && c.body.addMargin < 15, `補保證金 ${c.body.addMargin}`);
+  assert.match(msgs.at(-1), /40x → 27x，強平價移到 106\.100/);
 });
