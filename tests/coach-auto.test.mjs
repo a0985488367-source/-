@@ -70,7 +70,7 @@ test('條件：真錢只做順勢＋≥2R；Demo 有訊號就進', async () => {
   for (const [mode, want] of [['live', 0], ['demo', 1]]) {
     const env = { SMC_KV: makeKv(), EXECUTOR_URL: 'x' }, ex = fakeExecutor();
     await env.SMC_KV.put('coachauto:cfg', JSON.stringify({ mode }));
-    const r = await runCoachAuto(env, { executorCall: ex.call, postDiscord: async () => {}, fetchKlines: async () => [], now: Date.UTC(2026, 9, 15, 5), candidates: [cand({ bias: 0, rr: 1.4 })] });
+    const r = await runCoachAuto(env, { executorCall: ex.call, postDiscord: async () => {}, fetchKlines: async () => [], now: Date.UTC(2026, 9, 15, 5), candidates: [cand({ bias: 0, rr: 1.6 })] });
     assert.equal(r.placed.length, want, mode);
   }
 });
@@ -112,7 +112,7 @@ test('兩個都開（both）：Demo 有訊號就進、真錢只做順勢＋≥2R
   const env = { SMC_KV: makeKv(), EXECUTOR_URL: 'x' }, ex = fakeExecutor();
   await env.SMC_KV.put('coachauto:cfg', JSON.stringify({ mode: 'both' }));
   const deps = { executorCall: ex.call, postDiscord: async () => {}, fetchKlines: async () => [], now: Date.UTC(2026, 9, 15, 5) };
-  const r = await runCoachAuto(env, { ...deps, candidates: [cand({ id: 'cc:a', sym: 'AUSDT', bias: 2, rr: 2.5 }), cand({ id: 'cc:b', sym: 'BUSDT', bias: 1, rr: 1.4 })] });
+  const r = await runCoachAuto(env, { ...deps, candidates: [cand({ id: 'cc:a', sym: 'AUSDT', bias: 2, rr: 2.5 }), cand({ id: 'cc:b', sym: 'BUSDT', bias: 1, rr: 1.6 })] });
   const orders = ex.calls.filter((c) => c.path === '/coach/order').map((c) => `${c.body.account}:${c.body.orderLinkId}`);
   assert.deepEqual(orders.sort(), ['demo:cc:a', 'demo:cc:b', 'live:cc:a']);
   assert.equal(r.placed.length, 3);
@@ -244,4 +244,11 @@ test('教練幫超級趨勢找進場點：訊號先等，同方向教練劇本�
   const e = await fillTrendFromCoach(env, { candidates: [], ...deps, getPrices: async () => ({}), now: now + 25 * 3600e3 });
   assert.deepEqual(e.expired, ['CUSDT']);
   assert.match(msgs.at(-1), /24 小時內教練沒有找到同方向的回踩/);
+});
+
+test('寬鬆也要 ≥1.5R：0.6R 的逆勢單（像 PYTH 那筆）不下，1.5R 以上照下', async () => {
+  const env = { SMC_KV: makeKv(), EXECUTOR_URL: 'x' }, ex = fakeExecutor();
+  await env.SMC_KV.put('coachauto:cfg', JSON.stringify({ mode: 'both', liveLoose: true }));
+  const r = await runCoachAuto(env, { executorCall: ex.call, postDiscord: async () => {}, fetchKlines: async () => [], now: Date.UTC(2026, 9, 15, 14), candidates: [cand({ id: 'cc:p', sym: 'PUSDT', bias: 0, rr: 0.61 }), cand({ id: 'cc:z', sym: 'ZUSDT', bias: 0, rr: 0.74 }), cand({ id: 'cc:q', sym: 'QUSDT', bias: 0, rr: 1.5 })] });
+  assert.deepEqual(r.placed.sort(), ['demo:cc:q', 'live:cc:q']);
 });
