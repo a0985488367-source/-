@@ -199,7 +199,7 @@ import { fakeoutSignal, FAKEOUT_DEFAULTS } from '../src/strategies/fakeout.js';
 import { handleAiAsk, aiStatus, aiSetBudget } from './ai.js';
 import { UPPER_TFS, GATE_BARS, structureOf, mtfGate } from '../src/smc/mtf-gate.js';
 import { trendExtraSignal, trendExtraIndicators, TREND_EXTRA_STOP_ATR } from '../src/strategies/trend-extra.js';
-import { analyze as coachAnalyze, structure as coachStructure, atrOf as coachAtr, coachState } from '../src/smc/coach.js';
+import { analyze as coachAnalyze, structure as coachStructure, atrOf as coachAtr, coachState, coachFollow } from '../src/smc/coach.js';
 import { appTokenOk, loadCoachLive, saveCoachLive, trackCoachLive, coachLiveResponse, handleWatch, checkWatches, journalResponse } from './coach-extras.js';
 
 const DEFAULTS = {
@@ -1334,10 +1334,14 @@ async function runCoach(env, { dry = false } = {}) {
         const r = st[side];
         if (!r.sweep || r.stage < 2) continue;
         if (cfg(env, 'COACH_ONLY_ALIGNED') === 'true' && r.bias !== 2) continue;
+        // 跟 App 一樣看劇本後續：已經到目標／停損／錯過的不推；回踩後已經跑掉或靠近停損的，不推「到位」
+        const f = coachFollow(W, A, r);
+        if (COACH_ENDED.includes(f.status)) continue;
+        if (r.stage >= 4 && f.status !== 'near') continue;
         const event = r.stage >= 4 ? 'ready' : 'formed';
         const key = `coach:${job.sym}:${job.iv}:${side}:${W[r.sweep.u].t}:${event}`;
         if (env.SMC_KV && await env.SMC_KV.get(key)) continue;
-        alerts.push({ sym: job.sym, iv: job.iv, r, event, key, W, biasTf });
+        alerts.push({ sym: job.sym, iv: job.iv, r, f, event, key, W, biasTf });
       }
       if (env.SMC_KV && !dry) await env.SMC_KV.put(job.k, String(job.lastOpen), { expirationTtl: 3 * 86400 });
     } catch (e) { errors.push(`${job.sym} ${job.iv}：${e.message}`); }
@@ -1360,19 +1364,22 @@ async function runCoach(env, { dry = false } = {}) {
   return { analyzed: batch.length, pending: jobs.length - batch.length, sent, errors };
 }
 
+const COACH_ENDED = ['tp', 'sl', 'missed', 'stale', 'fail'];
+
 /** 給 App 看的精簡紀錄（不含進場價） */
-function coachRecord({ sym, iv, r, event, W, biasTf }) {
+function coachRecord({ sym, iv, r, f, event, W, biasTf }) {
   const t = (i) => (i == null ? null : W[i].t * 1000);
   return {
     at: Date.now(), sym, iv, side: r.d > 0 ? 'L' : 'S', event, stage: r.stage, bias: r.bias, biasTf,
     sweep: { p: r.sweep.p, at: t(r.sweep.u) },
     shift: r.ev ? { p: r.ev.p, t: r.ev.t, at: t(r.ev.i) } : null,
     poi: r.poi ? { kind: r.poi.kind, top: r.poi.top, bot: r.poi.bot } : null,
-    retestAt: t(r.rt), rr: r.plan ? Math.round(r.plan.rr * 10) / 10 : null,
+    retestAt: t(r.rt), rr: f && f.plan ? Math.round(f.plan.rr * 10) / 10 : r.plan ? Math.round(r.plan.rr * 10) / 10 : null,
   };
 }
 
-function buildCoachEmbed({ sym, iv, r, event, W, biasTf }, env = {}) {
+function buildCoachEmbed({ sym, iv, r, f, event, W, biasTf }, env = {}) {
+  const pl = f && f.plan ? f.plan : r.plan; // 計畫固定在回踩那根（跟 App 一樣），不會跟著之後的新高新低變
   const long = r.d > 0, side = long ? '多單' : '空單', W2 = (a, b) => (long ? a : b);
   const done = r.stage;
   const lines = [
@@ -1380,9 +1387,12 @@ function buildCoachEmbed({ sym, iv, r, event, W, biasTf }, env = {}) {
     `✅ 2. 結構轉向：收盤${W2('突破', '跌破')} ${fmt(r.ev.p)}，${r.ev.t} 成立`,
     r.poi ? `✅ 3. POI：轉向那段留下${W2('多方', '空方')} ${r.poi.kind} ${fmt(r.poi.bot)} – ${fmt(r.poi.top)}` : '⬜ 3. POI：這次轉向沒留下乾淨的 FVG／OB，等下一段位移',
     r.rt != null ? `✅ 4. 回踩 POI：價格已經回到這個區域（${twTime(W[r.rt].t * 1000)}）` : `⬜ 4. 回踩 POI：等價格回到${r.poi ? ` ${fmt(W2(r.poi.top, r.poi.bot))} 附近` : ' POI'}，不要追價`,
-    r.plan ? `⬜ 5. 計畫：你自己決定要不要進。照教練的算法盈虧比約 ${r.plan.rr.toFixed(1)}R（停損放掃出來的${W2('低', '高')}點外、目標放對面流動性）${r.plan.rr < 2 ? '，不到 2R 寧可不做' : ''}` : '⬜ 5. 計畫：回踩到了再評估止損和目標',
+    pl && r.rt != null ? `⬜ 5. 計畫：你自己決定要不要進。照教練的算法盈虧比約 ${pl.rr.toFixed(1)}R（停損放掃出來的${W2('低', '高')}點外、目標放對面流動性）${pl.rr < 2 ? '，不到 2R 寧可不做' : ''}`
+      : pl ? `⬜ 5. 計畫：可以先在 POI 邊緣掛限價單等回踩，預計盈虧比約 ${pl.rr.toFixed(1)}R${pl.rr < 2 ? '（不到 2R 寧可不做）' : ''}；價格沒回踩就先走到目標，這單就算錯過` : '⬜ 5. 計畫：回踩到了再評估止損和目標',
   ];
-  const next = r.stage >= 4 ? '劇本到位：看小週期反應，自己決定要不要進場' : `下一步：${COACH_STEP[done]}`;
+  const ago = r.rt != null ? W.length - 1 - r.rt : 0;
+  const now = f && f.cur != null ? `現在離進場點 ${f.cur >= 0 ? '+' : ''}${f.cur.toFixed(1)}R，還來得及${ago ? `（回踩是 ${ago} 根前）` : ''}` : '';
+  const next = r.stage >= 4 ? `劇本到位：${now || '看小週期反應'}，自己決定要不要進場` : `下一步：${COACH_STEP[done]}`;
   return {
     title: `🧭 教練提醒｜${sym} ${iv} ${side}劇本 ${done}/5${event === 'ready' ? '（到位）' : '（成形）'}`,
     url: tradingViewUrl(sym, iv),
