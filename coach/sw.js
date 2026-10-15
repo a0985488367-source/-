@@ -1,5 +1,5 @@
 // SMC 教練 App 的離線快取：一律先拿網路上最新的（規則改了馬上生效），連不到才用快取
-const V = 'smc-coach-v7';
+const V = 'smc-coach-v8';
 const CORE = ['./', 'index.html', 'app.js', 'extras.js', 'manifest.webmanifest', 'icon-180.png', 'icon-192.png', 'icon-512.png', '../src/smc/coach.js', '../src/smc/sessions.js'];
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(V).then((c) => c.addAll(CORE)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', (e) => { e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k.startsWith('smc-coach-') && k !== V).map((k) => caches.delete(k)))).then(() => self.clients.claim())); });

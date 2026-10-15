@@ -18,19 +18,22 @@ function fakeExecutor() {
   };
   return ex;
 }
-const cand = (over = {}) => ({ id: 'cc:SOL:15m:L:1', sym: 'SOLUSDT', iv: '15m', ms: 9e5, side: 'L', en: 150, sl: 148.5, tp: 154, rr: 2.6, disc: true, sessKz: false, ...over });
+const cand = (over = {}) => ({ id: 'cc:SOL:15m:L:1', sym: 'SOLUSDT', iv: '15m', ms: 9e5, side: 'L', en: 150, sl: 148.5, tp: 154, rr: 2.6, bias: 2, disc: true, sessKz: false, ...over });
 
-test('倉位大小：風險 1.5%～2.5%，保證金 20U，槓桿＝名目價值÷20，停損一定比強平近', () => {
-  const a = sizeCoachOrder({ equity: 220, en: 100, sl: 99, disc: false, sessKz: false });
-  assert.equal(a.riskPct, 0.015);
-  assert.equal(a.lev, 17); // 220×1.5%÷1% = 330U → 330÷20 = 16.5 → 17 倍
-  assert.ok(Math.abs(a.riskU - 340 / 100) < 1e-9, '1R ≈ 3.4U');
-  const b = sizeCoachOrder({ equity: 220, en: 100, sl: 99, disc: true, sessKz: true });
-  assert.equal(b.riskPct, 0.025);
-  const c = sizeCoachOrder({ equity: 220, en: 100, sl: 99.9, disc: true, sessKz: true });
-  assert.equal(c.lev, 50, '最高 50 倍');
-  const d = sizeCoachOrder({ equity: 220, en: 100, sl: 95, disc: false, sessKz: false });
-  assert.ok(d.lev * 0.05 <= 0.8);
+test('倉位大小：每筆固定風險 20U，槓桿 ≤50 而且停損比強平近，保證金不夠就不下', () => {
+  const a = sizeCoachOrder({ equity: 220, en: 100, sl: 99 });
+  assert.ok(Math.abs(a.riskU - 20) < 1e-9, '打到停損虧 20U');
+  assert.equal(a.notional, 2000);
+  assert.equal(a.lev, 50);
+  assert.equal(a.margin, 40);
+  const far = sizeCoachOrder({ equity: 220, en: 100, sl: 95 });
+  assert.equal(far.lev, 16, '停損 5% → 槓桿 ≤ 0.8/0.05 = 16');
+  assert.ok(far.lev * 0.05 <= 0.8);
+  const near = sizeCoachOrder({ equity: 220, en: 100, sl: 99.8, maxNotional: 6000 });
+  assert.equal(near.notional, 6000, '名目價值有上限');
+  assert.ok(near.riskU < 20, '縮了之後實際風險變小');
+  const full = sizeCoachOrder({ equity: 220, en: 100, sl: 99, usedMargin: 190 });
+  assert.match(full.skip, /保證金不夠/);
 });
 
 test('自動下單：關的時候不下；開 Demo → 掛單 → 成交 → 平倉算 R', async () => {
@@ -58,6 +61,15 @@ test('自動下單：關的時候不下；開 Demo → 掛單 → 成交 → 平
   const st = (await handleCoachAuto(new Request('https://w/coach-auto'), env)).body;
   assert.equal(st.trades[0].state, 'closed');
   assert.equal(st.trades[0].r, -1.03);
+});
+
+test('條件：真錢只做順勢＋≥2R；Demo 有訊號就進', async () => {
+  for (const [mode, want] of [['live', 0], ['demo', 1]]) {
+    const env = { SMC_KV: makeKv(), EXECUTOR_URL: 'x' }, ex = fakeExecutor();
+    await env.SMC_KV.put('coachauto:cfg', JSON.stringify({ mode }));
+    const r = await runCoachAuto(env, { executorCall: ex.call, postDiscord: async () => {}, fetchKlines: async () => [], now: Date.UTC(2026, 9, 15, 5), candidates: [cand({ bias: 0, rr: 1.4 })] });
+    assert.equal(r.placed.length, want, mode);
+  }
 });
 
 test('煞車：當天虧到 -3R 就暫停；同時最多 5 筆；12 根沒成交就取消', async () => {

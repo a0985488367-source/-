@@ -8,7 +8,7 @@
  * 安全規則（伺服器端再檢查一次，不完全相信 Worker）：
  *   - 只碰 orderLinkId 以 cc: 開頭的單；取消也只取消 cc: 的單
  *   - 停損、目標一定要在正確的一側，而且跟進場單一起掛在 Bybit（App／Worker 斷線也有停損）
- *   - 名目價值上限 COACH_MAX_NOTIONAL（預設 1500U）、槓桿上限 100 倍或合約上限
+ *   - 名目價值上限 COACH_MAX_NOTIONAL（預設 6500U）、槓桿上限 100 倍或合約上限
  *   - 這個幣已經有持倉，或有不是 cc: 的掛單（使用者自己的單），就不下，避免跟手動單混在一起
  *   - 緊急停止觸發時一律拒絕
  */
@@ -33,7 +33,7 @@ export function coachAccount(kind) {
   }
   return null;
 }
-const maxNotional = () => Number(process.env.COACH_MAX_NOTIONAL || 1500);
+const maxNotional = () => Number(process.env.COACH_MAX_NOTIONAL || 6500);
 const call = (acct, method, path, params, retries = 1) => bybitCall(method, path, params, { retries, acct });
 
 function roundDown(v, step) { const d = decimalsOf(step); return Number((Math.floor(v / step + 1e-9) * step).toFixed(d)); }
