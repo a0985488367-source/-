@@ -208,3 +208,62 @@ export async function journalResponse(env, days, executorCall) {
     trades: trades.map(pick).sort((a, b) => b.closeTime - a.closeTime), open: stillOpen.map(pick),
   };
 }
+
+/* ═════════ 4. 每日戰報（台灣時間每天早上 8 點推 Discord） ═════════ */
+
+const DAILY_KEY = 'daily-report:';
+/** 現在是不是該推（UTC 00:00～00:30＝台灣 08:00～08:30），而且今天還沒推過 */
+export async function maybeDailyReport(env, { executorCall, postDiscord, dry = false, force = false, now = Date.now() } = {}) {
+  const d = new Date(now), day = new Date(now + 8 * 3600e3).toISOString().slice(0, 10);
+  if (!force && !(d.getUTCHours() === 0 && d.getUTCMinutes() < 30)) return { skipped: 'not-time' };
+  if (!force && env.SMC_KV && (await env.SMC_KV.get(DAILY_KEY + day))) return { skipped: 'already-sent' };
+  const text = await buildDailyReport(env, { executorCall, now });
+  if (!dry) {
+    if (env.SMC_KV) await env.SMC_KV.put(DAILY_KEY + day, String(now), { expirationTtl: 3 * 86400 });
+    await postDiscord(env, { embeds: [{ title: `📊 每日戰報｜${day}`, description: text, color: 0x8e9dff, timestamp: new Date(now).toISOString() }] });
+  }
+  return { sent: !dry, day, text };
+}
+
+export async function buildDailyReport(env, { executorCall, now = Date.now() } = {}) {
+  const sec = now / 1000, from = sec - 86400;
+  const done = await kvJson(env, LIVE_DONE_KEY, []), open = await kvJson(env, LIVE_OPEN_KEY, []);
+  const y = done.filter((x) => x.endT >= from && x.endT < sec);
+  const sumR = (l) => l.reduce((a, x) => a + x.r, 0);
+  const fR = (v) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}R`;
+  const wr = (l) => (l.length ? Math.round(l.filter((x) => x.r > 0).length / l.length * 100) + '%' : '—');
+  const coin = (s) => s.replace(/USDT$/, '');
+  const lines = ['**🧭 教練劇本（過去 24 小時結束的）**'];
+  if (!y.length) lines.push('沒有結束的劇本');
+  else {
+    const al = y.filter((x) => x.bias === 2);
+    lines.push(`${y.length} 筆・勝率 ${wr(y)}・總計 **${fR(sumR(y))}**`);
+    lines.push(`只算順勢：${al.length} 筆・${fR(sumR(al))}　｜　≥2R：${fR(sumR(y.filter((x) => x.rr >= 2)))}`);
+    const best = [...y].sort((a, b) => b.r - a.r)[0], worst = [...y].sort((a, b) => a.r - b.r)[0];
+    lines.push(`最好 ${coin(best.sym)} ${best.iv} ${fR(best.r)}・最差 ${coin(worst.sym)} ${worst.iv} ${fR(worst.r)}`);
+  }
+  if (done.length) {
+    const days = Math.max(1, Math.round((sec - Math.min(...done.map((x) => x.rtT))) / 86400));
+    lines.push(`開始記錄以來（${days} 天）：${done.length} 筆・總計 ${fR(sumR(done))}・進行中 ${open.length} 筆`);
+  }
+  // 你的手動單（有接日誌才有）
+  if (executorCall && env.EXECUTOR_URL && env.EXECUTOR_HMAC_SECRET) {
+    try {
+      const j = await journalResponse(env, 2, executorCall);
+      if (j.configured) {
+        const t = j.trades.filter((x) => x.strategy === 'manual' && x.closeTime >= now - 86400e3 && x.pnl != null);
+        const net = t.reduce((a, x) => a + x.pnl, 0), fees = t.reduce((a, x) => a + x.fees, 0);
+        lines.push('', '**💼 你的手動單（過去 24 小時）**');
+        lines.push(t.length ? `${t.length} 筆・勝率 ${Math.round(t.filter((x) => x.pnl > 0).length / t.length * 100)}%・淨損益 **${net >= 0 ? '+' : ''}${net.toFixed(2)}U**（手續費 ${fees.toFixed(2)}U）` : '沒有平倉的單');
+        if (j.balance) lines.push(`現在權益 ${j.balance.toFixed(2)}U`);
+        const noSl = (j.positions || []).filter((p) => !p.stopLoss);
+        if (noSl.length) lines.push(`⚠️ 沒設停損的持倉：${noSl.map((p) => `${coin(p.symbol)} ${p.side === 'Buy' ? '多' : '空'} ${p.leverage}x`).join('、')}`);
+      }
+    } catch (e) { lines.push('', `💼 手動單讀取失敗：${e.message}`); }
+  }
+  const watches = await kvJson(env, WATCH_KEY, []);
+  lines.push('', '**⏰ 今天的殺區（台灣時間）**', '倫敦 15:00–18:00・紐約早盤 20:00–23:00・紐約午盤 01:30–04:00');
+  if (watches.length) lines.push(`👀 盯單中 ${watches.length} 筆`);
+  lines.push('', '教練劇本回測沒有穩定優勢，戰報是幫你檢查紀律，不是進場建議。');
+  return lines.join('\n');
+}

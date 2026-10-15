@@ -200,7 +200,7 @@ import { handleAiAsk, aiStatus, aiSetBudget } from './ai.js';
 import { UPPER_TFS, GATE_BARS, structureOf, mtfGate } from '../src/smc/mtf-gate.js';
 import { trendExtraSignal, trendExtraIndicators, TREND_EXTRA_STOP_ATR } from '../src/strategies/trend-extra.js';
 import { analyze as coachAnalyze, structure as coachStructure, atrOf as coachAtr, coachState, coachFollow } from '../src/smc/coach.js';
-import { appTokenOk, loadCoachLive, saveCoachLive, trackCoachLive, coachLiveResponse, handleWatch, checkWatches, journalResponse } from './coach-extras.js';
+import { appTokenOk, loadCoachLive, saveCoachLive, trackCoachLive, coachLiveResponse, handleWatch, checkWatches, journalResponse, maybeDailyReport } from './coach-extras.js';
 
 const DEFAULTS = {
   MARKET_URL: 'https://raw.githubusercontent.com/a0985488367-source/-/main/data/market.json',
@@ -492,6 +492,8 @@ async function handleFetch(request, env, ctx) {
       return new Response(null, { status: 204, headers: { ...CORS_HEADERS, 'access-control-allow-methods': 'GET, POST, DELETE, OPTIONS', 'access-control-allow-headers': 'content-type, x-app-token', 'access-control-max-age': '86400' } });
     }
     if (url.pathname === '/coach-live') return json(await coachLiveResponse(env), { headers: { 'cache-control': 'no-store' } });
+    // 每日戰報預覽（不推播）：/daily-report
+    if (url.pathname === '/daily-report') return json(await maybeDailyReport(env, { executorCall, postDiscord, dry: true, force: true }), { headers: { 'cache-control': 'no-store' } });
     if (url.pathname === '/watch' || url.pathname === '/journal') {
       if (!appTokenOk(request, env)) return json({ error: '密碼不對：用你設定過的 AI_TOKEN、AUTO_TRADE_TOKEN 或 APP_TOKEN 其中一個' }, { status: 401 });
       if (url.pathname === '/watch') { const r = await handleWatch(request, env); return json(r.body, { status: r.status, headers: { 'cache-control': 'no-store' } }); }
@@ -703,11 +705,13 @@ async function run(env, { dry = false } = {}) {
   const coach = await runCoach(env, { dry }).catch((e) => ({ error: e.message }));
   // App 的「盯這單」：每次排程都看一次
   const watches = await checkWatches(env, { fetchKlines: fetchKlinesAny, postDiscord, intervalToMs, dry }).catch((e) => ({ error: e.message }));
+  // 每日戰報：台灣時間每天早上 8 點（UTC 00:00～00:30 之間第一次排程）推一次
+  const daily = await maybeDailyReport(env, { executorCall, postDiscord, dry }).catch((e) => ({ error: e.message }));
 
   const market = await getFreshMarket(env);
   const ageMin = (Date.now() - new Date(market.generatedAt).getTime()) / 60000;
   // 教練模式：照樣更新掃描結果（App 用），但不推原本的進場區到價提醒
-  if (cfg(env, 'SMC_PUSH_MODE') === 'coach') return { mode: 'coach', coach, watches, ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout };
+  if (cfg(env, 'SMC_PUSH_MODE') === 'coach') return { mode: 'coach', coach, watches, daily, ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout };
   if (ageMin > Number(cfg(env, 'MAX_MARKET_AGE_MIN'))) {
     return { skipped: 'market-too-old', ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout };
   }
