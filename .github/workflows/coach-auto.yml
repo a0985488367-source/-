@@ -82,3 +82,13 @@ jobs:
           A="$(curl -sS -m 20 "$WORKER/auto-trade/status")"
           printf '%s' "$A" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);console.log(`::notice::順勢策略自動下單（主帳戶）：開關=${j.enabled} 帳戶=${j.executorMode||j.mode||"?"} 追蹤中的部位=${j.trackedOpenPositions??"?"}`)}catch(e){console.log("::notice::讀不到 /auto-trade/status："+s.slice(0,200))}})'
           printf '%s' "$S" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);for(const [a,x] of Object.entries(j.accounts||{})){for(const p of x.positions||[])console.log(`::notice::${a} 持倉 ${p.symbol} ${p.side} ${p.size} 均價${p.avgPrice} 停損=${p.stopLoss??"無"} 止盈=${p.takeProfit??"無"} ${p.leverage}x 強平=${p.liqPrice??"無"} ${p.coach?"（教練）":"（不是教練的單）"}`);for(const o of x.orders||[])console.log(`::notice::${a} 教練掛單 ${o.symbol} ${o.side} ${o.qty}@${o.price} ${o.orderStatus}`)}const tl=j.trendLive||{};console.log(`::notice::超級趨勢真錢：${tl.cfg&&tl.cfg.enabled?"開":"關"} 進場=${tl.cfg?(tl.cfg.entry==="market"?"市價":"等教練"+tl.cfg.waitH+"h"):"?"} 每單${tl.cfg?Math.round(tl.cfg.riskPct*100):"?"}% 最多${tl.cfg?tl.cfg.maxOpen:"?"}張`);for(const t of (tl.trades||[]).slice(0,8))console.log(`::notice::超級趨勢真錢 ${t.sym} ${t.iv} ${t.dir} ${t.state}${t.via?"（"+t.via+"）":""} 進${t.entry} 停${t.stop} ${t.lev}x 1R=${(t.riskU||0).toFixed(2)}U ${t.r!=null?t.r+"R":""}`);for(const t of (j.trades||[]).slice(0,10))console.log(`::notice::紀錄 ${t.account} ${t.sym} ${t.iv} ${t.side} ${t.state} 進${t.en} 停${t.sl} 目${t.tp} ${t.why||""}`)}catch(e){}})'
+      - name: 教練下單明細
+        env:
+          T1: ${{ secrets.APP_TOKEN }}
+          T2: ${{ secrets.AI_TOKEN }}
+          T3: ${{ secrets.AUTO_TRADE_TOKEN }}
+          WORKER: ${{ vars.WORKER_URL || 'https://smc-signals.crypto-radar-guardian-24x7.workers.dev' }}
+        run: |
+          TOKEN="${T1:-${T2:-$T3}}"
+          echo "::add-mask::$TOKEN"
+          curl -sS -m 30 "$WORKER/coach-auto" -H "x-app-token: $TOKEN" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);const tpe=(ms)=>ms?new Date(ms+8*3600e3).toISOString().slice(5,16).replace("T"," "):"-";const L=(j.trades||[]).slice(0,40).map(t=>`${tpe(t.placedAt)} ${t.account} ${t.sym.replace(/USDT$/,"")} ${t.iv} ${t.side==="L"?"多":"空"} ${t.state}｜進${t.en} 停${t.sl} 目${t.tp} ${t.rr}R 順勢=${t.bias} 折溢價=${t.disc} ${t.lev}x 1R=${(t.riskU||0).toFixed(2)}U${t.fillPrice?" 成交"+t.fillPrice+"@"+tpe(t.fillAt):""}${t.r!=null?" 結果"+t.r+"R":""} ${t.why||""}`);const enc=(x)=>x.replace(/%/g,"%25").replace(/\n/g,"%0A");for(let k=0;k<L.length;k+=20)console.log(`::notice title=教練下單明細 ${k/20+1}::${enc(L.slice(k,k+20).join("\n"))}`)})'
