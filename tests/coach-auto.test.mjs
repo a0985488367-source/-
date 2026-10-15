@@ -114,3 +114,14 @@ test('兩個都開（both）：Demo 有訊號就進、真錢只做順勢＋≥2R
   assert.deepEqual(orders.sort(), ['demo:cc:a', 'demo:cc:b', 'live:cc:a']);
   assert.equal(r.placed.length, 3);
 });
+
+test('真錢條件可以一鍵切換：liveLoose 打開後逆勢、不到 2R 的也下真錢', async () => {
+  const env = { SMC_KV: makeKv(), EXECUTOR_URL: 'x' }, ex = fakeExecutor();
+  await env.SMC_KV.put('coachauto:cfg', JSON.stringify({ mode: 'live' }));
+  const deps = { executorCall: ex.call, postDiscord: async () => {}, fetchKlines: async () => [], now: Date.UTC(2026, 9, 15, 5) };
+  await runCoachAuto(env, { ...deps, candidates: [cand({ id: 'cc:x', sym: 'XUSDT', bias: 0, rr: 1.5 })] });
+  assert.equal(ex.calls.filter((c) => c.path === '/coach/order').length, 0, '嚴格時不下');
+  await handleCoachAuto(new Request('https://w/coach-auto', { method: 'POST', body: JSON.stringify({ liveLoose: true }) }), env);
+  await runCoachAuto(env, { ...deps, candidates: [cand({ id: 'cc:y', sym: 'YUSDT', bias: 0, rr: 1.5 })] });
+  assert.equal(ex.calls.filter((c) => c.path === '/coach/order').length, 1, '寬鬆時下');
+});

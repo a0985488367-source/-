@@ -12,6 +12,11 @@ on:
       confirm:
         description: '切到真錢（live 或 both）時請輸入 REAL（大寫）確認'
         default: ''
+      live_rule:
+        description: '真錢下單條件：不變／寬鬆（跟模擬一樣，有訊號就進）／嚴格（只做順勢＋≥2R）'
+        type: choice
+        options: [不變, 寬鬆, 嚴格]
+        default: 不變
 
 jobs:
   switch:
@@ -22,6 +27,7 @@ jobs:
         env:
           MODE: ${{ inputs.mode }}
           CONFIRM: ${{ inputs.confirm }}
+          LIVE_RULE: ${{ inputs.live_rule }}
           T1: ${{ secrets.APP_TOKEN }}
           T2: ${{ secrets.AI_TOKEN }}
           T3: ${{ secrets.AUTO_TRADE_TOKEN }}
@@ -35,6 +41,12 @@ jobs:
             R="$(curl -sS -m 20 -X POST "$WORKER/coach-auto" -H "content-type: application/json" -H "x-app-token: $TOKEN" -d "{\"mode\":\"$MODE\"}")"
             echo "回應：$R"
             echo "$R" | grep -q '"ok": true' || { echo "::error::切換失敗：$R"; exit 1; }
+          fi
+          if [ "$LIVE_RULE" = "寬鬆" ] || [ "$LIVE_RULE" = "嚴格" ]; then
+            V=false; [ "$LIVE_RULE" = "寬鬆" ] && V=true
+            R="$(curl -sS -m 20 -X POST "$WORKER/coach-auto" -H "content-type: application/json" -H "x-app-token: $TOKEN" -d "{\"liveLoose\":$V}")"
+            echo "$R" | grep -q '"ok": true' || { echo "::error::改真錢條件失敗：$R"; exit 1; }
+            echo "::notice::真錢條件改成：$LIVE_RULE"
           fi
           S="$(curl -sS -m 30 "$WORKER/coach-auto" -H "x-app-token: $TOKEN")"
           SUMMARY="$(printf '%s' "$S" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);console.log(`模式=${j.cfg.mode}｜`+Object.entries(j.accounts||{}).map(([a,s])=>`${a}：權益=${s.equity??"讀不到"} 錯誤=${s.error||"無"}`).join("｜")+`｜紀錄=${(j.trades||[]).length} 筆`)}catch(e){console.log("讀不到狀態："+s.slice(0,200))}})')"
