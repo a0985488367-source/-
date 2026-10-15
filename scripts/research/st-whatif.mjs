@@ -39,8 +39,7 @@ const u = (v) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}U`;
 const rr = (v) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}R`;
 
 /** 照線上規則從進場走到停損（或到現在還開著） */
-export function walk(bars, { long, entry, stop0, openTime }) {
-  const risk = Math.abs(entry - stop0);
+export function walk(bars, { long, entry, stop0, openTime, risk = Math.abs(entry - stop0) }) {
   let stop = stop0, maxFav = 0, be = false;
   for (const b of bars) {
     if (b.time + M5 <= openTime) continue;
@@ -76,14 +75,21 @@ export function walk(bars, { long, entry, stop0, openTime }) {
       const entry = t.avg, risk = sig.stopDistance, stop0 = long ? entry - risk : entry + risk;
       const qty = t.maxSize, riskU = qty * risk;
       const m5 = await klines(t.symbol, '5m', Math.ceil((Date.now() - t.openTime) / M5) + 3);
-      const w = walk(m5, { long, entry, stop0, openTime: t.openTime });
+      let w = walk(m5, { long, entry, stop0, openTime: t.openTime }), adj = false;
+      // 模擬的停損是用成交價重算的，跟實際掛的差一點點；實際上那時候沒被打到（後來才手動平倉），就把停損放到那段期間的極值外面再走一次
+      if (!t.open && w.closed && !w.be && w.exitTime < t.closeTime) {
+        const seg = m5.filter((b) => b.time + M5 > t.openTime && b.time <= Math.min(t.closeTime, w.exitTime + M5));
+        const ext = long ? Math.min(...seg.map((b) => b.low)) : Math.max(...seg.map((b) => b.high));
+        const s2 = long ? Math.min(stop0, ext * (1 - 1e-5)) : Math.max(stop0, ext * (1 + 1e-5));
+        if (Math.abs(s2 - stop0) / risk < 0.15) { w = walk(m5, { long, entry, stop0: s2, openTime: t.openTime, risk }); adj = true; }
+      }
       const simR = (long ? w.exit - entry : entry - w.exit) / risk;
       const simU = simR * riskU - qty * (entry + w.exit) * FEE;
       const actU = t.open ? null : t.pnl, actR = actU == null ? null : actU / riskU;
       const manual = !t.open && !/^StopLoss/.test(t.exitBy || '');
       if (actU != null) { sumA += actU; sumAR += actR; }
       sumS += simU; sumSR += simU / riskU;
-      out.push(`${day(t.openTime)} ${t.symbol.replace(/USDT$/, '')} ${long ? '多' : '空'}｜進 ${+entry.toPrecision(6)} 停 ${+stop0.toPrecision(6)}（1R=${riskU.toFixed(1)}U）｜實際：${t.open ? '還開著' : `${manual ? '手動' : '停損'}平倉 ${day(t.closeTime)} ${u(actU)}（${rr(actR)}）`}｜沒手動的話：${w.closed ? `${day(w.exitTime)} ${w.be ? (w.maxFav >= M.trailFromR ? '追蹤停損' : '保本停損') : '原始停損'}出場` : `到現在還開著（停損 ${+w.stop.toPrecision(6)}）`} ${u(simU)}（${rr(simU / riskU)}）・最多浮盈 ${w.maxFav.toFixed(2)}R`);
+      out.push(`${day(t.openTime)} ${t.symbol.replace(/USDT$/, '')} ${long ? '多' : '空'}｜進 ${+entry.toPrecision(6)} 停 ${+stop0.toPrecision(6)}（1R=${riskU.toFixed(1)}U）｜實際：${t.open ? '還開著' : `${manual ? '手動' : '停損'}平倉 ${day(t.closeTime)} ${u(actU)}（${rr(actR)}）`}｜沒手動的話：${w.closed ? `${day(w.exitTime)} ${w.be ? (w.maxFav >= M.trailFromR ? '追蹤停損' : '保本停損') : '原始停損'}出場` : `到現在還開著（停損 ${+w.stop.toPrecision(6)}）`}${adj ? '※停損照實際沒被打到' : ''} ${u(simU)}（${rr(simU / riskU)}）・最多浮盈 ${w.maxFav.toFixed(2)}R`);
     } catch (e) { out.push(`${t.symbol} 失敗：${e.message}`); }
   }
   out.push(`合計 ${st.length} 筆｜實際 ${u(sumA)}（${rr(sumAR)}）｜沒手動平倉的話 ${u(sumS)}（${rr(sumSR)}，還開著的用現價算）`);
