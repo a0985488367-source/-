@@ -104,3 +104,13 @@ test('每筆風險＝權益 9%：Demo 當成 220U → 約 19.8U', async () => {
   const o = ex.calls.find((c) => c.path === '/coach/order').body;
   assert.ok(Math.abs(o.qty * 1 - 19.8) < 0.01, `風險 ${o.qty}U`);
 });
+
+test('兩個都開（both）：Demo 有訊號就進、真錢只做順勢＋≥2R，各下各的帳戶', async () => {
+  const env = { SMC_KV: makeKv(), EXECUTOR_URL: 'x' }, ex = fakeExecutor();
+  await env.SMC_KV.put('coachauto:cfg', JSON.stringify({ mode: 'both' }));
+  const deps = { executorCall: ex.call, postDiscord: async () => {}, fetchKlines: async () => [], now: Date.UTC(2026, 9, 15, 5) };
+  const r = await runCoachAuto(env, { ...deps, candidates: [cand({ id: 'cc:a', sym: 'AUSDT', bias: 2, rr: 2.5 }), cand({ id: 'cc:b', sym: 'BUSDT', bias: 1, rr: 1.4 })] });
+  const orders = ex.calls.filter((c) => c.path === '/coach/order').map((c) => `${c.body.account}:${c.body.orderLinkId}`);
+  assert.deepEqual(orders.sort(), ['demo:cc:a', 'demo:cc:b', 'live:cc:a']);
+  assert.equal(r.placed.length, 3);
+});
