@@ -14,7 +14,10 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { rebuildTrades } from '../lib/demo-trades.mjs';
-import { klines } from './lib.mjs';
+import { klines as anyKlines, pagedKlines } from './lib.mjs';
+import { PROVIDERS } from '../../src/data/providers.js';
+// Demo 單在 Bybit 成交，K 線優先用 Bybit（別家的影線不一樣，會誤判停損）
+const klines = (s, iv, n) => pagedKlines(PROVIDERS.bybit, s, iv, n).catch(() => anyKlines(s, iv, n));
 import { trendExtraSignal } from '../../src/strategies/trend-extra.js';
 
 const URL_BASE = String(process.env.EXECUTOR_URL || '').replace(/\/$/, '');
