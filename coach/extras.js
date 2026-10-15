@@ -61,6 +61,7 @@ async function loadLive() {
   el.classList.remove('mut');
   el.innerHTML = `<p class="small mut" style="margin-top:0">從現在起，Worker 每根 K 棒收盤自動記錄 15 檔 × 15m／30m／1h 的教練劇本：回踩就算成交，用回踩那根的進場／停損／目標往後算，扣手續費。是真實紀錄，不是回測。${since ? '從 ' + C0.mdhm(since) + ' 開始。' : ''}</p>
     <div class="filters">${[['all', '全部'], ['aligned', '只算順勢'], ['rr2', '只算 ≥2R'], ['both', '順勢＋≥2R']].map(([k, n]) => `<button class="chip ${liveFilter === k ? 'on' : ''}" data-lf="${k}">${n}</button>`).join('')}</div>
+    ${totalHtml(list)}
     <div class="kpis"><div><b>${s.n || 0}</b><span>已結束</span></div><div><b>${s.n ? pct(s.wr) : '—'}</b><span>勝率</span></div><div><b class="${s.n && s.avg >= 0 ? 'up' : 'dn'}">${s.n ? r1(s.avg) : '—'}</b><span>平均每筆</span></div><div><b>${open.length}</b><span>進行中</span></div></div>
     ${s.n < 30 ? `<p class="small mut">筆數還少（${s.n || 0} 筆），至少 30～50 筆再下結論。</p>` : ''}
     ${s.n ? table('各週期', ['15m', '30m', '1h'].map((t) => [t, list.filter((x) => x.iv === t)])) +
@@ -70,7 +71,37 @@ async function loadLive() {
       `<p class="h3">最近結束的</p>${list.slice(0, 25).map((x) => `<button class="ev" data-open="${x.sym.replace(/USDT$/, '')}|${x.iv}|${x.side}"><span class="mut small">${C0.mdhm(x.endT)}</span><span class="side ${x.side}">${x.sym.replace(/USDT$/, '')} ${x.iv} ${C0.sideName(x.side)}</span><span class="${x.r >= 0 ? 'up' : 'dn'}">${x.out === 'tp' ? '到目標' : x.out === 'sl' ? '停損' : '到期'} ${r1(x.r)}</span></button>`).join('')}` : ''}
     ${open.length ? `<p class="h3">進行中（已回踩、還沒結果）</p>${open.slice(0, 20).map((x) => `<button class="ev" data-open="${x.sym.replace(/USDT$/, '')}|${x.iv}|${x.side}"><span class="mut small">${C0.mdhm(x.rtT)}</span><span class="side ${x.side}">${x.sym.replace(/USDT$/, '')} ${x.iv} ${C0.sideName(x.side)}</span><span>${x.rr}R・${x.bias === 2 ? '順勢' : x.bias === 0 ? '逆勢' : '未定'}</span></button>`).join('')}` : ''}`;
   el.querySelectorAll('[data-lf]').forEach((b) => { b.onclick = () => { liveFilter = b.dataset.lf; loadLive(); }; });
+  drawCurve($('#eqc'), list);
+  const ri = $('#riskU'); if (ri) ri.onchange = () => { C0.store.set('smc-risk-u', Math.max(0, Number(ri.value) || 0)); loadLive(); };
   bindOpen(el);
+}
+/** 總計 R：全部、今天（台灣時間）、近 7 天、最大回撤，再換算成每單風險 X U 的金額 */
+function totalHtml(list) {
+  const sum = list.reduce((a, x) => a + x.r, 0), now = Date.now() / 1000;
+  const day0 = Math.floor((now + 8 * 3600) / 86400) * 86400 - 8 * 3600;
+  const today = list.filter((x) => x.endT >= day0).reduce((a, x) => a + x.r, 0), w7 = list.filter((x) => x.endT >= now - 7 * 86400).reduce((a, x) => a + x.r, 0);
+  let peak = 0, cum = 0, dd = 0;
+  for (const x of [...list].sort((a, b) => a.endT - b.endT)) { cum += x.r; peak = Math.max(peak, cum); dd = Math.max(dd, peak - cum); }
+  const riskU = C0.store.get('smc-risk-u', 5);
+  const f1 = (v) => (v >= 0 ? '+' : '') + v.toFixed(1) + 'R';
+  return `<div class="card total"><div class="row"><span class="mut small">總計</span><span class="sp"></span><span class="small mut">每單風險 <input id="riskU" type="number" min="0" step="1" value="${riskU}">U 的話</span></div>
+    <div class="row"><b class="bigr ${sum >= 0 ? 'up' : 'dn'}">${f1(sum)}</b><span class="sp"></span><b class="${sum >= 0 ? 'up' : 'dn'}">${sum * riskU >= 0 ? '+' : ''}${(sum * riskU).toFixed(1)}U</b></div>
+    <div class="row small"><span>今天 <b class="${today >= 0 ? 'up' : 'dn'}">${f1(today)}</b></span><span>近 7 天 <b class="${w7 >= 0 ? 'up' : 'dn'}">${f1(w7)}</b></span><span>最大回撤 <b class="dn">-${dd.toFixed(1)}R</b></span></div>
+    <canvas id="eqc"></canvas></div>`;
+}
+/** 累積 R 曲線 */
+function drawCurve(cv, list) {
+  if (!cv || list.length < 2) { if (cv) cv.style.display = 'none'; return; }
+  const pts = [0]; let c = 0;
+  for (const x of [...list].sort((a, b) => a.endT - b.endT)) { c += x.r; pts.push(c); }
+  const dpr = devicePixelRatio || 1, W = cv.clientWidth || 320, H = 110;
+  cv.width = W * dpr; cv.height = H * dpr; cv.style.height = H + 'px';
+  const g = cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const lo = Math.min(0, ...pts), hi = Math.max(0, ...pts), Y = (v) => 6 + (hi - v) / ((hi - lo) || 1) * (H - 12), X = (i) => i / (pts.length - 1) * (W - 2) + 1;
+  g.strokeStyle = 'rgba(140,153,184,.35)'; g.setLineDash([3, 3]); g.beginPath(); g.moveTo(0, Y(0)); g.lineTo(W, Y(0)); g.stroke(); g.setLineDash([]);
+  const last = pts[pts.length - 1], col = last >= 0 ? '#2CD3A3' : '#FF6E6E';
+  g.beginPath(); pts.forEach((v, i) => (i ? g.lineTo(X(i), Y(v)) : g.moveTo(X(i), Y(v)))); g.strokeStyle = col; g.lineWidth = 2; g.stroke();
+  g.lineTo(X(pts.length - 1), Y(0)); g.lineTo(X(0), Y(0)); g.closePath(); g.fillStyle = last >= 0 ? 'rgba(44,211,163,.12)' : 'rgba(255,110,110,.12)'; g.fill();
 }
 function bindOpen(el) {
   el.querySelectorAll('[data-open]').forEach((b) => {
