@@ -200,7 +200,7 @@ import { handleAiAsk, aiStatus, aiSetBudget } from './ai.js';
 import { UPPER_TFS, GATE_BARS, structureOf, mtfGate } from '../src/smc/mtf-gate.js';
 import { trendExtraSignal, trendExtraIndicators, TREND_EXTRA_STOP_ATR } from '../src/strategies/trend-extra.js';
 import { analyze as coachAnalyze, structure as coachStructure, atrOf as coachAtr, coachState, coachFollow } from '../src/smc/coach.js';
-import { runCoachAuto, handleCoachAuto, autoCandidate } from './coach-auto.js';
+import { runCoachAuto, handleCoachAuto, autoCandidate, placeTrendLive, manageTrendLive } from './coach-auto.js';
 import { sessionOf } from '../src/smc/sessions.js';
 import { appTokenOk, loadCoachLive, saveCoachLive, trackCoachLive, coachLiveResponse, handleWatch, checkWatches, journalResponse, maybeDailyReport } from './coach-extras.js';
 
@@ -708,6 +708,7 @@ async function run(env, { dry = false } = {}) {
   const coach = await runCoach(env, { dry }).catch((e) => ({ error: e.message }));
   // 教練自動下單（App 開關，預設關）：對帳、煞車、下新單
   const coachAuto = await runCoachAuto(env, { candidates: coach?.autoCandidates || [], executorCall, postDiscord, fetchKlines: fetchKlinesAny, dry }).catch((e) => ({ error: e.message }));
+  const trendLive = dry ? null : await manageTrendLive(env, { executorCall, postDiscord, getPrices }).catch((e) => ({ error: e.message }));
   if (coach) delete coach.autoCandidates;
   // App 的「盯這單」：每次排程都看一次
   const watches = await checkWatches(env, { fetchKlines: fetchKlinesAny, postDiscord, intervalToMs, dry }).catch((e) => ({ error: e.message }));
@@ -717,7 +718,7 @@ async function run(env, { dry = false } = {}) {
   const market = await getFreshMarket(env);
   const ageMin = (Date.now() - new Date(market.generatedAt).getTime()) / 60000;
   // 教練模式：照樣更新掃描結果（App 用），但不推原本的進場區到價提醒
-  if (cfg(env, 'SMC_PUSH_MODE') === 'coach') return { mode: 'coach', coach, coachAuto, watches, daily, ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout };
+  if (cfg(env, 'SMC_PUSH_MODE') === 'coach') return { mode: 'coach', coach, coachAuto, trendLive, watches, daily, ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout };
   if (ageMin > Number(cfg(env, 'MAX_MARKET_AGE_MIN'))) {
     return { skipped: 'market-too-old', ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout };
   }
@@ -2114,6 +2115,17 @@ async function runBreakoutInterval(env, interval, { dry, use, budget }) {
     const res = await breakoutOrder(env, sig, interval, barOpen);
     orders.push({ symbol: sig.symbol, strategy: sig.strategy, dir: sig.dir, ...res });
     if (res.orderId || res.error) await postDiscord(env, buildBreakoutEmbed(sig, res, interval, res.account ?? await executorMode(env))).catch(() => {});
+    // 超級趨勢另外在使用者的真錢帳戶下一張（跟 Demo 那張無關，各下各的）
+    if (sig.strategy === 'st') {
+      try {
+        const price = Number((await getPrices([sig.symbol]).catch(() => ({})))[sig.symbol]) || sig.close;
+        const live = await placeTrendLive(env, sig, {
+          interval, signalId: altSignalId(sig, interval, barOpen), price, plan: altPlan(env, sig, price),
+          management: { ...DEFAULT_MANAGEMENT, ...emaCrossManagement(env) }, executorCall, postDiscord,
+        });
+        if (live) orders.at(-1).live = live;
+      } catch (e) { orders.at(-1).live = { error: e.message }; }
+    }
   }
   return {
     bar,
