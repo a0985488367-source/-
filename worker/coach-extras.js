@@ -106,7 +106,10 @@ export function resolveLive(rec, W) {
 }
 
 export async function coachLiveResponse(env) {
-  const open = await kvJson(env, LIVE_OPEN_KEY, []), done = await kvJson(env, LIVE_DONE_KEY, []);
+  const open = await kvJson(env, LIVE_OPEN_KEY, []);
+  // 戰績從 10/14 開始算：舊規則（回踩可以在轉向之前）那天的紀錄也一起給，標 rule:1，App 可以篩掉
+  const old = (await kvJson(env, 'coachlive:done', [])).map((x) => ({ ...x, rule: 1 }));
+  const done = [...(await kvJson(env, LIVE_DONE_KEY, [])), ...old];
   return { open, done, fees: { maker: MAKER, taker: TAKER }, maxHold: LIVE_MAX_HOLD };
 }
 

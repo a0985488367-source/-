@@ -109,6 +109,24 @@ jobs:
           flyctl secrets set --stage -a "$APP" "BYBIT_READ_API_KEY=$K" "BYBIT_READ_API_SECRET=$S" > /dev/null
           echo "✅ 已設定交易日誌唯讀金鑰（長度 ${#K}／${#S}，部署後生效）"
 
+      - name: 設定 SMC 教練自動下單的帳戶金鑰（真錢＝BYBIT_LIVE_API_*、Demo＝BYBIT_DEMO_API_*，有設定才做）
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          LIVE_KEY: ${{ secrets.BYBIT_LIVE_API_KEY }}
+          LIVE_SECRET: ${{ secrets.BYBIT_LIVE_API_SECRET }}
+          DEMO_KEY: ${{ secrets.BYBIT_DEMO_API_KEY }}
+          DEMO_SECRET: ${{ secrets.BYBIT_DEMO_API_SECRET }}
+        run: |
+          # 教練自動下單跟主帳戶（6 個順勢策略）分開：真錢單走使用者自己的真實帳戶，Demo 單走 Demo 帳戶。
+          # 開不開下單是 App 裡的開關（預設關），這裡只是讓 Executor 拿得到金鑰。
+          trim() { printf '%s' "$1" | tr -d '[:space:]'; }
+          ARGS=()
+          K="$(trim "$LIVE_KEY")"; S="$(trim "$LIVE_SECRET")"
+          if [ -n "$K" ] && [ -n "$S" ]; then echo "::add-mask::$K"; echo "::add-mask::$S"; ARGS+=("COACH_LIVE_API_KEY=$K" "COACH_LIVE_API_SECRET=$S"); echo "真錢帳戶：有"; else echo "真錢帳戶：沒有 BYBIT_LIVE_API_KEY"; fi
+          K="$(trim "$DEMO_KEY")"; S="$(trim "$DEMO_SECRET")"
+          if [ -n "$K" ] && [ -n "$S" ]; then echo "::add-mask::$K"; echo "::add-mask::$S"; ARGS+=("COACH_DEMO_API_KEY=$K" "COACH_DEMO_API_SECRET=$S"); echo "Demo 帳戶：有"; else echo "Demo 帳戶：沒有 BYBIT_DEMO_API_KEY，主帳戶是 Demo 時用主帳戶"; fi
+          if [ ${#ARGS[@]} -gt 0 ]; then flyctl secrets set --stage -a "$APP" "${ARGS[@]}" > /dev/null; echo "✅ 已設定教練下單金鑰（部署後生效）"; fi
+
       - name: 部署
         working-directory: executor
         env:

@@ -23,7 +23,7 @@ function sign(secret, message) {
 export async function bybitCall(method, path, params = {}, { retries = 0, acct = null } = {}) {
   // acct：改用另一組金鑰／主機（交易日誌查使用者真實帳戶用，只會是唯讀的 GET）
   const host = acct ? acct.host : config.bybitHost, apiKey = acct ? acct.key : config.bybitApiKey, apiSecret = acct ? acct.secret : config.bybitApiSecret;
-  if (acct && method !== 'GET') throw new Error('交易日誌帳戶只能查詢');
+  if (acct && method !== 'GET' && !acct.trade) throw new Error('交易日誌帳戶只能查詢');
   for (let attempt = 0; ; attempt++) {
     const ts = String(Date.now());
     const recvWindow = '10000';

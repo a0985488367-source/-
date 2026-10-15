@@ -73,7 +73,10 @@ function stubBybitFetch(bybit) {
         if (cursor === 'p2') return j(0, 'OK', { list: [{ symbol: 'BTCUSDT', side: 'Sell', orderLinkId: '', execPrice: '110', execQty: '1', execFee: '0.05', execTime: '2', execType: 'Trade', closedSize: '1' }], nextPageCursor: '' });
         return j(0, 'OK', { list: [], nextPageCursor: '' });
       }
-      if (u.includes('/v5/position/closed-pnl')) return j(10016, 'service unavailable', {});
+      if (u.includes('/v5/position/closed-pnl')) return bybit.closedPnl ? j(0, 'OK', { list: bybit.closedPnl }) : j(10016, 'service unavailable', {});
+      if (u.includes('/v5/order/realtime')) return j(0, 'OK', { list: bybit.openOrders ?? [] });
+      if (u.includes('/v5/order/history')) return j(0, 'OK', { list: bybit.orderHistory ?? [] });
+      if (u.includes('/v5/order/cancel')) return bybit.cancelError ? j(bybit.cancelError.code, bybit.cancelError.msg, {}) : j(0, 'OK', {});
       if (u.includes('/v5/order/create')) {
         return bybit.orderError ? j(bybit.orderError.code, bybit.orderError.msg, {}) : j(0, 'OK', bybit.orderResult ?? { orderId: 'order-123' });
       }
@@ -305,4 +308,52 @@ test('GET /journal：沒設定唯讀金鑰時回 configured=false，不會去打
     const raw = await fetch(baseUrl + '/journal');
     assert.equal(raw.status, 401);
   } finally { await close(); }
+});
+
+
+test('POST /coach/order：限價＋停損＋目標一起掛，數量照合約步進取整；方向錯、別人的單、已有持倉都擋下', async () => {
+  const { baseUrl, close } = await startServer();
+  const bybit = { calls: [] };
+  stubBybitFetch(bybit);
+  try {
+    const ok = await call(baseUrl, 'POST', '/coach/order', { account: 'demo', symbol: 'SOLUSDT', side: 'Buy', qty: 3.37, price: 150.004, stopLoss: 148, takeProfit: 156, leverage: 30, orderLinkId: 'cc:SOL:15m:L:1' });
+    assert.equal(ok.body.ok, true, JSON.stringify(ok.body));
+    assert.equal(ok.body.qty, 3.3);
+    assert.equal(ok.body.leverage, 25, '不超過合約槓桿上限');
+    const create = bybit.calls.find((c) => c.url.includes('/v5/order/create'));
+    assert.equal(create.body.orderType, 'Limit');
+    assert.equal(create.body.stopLoss, '148');
+    assert.equal(create.body.takeProfit, '156');
+    assert.match(create.url, /api-demo\.bybit\.com/, '主帳戶是 Demo 時，demo 走主帳戶');
+
+    const wrong = await call(baseUrl, 'POST', '/coach/order', { account: 'demo', symbol: 'SOLUSDT', side: 'Buy', qty: 1, price: 150, stopLoss: 152, takeProfit: 156, leverage: 5, orderLinkId: 'cc:x' });
+    assert.equal(wrong.status, 400);
+    const notCoach = await call(baseUrl, 'POST', '/coach/order', { account: 'demo', symbol: 'SOLUSDT', side: 'Buy', qty: 1, price: 150, stopLoss: 148, takeProfit: 156, leverage: 5, orderLinkId: 'manual-1' });
+    assert.equal(notCoach.status, 400);
+
+    bybit.openOrders = [{ orderLinkId: 'my-own', symbol: 'SOLUSDT' }];
+    const busy = await call(baseUrl, 'POST', '/coach/order', { account: 'demo', symbol: 'SOLUSDT', side: 'Buy', qty: 1, price: 150, stopLoss: 148, takeProfit: 156, leverage: 5, orderLinkId: 'cc:y' });
+    assert.equal(busy.body.skipped, 'symbol-has-manual-orders');
+    bybit.openOrders = []; bybit.positions = [{ symbol: 'SOLUSDT', size: '2', side: 'Sell' }];
+    const pos = await call(baseUrl, 'POST', '/coach/order', { account: 'demo', symbol: 'SOLUSDT', side: 'Buy', qty: 1, price: 150, stopLoss: 148, takeProfit: 156, leverage: 5, orderLinkId: 'cc:z' });
+    assert.equal(pos.body.skipped, 'symbol-has-position');
+
+    const live = await call(baseUrl, 'POST', '/coach/order', { account: 'live', symbol: 'SOLUSDT', side: 'Buy', qty: 1, price: 150, stopLoss: 148, takeProfit: 156, leverage: 5, orderLinkId: 'cc:w' });
+    assert.equal(live.status, 400, '沒設真錢金鑰時拒絕');
+  } finally { globalThis.fetch = realFetch; await close(); }
+});
+
+test('POST /coach/cancel 只取消 cc: 的單；GET /coach/state 只回 cc: 的掛單', async () => {
+  const { baseUrl, close } = await startServer();
+  const bybit = { calls: [], openOrders: [{ orderLinkId: 'cc:a', symbol: 'BTCUSDT', side: 'Buy', price: '1', qty: '1', cumExecQty: '0', orderStatus: 'New' }, { orderLinkId: 'manual', symbol: 'ETHUSDT' }], orderHistory: [{ orderLinkId: 'cc:b', symbol: 'XRPUSDT', orderStatus: 'Filled', avgPrice: '2', cumExecQty: '5', updatedTime: '9' }], closedPnl: [{ symbol: 'XRPUSDT', side: 'Sell', qty: '5', closedPnl: '1.5', avgEntryPrice: '2', avgExitPrice: '2.3', createdTime: '10', updatedTime: '10' }] };
+  stubBybitFetch(bybit);
+  try {
+    assert.equal((await call(baseUrl, 'POST', '/coach/cancel', { account: 'demo', symbol: 'BTCUSDT', orderLinkId: 'manual' })).status, 400);
+    assert.equal((await call(baseUrl, 'POST', '/coach/cancel', { account: 'demo', symbol: 'BTCUSDT', orderLinkId: 'cc:a' })).body.ok, true);
+    const st = await call(baseUrl, 'GET', '/coach/state?account=demo');
+    assert.equal(st.body.configured, true);
+    assert.deepEqual(st.body.orders.map((o) => o.orderLinkId), ['cc:a']);
+    assert.equal(st.body.history[0].orderStatus, 'Filled');
+    assert.equal(st.body.closedPnl[0].closedPnl, 1.5);
+  } finally { globalThis.fetch = realFetch; await close(); }
 });
