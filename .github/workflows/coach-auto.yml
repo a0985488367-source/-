@@ -1,0 +1,39 @@
+# 切換 SMC 教練自動下單（關／Demo／真錢）——跟 App「戰績」分頁的開關是同一個，手機在 GitHub 上按也可以
+name: 教練自動下單開關
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: '要切到哪裡'
+        type: choice
+        options: [demo, live, off]
+        default: demo
+      confirm:
+        description: '切到真錢（live）時請輸入 REAL（大寫）確認'
+        default: ''
+
+jobs:
+  switch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 切換
+        env:
+          MODE: ${{ inputs.mode }}
+          CONFIRM: ${{ inputs.confirm }}
+          T1: ${{ secrets.APP_TOKEN }}
+          T2: ${{ secrets.AI_TOKEN }}
+          T3: ${{ secrets.AUTO_TRADE_TOKEN }}
+          WORKER: ${{ vars.WORKER_URL || 'https://smc-signals.crypto-radar-guardian-24x7.workers.dev' }}
+        run: |
+          if [ "$MODE" = "live" ] && [ "$CONFIRM" != "REAL" ]; then echo "::error::切到真錢要在 confirm 輸入 REAL"; exit 1; fi
+          TOKEN="${T1:-${T2:-$T3}}"
+          [ -n "$TOKEN" ] || { echo "::error::GitHub Secrets 沒有 APP_TOKEN／AI_TOKEN／AUTO_TRADE_TOKEN"; exit 1; }
+          echo "::add-mask::$TOKEN"
+          R="$(curl -sS -m 20 -X POST "$WORKER/coach-auto" -H "content-type: application/json" -H "x-app-token: $TOKEN" -d "{\"mode\":\"$MODE\"}")"
+          echo "回應：$R"
+          echo "$R" | grep -q '"ok": true' || { echo "::error::切換失敗：$R"; exit 1; }
+          S="$(curl -sS -m 30 "$WORKER/coach-auto" -H "x-app-token: $TOKEN")"
+          SUMMARY="$(printf '%s' "$S" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);console.log(`模式=${j.cfg.mode}｜帳戶權益=${j.equity??"讀不到"}｜錯誤=${j.stateError||"無"}｜紀錄=${(j.trades||[]).length} 筆`)}catch(e){console.log("讀不到狀態："+s.slice(0,200))}})')"
+          echo "::notice::$SUMMARY"
