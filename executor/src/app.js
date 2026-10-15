@@ -1,5 +1,5 @@
 import { logger } from './logger.js';
-import { handleCoachOrder, handleCoachCancel, handleCoachState } from './coach.js';
+import { handleCoachOrder, handleCoachCancel, handleCoachState, handleCoachLeverage } from './coach.js';
 import { verifyRequest } from './hmac.js';
 import {
   handleTrade, handleAddExitLeg, handleSetStop, handleCancelAll, handleClose,
@@ -33,6 +33,7 @@ const AUTHENTICATED_ROUTES = new Map([
   ['POST /emergency-stop', (req, res, body) => handleEmergencyStop(req, res, body)],
   ['POST /coach/order', (req, res, body) => handleCoachOrder(req, res, body)],
   ['POST /coach/cancel', (req, res, body) => handleCoachCancel(req, res, body)],
+  ['POST /coach/leverage', (req, res, body) => handleCoachLeverage(req, res, body)],
 ]);
 
 /** GET 系列的驗證端點沒有 body，簽章用空字串當 payload；驗證失敗一律回 401，不透露細節（避免幫攻擊者除錯簽章） */
