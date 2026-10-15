@@ -20,6 +20,8 @@
   規則只有一份；`dojo/` 是 SMC 道場學習 App。兩個都靠 GitHub Pages（pages.yml）上線。
   2026-10-15 起教練看的幣＝Bybit 成交額前 50（`COACH_TOP`）＋`SMC_SYMBOLS`＋App 搜尋後自己加的（`worker/coach-coins.js`、`/coach-coins`），
   App 掃描板、Discord 教練提醒、教練自動下單共用同一份名單。
+  5/5（到位）劇本即時追蹤：App 用 Bybit WebSocket 現價即時更新卡片；Discord 推了「到位」後 Worker 每分鐘用 1 分 K 追蹤
+  （`worker/coach-live5.js`，奇數分鐘 `LIGHT_CRON` 只跑這個），到目標／打停損／跑掉／回到進場點／靠近停損都推。
   教練 App 的戰績（`/coach-live`）、盯這單（`/watch`）、交易日誌（`/journal`）後端在 `worker/coach-extras.js`；
   日誌經 Executor 的 `GET /journal` 讀使用者真實帳戶（唯讀金鑰 `BYBIT_READ_API_KEY/SECRET`，用 executor-deploy.yml 同步到 Fly）。
   2026-10-15 起有「教練自動下單」（`worker/coach-auto.js`＋Executor `/coach/*`）：App 開關 關／Demo／真錢（預設關），
