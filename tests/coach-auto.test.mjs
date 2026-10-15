@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { sizeCoachOrder, runCoachAuto, handleCoachAuto, dayStart, safeLev, liqSafe } from '../worker/coach-auto.js';
+import { sizeCoachOrder, runCoachAuto, handleCoachAuto, dayStart, safeLev, liqSafe, placeTrendLive, manageTrendLive } from '../worker/coach-auto.js';
 
 function makeKv() {
   const m = new Map();
@@ -145,4 +145,59 @@ test('強平價太靠近停損：判斷正確，開著的教練倉位會自動�
   assert.equal(c.body.leverage, 27);
   assert.ok(c.body.addMargin > 10 && c.body.addMargin < 15, `補保證金 ${c.body.addMargin}`);
   assert.match(msgs.at(-1), /40x → 27x，強平價移到 106\.100/);
+});
+
+test('超級趨勢上真錢：每單風險 9%、市價進場掛停損、最多 5 張、保本＋追蹤停損、平倉算 R', async () => {
+  const env = { SMC_KV: makeKv(), EXECUTOR_URL: 'x' }, msgs = [], calls = [];
+  const st = { configured: true, equity: 240, positions: [], orders: [], history: [], closedPnl: [], errors: {} };
+  const executorCall = async (e, m, path, { body } = {}) => {
+    calls.push({ path, body });
+    if (path === '/coach/state') return st;
+    if (path === '/coach/market') { st.positions.push({ symbol: body.symbol, size: body.qty, avgPrice: 10, positionIM: body.qty * 10 / body.leverage }); return { ok: true, qty: body.qty, avgPrice: 10, stopLoss: body.stopLoss, leverage: body.leverage, liqPrice: 11.2 }; }
+    if (path === '/coach/set-stop') return { ok: true, stopLoss: body.stopLoss };
+    throw new Error(path);
+  };
+  const deps = { executorCall, postDiscord: async (e, p) => msgs.push(p.content) };
+  const mgmt = { breakevenAtR: 1, breakevenOffsetR: 0.05, trailFromR: 1.5, trailGapR: 1.5 };
+  const sig = (sym) => ({ symbol: sym, strategy: 'st', dir: 'short' });
+  const plan = { entry: 10, stop: 10.4, risk: 0.4 };
+  // 不是超級趨勢 → 不上真錢
+  assert.equal(await placeTrendLive(env, { ...sig('AUSDT'), strategy: 'ema' }, { interval: '4h', signalId: 'ema:A', price: 10, plan, management: mgmt, ...deps }), null);
+  const r = await placeTrendLive(env, sig('AUSDT'), { interval: '4h', signalId: 'st:A:s:4h:x', price: 10, plan, management: mgmt, ...deps, now: 1000 });
+  assert.ok(r.ok);
+  const o = calls.find((c) => c.path === '/coach/market').body;
+  assert.equal(o.account, 'live');
+  assert.equal(o.orderLinkId, 'ct:st:A:s:4h:x');
+  assert.equal(o.side, 'Sell');
+  assert.ok(Math.abs(o.qty * 0.4 - 21.6) < 1e-9, '打到停損虧 240×9%＝21.6U');
+  assert.equal(o.leverage, safeLev(0.04));
+  assert.match(msgs.at(-1), /超級趨勢（真錢）｜A 4h 空單：市價成交/);
+  // 同一個幣不重複
+  await placeTrendLive(env, sig('AUSDT'), { interval: '4h', signalId: 'st:A:s:4h:y', price: 10, plan, management: mgmt, ...deps });
+  assert.equal(calls.filter((c) => c.path === '/coach/market').length, 1);
+  // 最多 5 張
+  for (const x of ['B', 'C', 'D', 'E', 'F']) await placeTrendLive(env, sig(x + 'USDT'), { interval: '4h', signalId: 'st:' + x, price: 10, plan, management: mgmt, ...deps });
+  assert.equal(calls.filter((c) => c.path === '/coach/market').length, 5);
+  assert.match(msgs.at(-1), /達上限 5/);
+  // 賺 1.2R → 保本；賺 3R → 追蹤到鎖 1.5R
+  await manageTrendLive(env, { ...deps, getPrices: async () => ({ AUSDT: 9.52 }) });
+  let t = JSON.parse(await env.SMC_KV.get('trendlive:trades')).find((x) => x.sym === 'AUSDT');
+  assert.ok(Math.abs(t.stop - 9.98) < 1e-9, `保本 ${t.stop}`);
+  assert.match(msgs.at(-1), /保本/);
+  await manageTrendLive(env, { ...deps, getPrices: async () => ({ AUSDT: 8.8 }) });
+  t = JSON.parse(await env.SMC_KV.get('trendlive:trades')).find((x) => x.sym === 'AUSDT');
+  assert.ok(Math.abs(t.stop - 9.4) < 1e-9, `追蹤 ${t.stop}`);
+  // 平倉
+  st.positions = st.positions.filter((p) => p.symbol !== 'AUSDT');
+  st.closedPnl = [{ symbol: 'AUSDT', closedPnl: 32.4, updatedTime: 5000 }];
+  await manageTrendLive(env, { ...deps, getPrices: async () => ({}) });
+  t = JSON.parse(await env.SMC_KV.get('trendlive:trades')).find((x) => x.sym === 'AUSDT');
+  assert.equal(t.state, 'closed');
+  assert.equal(t.r, 1.5);
+  assert.match(msgs.at(-1), /平倉 \+1\.50R/);
+  // App 可以關掉
+  await handleCoachAuto(new Request('https://w/coach-auto', { method: 'POST', body: JSON.stringify({ trendLive: false }) }), env);
+  assert.equal(await placeTrendLive(env, sig('GUSDT'), { interval: '4h', signalId: 'st:G', price: 10, plan, management: mgmt, ...deps }), null);
+  const g = (await handleCoachAuto(new Request('https://w/coach-auto'), env)).body;
+  assert.equal(g.trendLive.cfg.enabled, false);
 });

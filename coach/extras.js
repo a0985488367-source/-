@@ -78,6 +78,18 @@ async function loadLive() {
 }
 /* ═════════ 教練自動下單 ═════════ */
 let autoView = null, liveConfirm = false;
+/** 超級趨勢上真錢（跟教練共用真錢帳戶）：開關＋最近的單 */
+function trendLiveHtml(tl) {
+  if (!tl || !tl.cfg) return '';
+  const c = tl.cfg, T = tl.trades || [], done = T.filter((t) => t.state === 'closed');
+  const sumR = done.reduce((a, t) => a + (t.r || 0), 0), sumU = done.reduce((a, t) => a + (t.pnl || 0), 0);
+  return `<div class="next"><b>💰 超級趨勢（真錢）：${c.enabled ? '<span class="up">開</span>' : '<span class="mut">關</span>'}</b><br>
+    <span class="small mut">4h 超級趨勢有訊號就在真錢帳戶市價進場，每單風險權益 ${Math.round(c.riskPct * 100)}%、最多 ${c.maxOpen} 張；停損掛在 Bybit，不設止盈，賺到 1R 保本、之後追蹤停損。</span>
+    ${done.length ? `<br><span class="small">已平倉 ${done.length} 筆：<b class="${sumR >= 0 ? 'up' : 'dn'}">${sumR >= 0 ? '+' : ''}${sumR.toFixed(2)}R（${usd(sumU)}）</b></span>` : ''}
+    ${T.slice(0, 8).map((t) => `<div class="ev"><span class="mut small">${C0.mdhm(t.openedAt / 1000)}</span><span class="side ${t.dir === 'long' ? 'L' : 'S'}">${t.sym.replace(/USDT$/, '')} ${t.iv} ${t.dir === 'long' ? '多' : '空'} ${t.lev}x</span>${t.state === 'closed' ? `<span class="${t.r >= 0 ? 'up' : 'dn'}">${t.r >= 0 ? '+' : ''}${t.r.toFixed(2)}R（${usd(t.pnl)}）</span>` : `<span class="small">持倉中・停損 ${t.stop}${t.beMoved ? '（已保本）' : ''}</span>`}</div>`).join('')}
+    <button class="watchbtn" id="tlToggle" style="margin-top:8px">${c.enabled ? '按這裡關掉超級趨勢真錢（已經開的單照停損走）' : '按這裡打開超級趨勢真錢'}</button></div>`;
+}
+
 async function loadAuto() {
   const el = $('#auto'); if (!el) return;
   if (!getToken()) { el.innerHTML = `<div class="card"><p class="h3" style="margin-top:0">🤖 教練自動下單</p><button class="chip on" id="autoTok">輸入 App 密碼來設定</button></div>`; $('#autoTok').onclick = () => tokenForm(el, '自動下單要動你的 Bybit 帳戶，所以要密碼。', loadAuto); return; }
@@ -97,6 +109,7 @@ async function loadAuto() {
     <p class="small mut">劇本剛回踩、離進場點 0.5R 內就掛單（Demo ${cfg.demoLoose !== false ? '有訊號就進' : '只做順 4h＋≥2R'}；真錢 ${cfg.liveLoose ? '<b class="dn">有訊號就進（寬鬆）</b>' : '只做順 4h＋≥2R（嚴格）'}）。每筆風險 <b>權益的 ${((cfg.riskPct ?? 0.09) * 100).toFixed(0)}%</b>${j.equity ? `（現在約 ${(Math.min(j.equity, cfg.mode === 'demo' ? (cfg.demoEquity || 220) : Infinity) * (cfg.riskPct ?? 0.09)).toFixed(1)}U）` : ''}，打到停損虧這麼多，槓桿照停損距離算、最高 ${cfg.maxLev}x、停損一定比強平近，保證金不夠就跳過；同時最多 ${cfg.maxPos} 筆；當天虧 ${cfg.dailyLosses ?? 5} 筆就停到隔天 8 點。停損目標都掛在 Bybit 上。</p>
     ${cfg.pausedUntil > now ? `<div class="next warn"><b>今天已暫停</b><br>今天已經虧 ${cfg.dailyLosses ?? 5} 筆，${C0.mdhm(cfg.pausedUntil / 1000)} 恢復。</div>` : ''}
     <button class="watchbtn" id="liveRule" style="${cfg.liveLoose ? '' : 'border-color:var(--line);color:var(--mut)'}">${cfg.liveLoose ? '真錢現在：有訊號就進 → 按這裡改回「只做順勢＋≥2R」' : '真錢現在：只做順勢＋≥2R → 按這裡改成跟模擬一樣（有訊號就進）'}</button>
+    ${trendLiveHtml(j.trendLive)}
     ${Object.entries(j.accounts || {}).map(([a, s]) => s.error ? `<p class="small dn">${a === 'live' ? '真錢' : 'Demo'}帳戶讀取錯誤：${C0.esc(s.error)}</p>` : `<p class="small">${a === 'live' ? '💰 真錢' : '🧪 Demo'}帳戶權益 <b>${s.equity != null ? s.equity.toFixed(2) : '—'}U</b>${s.pausedUntil > now ? `・<b class="dn">今天已暫停</b>` : ''}</p>`).join('')}
     <div class="filters"><span class="small mut">看成績：</span>${['demo', 'live'].map((a) => `<button class="chip ${view === a ? 'on' : ''}" data-av="${a}">${a === 'demo' ? 'Demo' : '真錢'}</button>`).join('')}</div>
     <div class="row"><b class="bigr ${sum >= 0 ? 'up' : 'dn'}">${sum >= 0 ? '+' : ''}${sum.toFixed(2)}R</b><span class="sp"></span><b class="${usdSum >= 0 ? 'up' : 'dn'}">${usd(usdSum)}</b></div>
@@ -104,6 +117,13 @@ async function loadAuto() {
     ${T.slice(0, 15).map((t) => `<div class="ev"><span class="mut small">${C0.mdhm(t.placedAt / 1000)}</span><span class="side ${t.side}">${t.sym.replace(/USDT$/, '')} ${t.iv} ${t.side === 'L' ? '多' : '空'} ${t.lev}x</span>${t.bias === 2 && t.rr >= 2 ? '<span class="small up">嚴格✓</span>' : t.bias != null ? '<span class="small mut">寬鬆</span>' : ''}<span class="small">${t.state === 'pending' ? '掛單中' : t.state === 'open' ? '持倉中' : t.state === 'cancelled' ? '取消・' + (t.why || '') : ''}</span>${t.state === 'closed' ? `<span class="${t.r >= 0 ? 'up' : 'dn'}">${t.r >= 0 ? '+' : ''}${t.r.toFixed(2)}R（${usd(t.pnl)}）</span>` : `<span class="small mut">1R＝${(t.riskU || 0).toFixed(2)}U</span>`}</div>`).join('') || '<p class="small mut">還沒有單。</p>'}
   </div>`;
   el.querySelectorAll('[data-av]').forEach((b) => { b.onclick = () => { autoView = b.dataset.av; loadAuto(); }; });
+  const tlb = $('#tlToggle');
+  if (tlb) tlb.onclick = async () => {
+    tlb.disabled = true;
+    const on = !(j.trendLive && j.trendLive.cfg.enabled);
+    try { await api('/coach-auto', { method: 'POST', body: { trendLive: on } }); C0.toast(on ? '超級趨勢真錢：打開' : '超級趨勢真錢：關掉'); } catch (e) { C0.toast('設定失敗：' + e.message); }
+    loadAuto();
+  };
   $('#liveRule').onclick = async () => {
     const b = $('#liveRule'); b.disabled = true;
     try { await api('/coach-auto', { method: 'POST', body: { liveLoose: !cfg.liveLoose } }); C0.toast(cfg.liveLoose ? '真錢改回：只做順勢＋≥2R' : '真錢改成：有訊號就進'); } catch (e) { C0.toast('設定失敗：' + e.message); }

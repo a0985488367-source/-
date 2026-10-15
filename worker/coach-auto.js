@@ -83,6 +83,10 @@ export async function handleCoachAuto(request, env, { executorCall } = {}) {
     for (const [k, lo, hi] of [['riskPct', 0.005, 0.2], ['maxPos', 1, 10], ['dailyLosses', 1, 20]]) if (b[k] !== undefined) next[k] = Math.max(lo, Math.min(hi, Number(b[k]) || cfg[k]));
     if (typeof b.liveLoose === 'boolean') next.liveLoose = b.liveLoose;
     if (typeof b.demoLoose === 'boolean') next.demoLoose = b.demoLoose;
+    if (typeof b.trendLive === 'boolean') {
+      const tc = await loadTrendLiveCfg(env);
+      if (env.SMC_KV) await env.SMC_KV.put(TL_CFG_KEY, JSON.stringify({ ...tc, enabled: b.trendLive }));
+    }
     if (next.mode !== cfg.mode) { next.pausedUntil = 0; next.paused = {}; }
     if (env.SMC_KV) await env.SMC_KV.put(CFG_KEY, JSON.stringify(next));
     return { status: 200, body: { ok: true, cfg: next } };
@@ -102,7 +106,8 @@ export async function handleCoachAuto(request, env, { executorCall } = {}) {
     }
   }
   const first = Object.values(accounts)[0] || {};
-  return { status: 200, body: { cfg, trades: trades.slice(0, 200), accounts, equity: first.equity ?? null, stateError: first.error || null } };
+  const trendLive = { cfg: await loadTrendLiveCfg(env), trades: (await kvJson(env, TL_TRADES_KEY, [])).slice(0, 100) };
+  return { status: 200, body: { cfg, trades: trades.slice(0, 200), accounts, equity: first.equity ?? null, stateError: first.error || null, trendLive } };
 }
 
 /**
@@ -200,7 +205,10 @@ export async function runCoachAuto(env, { candidates = [], executorCall, postDis
       if (live.some((t) => t.sym === c.sym)) continue;
       const st = await getState(acct);
       if (st.error || !st.configured || !(st.equity > 0)) { out.errors.push(`讀不到 ${ACCT_NAME[acct]} 帳戶：${st.error || Object.values(st.errors || {})[0] || '權益是 0'}`); break; }
-      const usedMargin = live.reduce((a, t) => a + (t.margin || 0), 0);
+      // 真錢帳戶還有超級趨勢的單一起吃保證金：已經開著的倉位用交易所的實際保證金，加上教練還沒成交的掛單
+      const usedMargin = acct === 'live'
+        ? (st.positions || []).reduce((a, p) => a + (p.positionIM || 0), 0) + live.filter((t) => t.state === 'pending').reduce((a, t) => a + (t.margin || 0), 0)
+        : live.reduce((a, t) => a + (t.margin || 0), 0);
       const eq = acct === 'demo' ? Math.min(st.equity, cfg.demoEquity) : st.equity;
       const sz = sizeCoachOrder({ equity: eq, en: c.en, sl: c.sl, riskU: eq * (cfg.riskPct ?? 0.09), maxLev: cfg.maxLev, maxNotional: cfg.maxNotional, usedMargin });
       if (sz.skip) { out.errors.push(`${ACCT_NAME[acct]} ${c.id}：${sz.skip}`); continue; }
@@ -221,4 +229,105 @@ export async function runCoachAuto(env, { candidates = [], executorCall, postDis
   if (dirty && !dry) await env.SMC_KV.put(TRADES_KEY, JSON.stringify(trades.slice(0, TRADES_MAX)));
   if (cfgDirty && !dry) await env.SMC_KV.put(CFG_KEY, JSON.stringify(cfg));
   return out;
+}
+
+/**
+ * 超級趨勢上真錢（2026-10-15 使用者要的）：6 個順勢策略照樣在 Demo 主帳戶跑，超級趨勢有訊號時「另外」在使用者的真錢帳戶下一張。
+ *   每單風險＝真錢權益 × riskPct（使用者選 9%）、最多同時 maxOpen 張（使用者選 5 張），跟教練共用真錢帳戶、保證金一起算
+ *   市價進場＋停損掛在 Bybit；不設止盈，之後照 Demo 一樣保本＋追蹤停損（EMA_CROSS_* 參數）
+ *   槓桿用 safeLev，強平一定在停損外面；這個幣已經有倉位（教練的或使用者自己的）就不下
+ *   App／開關流程可以關掉（trendlive:cfg enabled）
+ */
+const TL_CFG_KEY = 'trendlive:cfg';
+const TL_TRADES_KEY = 'trendlive:trades';
+export const TREND_LIVE_DEFAULT = { enabled: true, riskPct: 0.09, maxOpen: 5, strategies: ['st'], maxLev: 50, maxNotional: 6000 };
+const TL_NAME = { st: '超級趨勢', ema: 'EMA 交叉', macd: 'MACD 零軸', gc: '黃金交叉' };
+export async function loadTrendLiveCfg(env) { return { ...TREND_LIVE_DEFAULT, ...(await kvJson(env, TL_CFG_KEY, {})) }; }
+
+/** 順勢策略有訊號時呼叫：符合條件就在真錢帳戶市價進場。回傳 null＝這個策略不上真錢 */
+export async function placeTrendLive(env, sig, { interval, signalId, price, plan, management, executorCall, postDiscord, now = Date.now() }) {
+  const cfg = await loadTrendLiveCfg(env);
+  if (!cfg.enabled || !cfg.strategies.includes(sig.strategy) || !env.SMC_KV || !env.EXECUTOR_URL) return null;
+  const trades = await kvJson(env, TL_TRADES_KEY, []);
+  const open = trades.filter((t) => t.state === 'open');
+  const tag = `💰 ${TL_NAME[sig.strategy] || sig.strategy}（真錢）｜${coin(sig.symbol)} ${interval} ${sig.dir === 'long' ? '多單' : '空單'}`;
+  const skip = async (why, say = true) => { if (say) await postDiscord(env, { content: `${tag}：沒下（${why}）` }).catch(() => {}); return { skipped: why }; };
+  if (open.length >= cfg.maxOpen) return skip(`已經 ${open.length} 張，達上限 ${cfg.maxOpen}`);
+  if (open.some((t) => t.sym === sig.symbol) || trades.some((t) => t.id === 'ct:' + signalId)) return skip('這個幣已經有單', false);
+  if (!plan || plan.skipped || plan.error || !(plan.risk > 0)) return skip(plan?.error || plan?.skipped || '算不出停損');
+  const st = await executorCall(env, 'GET', '/coach/state', { query: { account: 'live' } }).catch((e) => ({ error: e.message }));
+  if (st.error || !st.configured || !(st.equity > 0)) return skip(`讀不到真錢帳戶：${st.error || '權益是 0'}`);
+  if ((st.positions || []).some((p) => p.symbol === sig.symbol)) return skip('這個幣真錢帳戶已經有倉位');
+  const en = plan.entry, sl = plan.stop, dist = plan.risk / en;
+  const riskU = st.equity * cfg.riskPct;
+  const notional = Math.min(riskU / dist, cfg.maxNotional);
+  const lev = safeLev(dist, cfg.maxLev);
+  const margin = notional / lev;
+  const usedMargin = (st.positions || []).reduce((a, p) => a + (p.positionIM || 0), 0);
+  if (usedMargin + margin > st.equity * 0.95) return skip(`保證金不夠（要 ${margin.toFixed(0)}U，已用 ${usedMargin.toFixed(0)}U）`);
+  const id = ('ct:' + signalId).slice(0, 36);
+  const body = { account: 'live', symbol: sig.symbol, side: sig.dir === 'long' ? 'Buy' : 'Sell', qty: notional / en, stopLoss: sl, leverage: lev, orderLinkId: id, refPrice: price || en };
+  let r; try { r = await executorCall(env, 'POST', '/coach/market', { body }); } catch (e) { r = { ok: false, error: e.message }; }
+  if (!r.ok) return skip(r.skipped || r.error);
+  const fill = r.avgPrice || en, stop = r.stopLoss || sl;
+  const t = {
+    id, sym: sig.symbol, strategy: sig.strategy, iv: interval, dir: sig.dir, entry: fill, stop, initialStop: stop, qty: r.qty, lev: r.leverage,
+    riskU: r.qty * Math.abs(fill - stop), margin: r.qty * fill / r.leverage, management, maxFavorableR: 0, beMoved: false, trailing: false,
+    state: 'open', openedAt: now, equity: st.equity,
+  };
+  trades.unshift(t);
+  await env.SMC_KV.put(TL_TRADES_KEY, JSON.stringify(trades.slice(0, TRADES_MAX)));
+  await postDiscord(env, { content: `${tag}：市價成交 ${fmtP(fill)}・停損 ${fmtP(stop)}・${t.lev}x・保證金 ${t.margin.toFixed(0)}U・1R＝${t.riskU.toFixed(2)}U${r.liqPrice ? `・強平 ${fmtP(r.liqPrice)}` : ''}（不設止盈，賺到 ${management?.breakevenAtR ?? 1}R 保本、之後追蹤停損）` }).catch(() => {});
+  return { ok: true, id, qty: t.qty, lev: t.lev, riskU: t.riskU };
+}
+
+/** 每次排程：真錢的順勢單平倉了沒（算 R）、要不要保本／追蹤停損 */
+export async function manageTrendLive(env, { executorCall, postDiscord, getPrices, now = Date.now() }) {
+  if (!env.SMC_KV || !env.EXECUTOR_URL) return { skipped: 'no-executor' };
+  const trades = await kvJson(env, TL_TRADES_KEY, []);
+  const open = trades.filter((t) => t.state === 'open');
+  if (!open.length) return { open: 0 };
+  const st = await executorCall(env, 'GET', '/coach/state', { query: { account: 'live' } }).catch((e) => ({ error: e.message }));
+  if (st.error || !st.configured) return { error: st.error || '真錢帳戶沒設定' };
+  const prices = await getPrices(open.map((t) => t.sym)).catch(() => ({}));
+  let dirty = false, moved = 0, closed = 0;
+  for (const t of open) {
+    const tag = `💰 ${TL_NAME[t.strategy] || t.strategy}（真錢）｜${coin(t.sym)} ${t.iv} ${t.dir === 'long' ? '多' : '空'}`;
+    const pos = (st.positions || []).find((p) => p.symbol === t.sym);
+    if (!pos) {
+      const pnl = (st.closedPnl || []).filter((p) => p.symbol === t.sym && p.updatedTime >= t.openedAt - 60e3).reduce((a, p) => a + p.closedPnl, 0);
+      const r = t.riskU > 0 ? pnl / t.riskU : 0;
+      Object.assign(t, { state: 'closed', closedAt: now, pnl: Math.round(pnl * 100) / 100, r: Math.round(r * 100) / 100 });
+      await postDiscord(env, { content: `${r >= 0 ? '✅' : '⛔'} ${tag}：平倉 ${r >= 0 ? '+' : ''}${r.toFixed(2)}R（${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}U）` }).catch(() => {});
+      dirty = true; closed++;
+      continue;
+    }
+    const px = Number(prices[t.sym]);
+    const m = t.management || {};
+    const risk = Math.abs(t.entry - t.initialStop);
+    if (!(px > 0) || !(risk > 0)) continue;
+    const long = t.dir === 'long';
+    const fav = (long ? px - t.entry : t.entry - px) / risk;
+    if (fav > (t.maxFavorableR || 0)) { t.maxFavorableR = fav; dirty = true; }
+    let next = t.stop;
+    if (!t.beMoved && m.breakevenAtR > 0 && t.maxFavorableR >= m.breakevenAtR) {
+      const be = long ? t.entry + risk * (m.breakevenOffsetR || 0) : t.entry - risk * (m.breakevenOffsetR || 0);
+      if (long ? be > next : be < next) next = be;
+    }
+    if (m.trailFromR > 0 && t.maxFavorableR >= m.trailFromR) {
+      const lockR = t.maxFavorableR - (m.trailGapR || 0);
+      const tp = long ? t.entry + risk * lockR : t.entry - risk * lockR;
+      if (long ? tp > next : tp < next) next = tp;
+    }
+    if (next !== t.stop) {
+      const r = await executorCall(env, 'POST', '/coach/set-stop', { body: { account: 'live', symbol: t.sym, stopLoss: next } }).catch((e) => ({ ok: false, error: e.message }));
+      if (r.ok) {
+        const first = !t.beMoved;
+        t.stop = r.stopLoss || next; t.beMoved = true; t.trailing = t.maxFavorableR >= (m.trailFromR || Infinity); dirty = true; moved++;
+        if (first) await postDiscord(env, { content: `🔒 ${tag}：賺到 ${t.maxFavorableR.toFixed(1)}R，停損移到 ${fmtP(t.stop)}（保本）` }).catch(() => {});
+      }
+    }
+  }
+  if (dirty) await env.SMC_KV.put(TL_TRADES_KEY, JSON.stringify(trades.slice(0, TRADES_MAX)));
+  return { open: open.length - closed, moved, closed };
 }
