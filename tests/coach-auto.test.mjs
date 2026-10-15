@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { sizeCoachOrder, runCoachAuto, handleCoachAuto, dayStart, safeLev, liqSafe, placeTrendLive, manageTrendLive } from '../worker/coach-auto.js';
+import { sizeCoachOrder, runCoachAuto, handleCoachAuto, dayStart, safeLev, liqSafe, placeTrendLive, manageTrendLive, fillTrendFromCoach } from '../worker/coach-auto.js';
 
 function makeKv() {
   const m = new Map();
@@ -158,6 +158,7 @@ test('超級趨勢上真錢：每單風險 9%、市價進場掛停損、最多 5
     throw new Error(path);
   };
   const deps = { executorCall, postDiscord: async (e, p) => msgs.push(p.content) };
+  await env.SMC_KV.put('trendlive:cfg', JSON.stringify({ entry: 'market' })); // 這個測試測原本的「訊號一出來就市價進」
   const mgmt = { breakevenAtR: 1, breakevenOffsetR: 0.05, trailFromR: 1.5, trailGapR: 1.5 };
   const sig = (sym) => ({ symbol: sym, strategy: 'st', dir: 'short' });
   const plan = { entry: 10, stop: 10.4, risk: 0.4 };
@@ -171,7 +172,7 @@ test('超級趨勢上真錢：每單風險 9%、市價進場掛停損、最多 5
   assert.equal(o.side, 'Sell');
   assert.ok(Math.abs(o.qty * 0.4 - 21.6) < 1e-9, '打到停損虧 240×9%＝21.6U');
   assert.equal(o.leverage, safeLev(0.04));
-  assert.match(msgs.at(-1), /超級趨勢（真錢）｜A 4h 空單：市價成交/);
+  assert.match(msgs.at(-1), /超級趨勢（真錢）｜A 4h 空單：訊號一出來，市價成交/);
   // 同一個幣不重複
   await placeTrendLive(env, sig('AUSDT'), { interval: '4h', signalId: 'st:A:s:4h:y', price: 10, plan, management: mgmt, ...deps });
   assert.equal(calls.filter((c) => c.path === '/coach/market').length, 1);
@@ -200,4 +201,47 @@ test('超級趨勢上真錢：每單風險 9%、市價進場掛停損、最多 5
   assert.equal(await placeTrendLive(env, sig('GUSDT'), { interval: '4h', signalId: 'st:G', price: 10, plan, management: mgmt, ...deps }), null);
   const g = (await handleCoachAuto(new Request('https://w/coach-auto'), env)).body;
   assert.equal(g.trendLive.cfg.enabled, false);
+});
+
+test('教練幫超級趨勢找進場點：訊號先等，同方向教練劇本回踩才用教練停損進場；保本照 4h 停損距離；等不到就放棄', async () => {
+  const env = { SMC_KV: makeKv(), EXECUTOR_URL: 'x' }, msgs = [], calls = [];
+  const st = { configured: true, equity: 240, positions: [], orders: [], history: [], closedPnl: [], errors: {} };
+  const executorCall = async (e, m, path, { body } = {}) => {
+    calls.push({ path, body });
+    if (path === '/coach/state') return st;
+    if (path === '/coach/market') { st.positions.push({ symbol: body.symbol, size: body.qty, avgPrice: body.refPrice, positionIM: 10 }); return { ok: true, qty: body.qty, avgPrice: body.refPrice, stopLoss: body.stopLoss, leverage: body.leverage }; }
+    if (path === '/coach/set-stop') return { ok: true, stopLoss: body.stopLoss };
+    throw new Error(path);
+  };
+  const deps = { executorCall, postDiscord: async (e, p) => msgs.push(p.content) };
+  const mgmt = { breakevenAtR: 1, breakevenOffsetR: 0.05, trailFromR: 1.5, trailGapR: 1.5 };
+  const now = Date.UTC(2026, 9, 15, 12);
+  // 4h 翻多：停損 2 ATR＝0.4（4%），先不下單
+  const w = await placeTrendLive(env, { symbol: 'AUSDT', strategy: 'st', dir: 'long' }, { interval: '4h', signalId: 'st:A:l:4h:x', price: 10, plan: { entry: 10, stop: 9.6, risk: 0.4 }, management: mgmt, ...deps, now });
+  assert.ok(w.waiting);
+  assert.equal(calls.filter((c) => c.path === '/coach/market').length, 0);
+  assert.match(msgs.at(-1), /先不追，等教練 24 小時內/);
+  // 反方向的教練劇本、別的幣：不進
+  await fillTrendFromCoach(env, { candidates: [cand({ sym: 'AUSDT', side: 'S', en: 10.1, sl: 10.2 }), cand({ sym: 'BUSDT' })], ...deps, getPrices: async () => ({ AUSDT: 10.1 }), now: now + 3600e3 });
+  assert.equal(calls.filter((c) => c.path === '/coach/market').length, 0);
+  // 同方向的 30m 多單劇本回踩：用教練停損 10.0（現價 10.1，停損距離 ~1%）進場，風險還是 9%
+  const r = await fillTrendFromCoach(env, { candidates: [cand({ id: 'cc:A', sym: 'AUSDT', iv: '30m', ms: 18e5, side: 'L', en: 10.08, sl: 10.0, tp: 10.4 })], ...deps, getPrices: async () => ({ AUSDT: 10.1 }), now: now + 7200e3 });
+  assert.deepEqual(r.entered, ['AUSDT']);
+  const o = calls.find((c) => c.path === '/coach/market').body;
+  assert.equal(o.stopLoss, 10.0);
+  assert.ok(Math.abs(o.qty * 0.1 - 21.6) < 1e-6, '打到教練停損虧 21.6U');
+  assert.match(msgs.at(-1), /教練 30m 多單劇本回踩，市價成交/);
+  // 保本要等賺到一個 4h 停損距離（0.4），不是教練的 0.1
+  await manageTrendLive(env, { ...deps, getPrices: async () => ({ AUSDT: 10.3 }) });
+  assert.equal(calls.filter((c) => c.path === '/coach/set-stop').length, 0, '賺 0.2 還不到 0.4，不動');
+  await manageTrendLive(env, { ...deps, getPrices: async () => ({ AUSDT: 10.55 }) });
+  const s1 = calls.filter((c) => c.path === '/coach/set-stop');
+  assert.equal(s1.length, 1);
+  assert.ok(Math.abs(s1[0].body.stopLoss - 10.12) < 1e-9, `保本 ${s1[0].body.stopLoss}`);
+  assert.match(msgs.at(-1), /賺到 4\.5R，停損移到/);
+  // 另一個幣等了 24 小時沒等到 → 放棄
+  await placeTrendLive(env, { symbol: 'CUSDT', strategy: 'st', dir: 'short' }, { interval: '4h', signalId: 'st:C', price: 5, plan: { entry: 5, stop: 5.2, risk: 0.2 }, management: mgmt, ...deps, now });
+  const e = await fillTrendFromCoach(env, { candidates: [], ...deps, getPrices: async () => ({}), now: now + 25 * 3600e3 });
+  assert.deepEqual(e.expired, ['CUSDT']);
+  assert.match(msgs.at(-1), /24 小時內教練沒有找到同方向的回踩/);
 });

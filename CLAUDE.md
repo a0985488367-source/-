@@ -26,6 +26,8 @@
   只做順 4h＋≥2R、每筆保證金 20U、同時最多 5 筆、當天 -3R 停；真錢單走使用者自己的帳戶（COACH_LIVE），跟 6 個順勢策略的主帳戶分開。
   2026-10-15 起「超級趨勢」另外上真錢（`placeTrendLive`／`manageTrendLive`，Executor `/coach/market`、`/coach/set-stop`，orderLinkId `ct:`）：
   Demo 照跑，真錢每單風險 9%、最多 5 張、跟教練共用真錢帳戶，App／coach-auto.yml 可以關（KV `trendlive:cfg`）。
+  2026-10-15 起真錢的超級趨勢改成「教練找進場點」（`entry: 'coach'`，沒回測、使用者決定直接上）：翻多／翻空先記成 waiting，
+  24 小時內 15m～1h 有同方向教練劇本剛回踩才用教練停損市價進（`fillTrendFromCoach`），保本／追蹤照 4h 的 2 ATR（riskBase）算；Demo 照原本市價進當對照組。
 - 策略／評分規則的改動要先用 `scripts/research/` 的回測（GitHub Actions `research.yml`）驗證，
   前後半段資料都成立才上線；這個環境連不到交易所，回測只能在 Actions 上跑。
   **策略改動要先把回測數據給使用者看，由使用者決定要不要上線**（只動回測工具的可以直接合併）。
