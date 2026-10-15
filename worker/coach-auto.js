@@ -3,9 +3,9 @@
  *
  * 什麼時候下：教練劇本到位（回踩在結構轉向之後）、跟 4h 同向、盈虧比 ≥ 2R、現在離進場點 0.5R 內、回踩就是剛收盤那一兩根。
  * 怎麼下：在進場點掛限價單，停損、目標一起掛在 Bybit；12 根 K 棒沒成交、或沒成交就先到目標，就取消。
- * 下多大：每筆保證金固定 marginU（預設 20U）。風險＝權益的 1.5%，折溢價對 +0.5%、掃蕩在殺區 +0.5%（最多 2.5%）；
- *         名目價值＝風險 ÷ 停損距離，槓桿＝名目價值 ÷ 保證金（15m 停損近槓桿高、1h 停損遠槓桿低），
- *         最高 50 倍，而且停損距離 × 槓桿 ≤ 0.8（停損一定比強平近）。1R＝打到停損會虧的 U。
+ * 下多大：每筆固定風險 riskU（預設 20U，打到停損虧 20U）；名目價值＝20U ÷ 停損距離、槓桿最高 50 倍且停損一定比強平近，
+ *         保證金不夠就不下。1R＝打到停損會虧的 U。
+ * 條件：真錢只做順 4h＋≥2R；Demo 預設「有訊號就進」（demoLoose），之後看成績再決定真錢要不要放寬。
  * 煞車：同時最多 maxPos 筆（預設 5，含還沒成交的掛單）；當天（台灣時間 08:00 起算）累計虧到 dailyLossR（預設 3R）就停到隔天 08:00。
  * 帳戶：App 開關 off／demo／live，預設 off。Executor 那邊 demo、live 是兩個分開的帳戶，跟 6 個順勢策略的主帳戶無關。
  */
@@ -14,8 +14,10 @@ const CFG_KEY = 'coachauto:cfg';
 const TRADES_KEY = 'coachauto:trades';
 const TRADES_MAX = 400;
 const VALID_BARS = 12;
-// demoEquity：Demo 帳戶錢比較多（跟順勢策略共用），算倉位時當成只有這麼多，才跟真錢帳戶（約 220U）的槓桿一樣
-const DEFAULT_CFG = { mode: 'off', marginU: 20, maxPos: 5, dailyLossR: 3, maxLev: 50, demoEquity: 220 };
+// riskU：每筆打到停損虧多少 U（2026-10-15 使用者改成固定 20U）
+// demoEquity：Demo 帳戶錢比較多（跟順勢策略共用），檢查保證金夠不夠時當成只有這麼多，才跟真錢帳戶（約 220U）一樣
+// demoLoose：Demo 先「有訊號就進」（不限順勢、不限 2R，只要劇本剛回踩、離進場點 0.5R 內），真錢才用嚴格條件
+const DEFAULT_CFG = { mode: 'off', riskU: 20, maxPos: 5, dailyLossR: 3, maxLev: 50, maxNotional: 6000, demoEquity: 220, demoLoose: true };
 const ACCT_NAME = { demo: 'Demo', live: '真錢' };
 
 async function kvJson(env, key, dflt) {
@@ -29,26 +31,31 @@ const fmtP = (p) => (p >= 1000 ? p.toFixed(1) : p >= 10 ? p.toFixed(3) : p >= 1 
 export function dayStart(now = Date.now()) { return Math.floor(now / 86400e3) * 86400e3; } // 台灣 08:00＝UTC 00:00
 
 /** 倉位大小：純函式，測試用 */
-export function sizeCoachOrder({ equity, en, sl, disc, sessKz, marginU = 20, maxLev = 50 }) {
+/**
+ * 倉位大小（純函式）：每筆固定風險 riskU（打到停損虧多少 U）
+ *   名目價值＝riskU ÷ 停損距離（最多 maxNotional，超過就縮，實際風險變小）
+ *   槓桿＝最多 maxLev，而且停損距離 × 槓桿 ≤ 0.8（停損一定比強平近）；保證金＝名目價值 ÷ 槓桿
+ *   保證金加上已經開著的單超過可用權益 95% 就不下
+ */
+export function sizeCoachOrder({ equity, en, sl, riskU = 20, maxLev = 50, maxNotional = 6000, usedMargin = 0 }) {
   if (!(equity > 0 && en > 0 && sl > 0 && en !== sl)) return { skip: '資料不足' };
-  const riskPct = 0.015 + (disc ? 0.005 : 0) + (sessKz ? 0.005 : 0);
   const stopDist = Math.abs(en - sl) / en;
-  let lev = Math.ceil((equity * riskPct / stopDist) / marginU);
-  lev = Math.max(1, Math.min(lev, maxLev, Math.floor(0.8 / stopDist)));
-  if (lev < 1) return { skip: '停損太遠' };
-  const notional = marginU * lev, qty = notional / en, riskU = qty * Math.abs(en - sl);
-  return { riskPct, stopDist, lev, notional, qty, riskU };
+  const notional = Math.min(riskU / stopDist, maxNotional);
+  const lev = Math.max(1, Math.min(maxLev, Math.floor(0.8 / stopDist)));
+  const margin = notional / lev, qty = notional / en;
+  if (usedMargin + margin > equity * 0.95) return { skip: `保證金不夠（要 ${margin.toFixed(0)}U，已用 ${usedMargin.toFixed(0)}U）`, margin };
+  return { stopDist, lev, notional, qty, margin, riskU: qty * Math.abs(en - sl), riskPct: qty * Math.abs(en - sl) / equity };
 }
 
 /** runCoach 每根收盤找出來的「可以自動下單」的劇本 */
 export function autoCandidate({ job, side, r, f, W, sessKz }) {
   const j = W.length - 1;
   if (r.stage < 4 || r.rt == null || !f.plan || f.status !== 'near') return null;
-  if (r.bias !== 2 || f.plan.rr < 2) return null;
+  if (!(f.plan.rr > 0)) return null;
   if (j - r.rt > 1) return null; // 回踩要是剛收盤的那一兩根，太久以前的不追
   return {
     id: `cc:${coin(job.sym)}:${job.iv}:${side}:${W[r.sweep.u].t}`.slice(0, 36), sym: job.sym, iv: job.iv, ms: job.ms, side,
-    en: f.plan.en, sl: f.plan.sl, tp: f.plan.tp, rr: f.plan.rr, disc: r.disc, sessKz, rtT: W[r.rt].t,
+    en: f.plan.en, sl: f.plan.sl, tp: f.plan.tp, rr: f.plan.rr, bias: r.bias, disc: r.disc, sessKz, rtT: W[r.rt].t,
   };
 }
 
@@ -59,7 +66,7 @@ export async function handleCoachAuto(request, env, { executorCall } = {}) {
     let b; try { b = await request.json(); } catch { return { status: 400, body: { error: '格式不對' } }; }
     const next = { ...cfg };
     if (b.mode !== undefined) { if (!['off', 'demo', 'live'].includes(b.mode)) return { status: 400, body: { error: 'mode 只能是 off／demo／live' } }; next.mode = b.mode; }
-    for (const [k, lo, hi] of [['marginU', 5, 200], ['maxPos', 1, 10], ['dailyLossR', 1, 20]]) if (b[k] !== undefined) next[k] = Math.max(lo, Math.min(hi, Number(b[k]) || cfg[k]));
+    for (const [k, lo, hi] of [['riskU', 1, 200], ['maxPos', 1, 10], ['dailyLossR', 1, 20]]) if (b[k] !== undefined) next[k] = Math.max(lo, Math.min(hi, Number(b[k]) || cfg[k]));
     if (next.mode !== cfg.mode) next.pausedUntil = 0;
     if (env.SMC_KV) await env.SMC_KV.put(CFG_KEY, JSON.stringify(next));
     return { status: 200, body: { ok: true, cfg: next } };
@@ -146,14 +153,18 @@ export async function runCoachAuto(env, { candidates = [], executorCall, postDis
   // ── 下新單
   if (cfg.mode !== 'off' && !(cfg.pausedUntil > now) && candidates.length) {
     for (const c of candidates) {
+      // 真錢：只做順 4h＋≥2R；Demo：demoLoose 開著就有訊號就進
+      const strict = !(cfg.mode === 'demo' && cfg.demoLoose);
+      if (strict && (c.bias !== 2 || c.rr < 2)) continue;
       const live = trades.filter((t) => t.account === cfg.mode && (t.state === 'pending' || t.state === 'open'));
       if (live.length >= cfg.maxPos) { out.errors.push(`已經 ${live.length} 筆，達上限`); break; }
       if (trades.some((t) => t.id === c.id && t.account === cfg.mode)) continue;
       if (live.some((t) => t.sym === c.sym)) continue;
       const st = await getState(cfg.mode);
       if (st.error || !st.configured || !(st.equity > 0)) { out.errors.push(`讀不到 ${ACCT_NAME[cfg.mode]} 帳戶：${st.error || Object.values(st.errors || {})[0] || '權益是 0'}`); break; }
-      const sz = sizeCoachOrder({ equity: cfg.mode === 'demo' ? Math.min(st.equity, cfg.demoEquity) : st.equity, en: c.en, sl: c.sl, disc: c.disc, sessKz: c.sessKz, marginU: cfg.marginU, maxLev: cfg.maxLev });
-      if (sz.skip) continue;
+      const usedMargin = live.reduce((a, t) => a + (t.margin || 0), 0);
+      const sz = sizeCoachOrder({ equity: cfg.mode === 'demo' ? Math.min(st.equity, cfg.demoEquity) : st.equity, en: c.en, sl: c.sl, riskU: cfg.riskU, maxLev: cfg.maxLev, maxNotional: cfg.maxNotional, usedMargin });
+      if (sz.skip) { out.errors.push(`${c.id}：${sz.skip}`); continue; }
       const body = { account: cfg.mode, symbol: c.sym, side: c.side === 'L' ? 'Buy' : 'Sell', qty: sz.qty, price: c.en, stopLoss: c.sl, takeProfit: c.tp, leverage: sz.lev, orderLinkId: c.id };
       if (dry) { out.placed.push({ ...body, dry: true }); continue; }
       let r;
@@ -161,11 +172,11 @@ export async function runCoachAuto(env, { candidates = [], executorCall, postDis
       if (!r.ok) { out.errors.push(`${c.id}：${r.skipped || r.error}`); continue; }
       const t = {
         id: c.id, account: cfg.mode, sym: c.sym, iv: c.iv, ms: c.ms, side: c.side, en: r.price, sl: r.stopLoss ?? c.sl, tp: r.takeProfit ?? c.tp, rr: Math.round(c.rr * 100) / 100,
-        qty: r.qty, lev: r.leverage, riskU: r.qty * Math.abs(r.price - (r.stopLoss ?? c.sl)), riskPct: sz.riskPct, equity: st.equity, disc: c.disc, sessKz: c.sessKz,
+        qty: r.qty, lev: r.leverage, riskU: r.qty * Math.abs(r.price - (r.stopLoss ?? c.sl)), riskPct: sz.riskPct, margin: r.qty * r.price / r.leverage, equity: st.equity, bias: c.bias, disc: c.disc, sessKz: c.sessKz,
         placedAt: now, validUntil: now + VALID_BARS * c.ms, state: 'pending',
       };
       trades.unshift(t); dirty = true; out.placed.push(t.id);
-      await say(`🤖 教練自動下單（${ACCT_NAME[cfg.mode]}）｜${coin(c.sym)} ${c.iv} ${c.side === 'L' ? '多單' : '空單'}：掛 ${fmtP(t.en)} 限價・停損 ${fmtP(t.sl)}・目標 ${fmtP(t.tp)}（${c.rr.toFixed(1)}R）・${t.lev}x・1R＝${t.riskU.toFixed(2)}U（權益 ${(sz.riskPct * 100).toFixed(1)}%）`);
+      await say(`🤖 教練自動下單（${ACCT_NAME[cfg.mode]}）｜${coin(c.sym)} ${c.iv} ${c.side === 'L' ? '多單' : '空單'}：掛 ${fmtP(t.en)} 限價・停損 ${fmtP(t.sl)}・目標 ${fmtP(t.tp)}（${c.rr.toFixed(1)}R）・${t.lev}x・保證金 ${t.margin.toFixed(0)}U・1R＝${t.riskU.toFixed(2)}U${c.bias === 2 ? '・順勢' : c.bias === 0 ? '・逆勢' : ''}`);
     }
   }
   if (dirty && !dry) await env.SMC_KV.put(TRADES_KEY, JSON.stringify(trades.slice(0, TRADES_MAX)));
