@@ -63,6 +63,8 @@ export function rebuildTrades(executions) {
     if (Math.abs(t.size) <= t.maxSize * 1e-9) {
       t.closeTime = f.execTime;
       t.exitPrice = price;
+      // 怎麼出場的：停損／止盈單（stopOrderType）、平倉單的編號、市價或限價
+      t.exitBy = [f.stopOrderType && f.stopOrderType !== 'UNKNOWN' ? f.stopOrderType : '', f.orderType || '', f.orderLinkId || ''].filter(Boolean).join('/');
       t.pnl = t.gross - t.fees;
       trades.push(t);
       open.delete(f.symbol);
