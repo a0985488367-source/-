@@ -20,6 +20,8 @@
   規則只有一份；`dojo/` 是 SMC 道場學習 App。兩個都靠 GitHub Pages（pages.yml）上線。
   教練 App 的戰績（`/coach-live`）、盯這單（`/watch`）、交易日誌（`/journal`）後端在 `worker/coach-extras.js`；
   日誌經 Executor 的 `GET /journal` 讀使用者真實帳戶（唯讀金鑰 `BYBIT_READ_API_KEY/SECRET`，用 executor-deploy.yml 同步到 Fly）。
+  2026-10-15 起有「教練自動下單」（`worker/coach-auto.js`＋Executor `/coach/*`）：App 開關 關／Demo／真錢（預設關），
+  只做順 4h＋≥2R、每筆保證金 20U、同時最多 5 筆、當天 -3R 停；真錢單走使用者自己的帳戶（COACH_LIVE），跟 6 個順勢策略的主帳戶分開。
 - 策略／評分規則的改動要先用 `scripts/research/` 的回測（GitHub Actions `research.yml`）驗證，
   前後半段資料都成立才上線；這個環境連不到交易所，回測只能在 Actions 上跑。
   **策略改動要先把回測數據給使用者看，由使用者決定要不要上線**（只動回測工具的可以直接合併）。
