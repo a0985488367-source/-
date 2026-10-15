@@ -7,8 +7,8 @@ on:
       mode:
         description: '要切到哪裡'
         type: choice
-        options: [demo, live, both, off]
-        default: demo
+        options: [status, demo, live, both, off]
+        default: status
       confirm:
         description: '切到真錢（live 或 both）時請輸入 REAL（大寫）確認'
         default: ''
@@ -31,9 +31,12 @@ jobs:
           TOKEN="${T1:-${T2:-$T3}}"
           [ -n "$TOKEN" ] || { echo "::error::GitHub Secrets 沒有 APP_TOKEN／AI_TOKEN／AUTO_TRADE_TOKEN"; exit 1; }
           echo "::add-mask::$TOKEN"
-          R="$(curl -sS -m 20 -X POST "$WORKER/coach-auto" -H "content-type: application/json" -H "x-app-token: $TOKEN" -d "{\"mode\":\"$MODE\"}")"
-          echo "回應：$R"
-          echo "$R" | grep -q '"ok": true' || { echo "::error::切換失敗：$R"; exit 1; }
+          if [ "$MODE" != "status" ]; then
+            R="$(curl -sS -m 20 -X POST "$WORKER/coach-auto" -H "content-type: application/json" -H "x-app-token: $TOKEN" -d "{\"mode\":\"$MODE\"}")"
+            echo "回應：$R"
+            echo "$R" | grep -q '"ok": true' || { echo "::error::切換失敗：$R"; exit 1; }
+          fi
           S="$(curl -sS -m 30 "$WORKER/coach-auto" -H "x-app-token: $TOKEN")"
           SUMMARY="$(printf '%s' "$S" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);console.log(`模式=${j.cfg.mode}｜`+Object.entries(j.accounts||{}).map(([a,s])=>`${a}：權益=${s.equity??"讀不到"} 錯誤=${s.error||"無"}`).join("｜")+`｜紀錄=${(j.trades||[]).length} 筆`)}catch(e){console.log("讀不到狀態："+s.slice(0,200))}})')"
           echo "::notice::$SUMMARY"
+          printf '%s' "$S" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);for(const [a,x] of Object.entries(j.accounts||{})){for(const p of x.positions||[])console.log(`::notice::${a} 持倉 ${p.symbol} ${p.side} ${p.size} 均價${p.avgPrice} 停損=${p.stopLoss??"無"} 止盈=${p.takeProfit??"無"} ${p.coach?"（教練）":"（不是教練的單）"}`);for(const o of x.orders||[])console.log(`::notice::${a} 教練掛單 ${o.symbol} ${o.side} ${o.qty}@${o.price} ${o.orderStatus}`)}for(const t of (j.trades||[]).slice(0,10))console.log(`::notice::紀錄 ${t.account} ${t.sym} ${t.iv} ${t.side} ${t.state} 進${t.en} 停${t.sl} 目${t.tp} ${t.why||""}`)}catch(e){}})'
