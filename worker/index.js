@@ -200,7 +200,7 @@ import { handleAiAsk, aiStatus, aiSetBudget } from './ai.js';
 import { UPPER_TFS, GATE_BARS, structureOf, mtfGate } from '../src/smc/mtf-gate.js';
 import { trendExtraSignal, trendExtraIndicators, TREND_EXTRA_STOP_ATR } from '../src/strategies/trend-extra.js';
 import { analyze as coachAnalyze, structure as coachStructure, atrOf as coachAtr, coachState, coachFollow } from '../src/smc/coach.js';
-import { runCoachAuto, handleCoachAuto, autoCandidate, placeTrendLive, manageTrendLive } from './coach-auto.js';
+import { runCoachAuto, handleCoachAuto, autoCandidate, placeTrendLive, manageTrendLive, fillTrendFromCoach, trendWaitingSyms } from './coach-auto.js';
 import { sessionOf } from '../src/smc/sessions.js';
 import { coachCoins, handleCoachCoins } from './coach-coins.js';
 import { appTokenOk, loadCoachLive, saveCoachLive, trackCoachLive, coachLiveResponse, handleWatch, checkWatches, journalResponse, maybeDailyReport } from './coach-extras.js';
@@ -715,9 +715,12 @@ async function run(env, { dry = false } = {}) {
   // 教練提醒（SMC_PUSH_MODE=coach）：自己抓 K 棒判斷，跟 market.json 無關
   const coach = await runCoach(env, { dry }).catch((e) => ({ error: e.message }));
   // 教練自動下單（App 開關，預設關）：對帳、煞車、下新單
-  const coachAuto = await runCoachAuto(env, { candidates: coach?.autoCandidates || [], executorCall, postDiscord, fetchKlines: fetchKlinesAny, dry }).catch((e) => ({ error: e.message }));
+  // 超級趨勢等教練找進場點：先處理（同一個劇本教練自己也想下的話，交易所那邊會因為已經有倉位而跳過）
+  const trendFill = dry ? null : await fillTrendFromCoach(env, { candidates: coach?.autoCandidates || [], executorCall, postDiscord, getPrices }).catch((e) => ({ error: e.message }));
+  const coachCands = (coach?.autoCandidates || []).filter((c) => !coach.coachSyms || coach.coachSyms.includes(c.sym));
+  const coachAuto = await runCoachAuto(env, { candidates: coachCands, executorCall, postDiscord, fetchKlines: fetchKlinesAny, dry }).catch((e) => ({ error: e.message }));
   const trendLive = dry ? null : await manageTrendLive(env, { executorCall, postDiscord, getPrices }).catch((e) => ({ error: e.message }));
-  if (coach) delete coach.autoCandidates;
+  if (coach) { delete coach.autoCandidates; delete coach.coachSyms; }
   // App 的「盯這單」：每次排程都看一次
   const watches = await checkWatches(env, { fetchKlines: fetchKlinesAny, postDiscord, intervalToMs, dry }).catch((e) => ({ error: e.message }));
   // 每日戰報：台灣時間每天早上 8 點（UTC 00:00～00:30 之間第一次排程）推一次
@@ -726,7 +729,7 @@ async function run(env, { dry = false } = {}) {
   const market = await getFreshMarket(env);
   const ageMin = (Date.now() - new Date(market.generatedAt).getTime()) / 60000;
   // 教練模式：照樣更新掃描結果（App 用），但不推原本的進場區到價提醒
-  if (cfg(env, 'SMC_PUSH_MODE') === 'coach') return { mode: 'coach', coach, coachAuto, trendLive, watches, daily, ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout };
+  if (cfg(env, 'SMC_PUSH_MODE') === 'coach') return { mode: 'coach', coach, coachAuto, trendFill, trendLive, watches, daily, ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout };
   if (ageMin > Number(cfg(env, 'MAX_MARKET_AGE_MIN'))) {
     return { skipped: 'market-too-old', ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout };
   }
@@ -1317,7 +1320,10 @@ const COACH_RECENT_MAX = 80;
 /** 每個週期有新 K 棒收盤時，對 SMC_SYMBOLS × SMC_PUSH_INTERVALS 跑一次教練劇本；劇本「成形」（掃蕩＋轉向）跟「到位」（回踩 POI）各推一次 */
 async function runCoach(env, { dry = false } = {}) {
   if (cfg(env, 'SMC_PUSH_MODE') !== 'coach') return null;
-  const symbols = await coachCoins(env, { base: smcSymbols(env), topN: Number(cfg(env, 'COACH_TOP')), viaExecutor: coachUniverse(env) }).then((x) => x.coins).catch(() => smcSymbols(env));
+  const coachSyms = await coachCoins(env, { base: smcSymbols(env), topN: Number(cfg(env, 'COACH_TOP')), viaExecutor: coachUniverse(env) }).then((x) => x.coins).catch(() => smcSymbols(env));
+  // 超級趨勢「等教練找進場點」的幣也要掃（只拿來幫超級趨勢進場，不推播、不給教練自動下單）
+  const waitSyms = (await trendWaitingSyms(env).catch(() => [])).filter((x) => !coachSyms.includes(x));
+  const symbols = [...coachSyms, ...waitSyms];
   const ivs = String(cfg(env, 'SMC_PUSH_INTERVALS')).split(',').map((x) => x.trim()).filter(Boolean);
   const intervals = ivs.length ? ivs : ['15m', '30m', '1h'];
   if (!symbols.length) return { skipped: 'no-symbols' };
@@ -1349,7 +1355,7 @@ async function runCoach(env, { dry = false } = {}) {
       const W = closedOnly(list, job.ms).slice(-bars);
       if (W.length < 120) throw new Error('K 棒不夠');
       const A = coachAnalyze(W, 4, 2), st = coachState(W, A, bias);
-      if (live) trackCoachLive(live, job, W, A, st, biasTf);
+      if (live && !waitSyms.includes(job.sym)) trackCoachLive(live, job, W, A, st, biasTf);
       for (const side of ['L', 'S']) {
         const r0 = st[side];
         if (r0.stage >= 4 && r0.sweep) {
@@ -1360,7 +1366,7 @@ async function runCoach(env, { dry = false } = {}) {
       }
       for (const side of ['L', 'S']) {
         const r = st[side];
-        if (!r.sweep || r.stage < 2) continue;
+        if (!r.sweep || r.stage < 2 || waitSyms.includes(job.sym)) continue;
         if (cfg(env, 'COACH_ONLY_ALIGNED') === 'true' && r.bias !== 2) continue;
         // 跟 App 一樣看劇本後續：已經到目標／停損／錯過的不推；回踩後已經跑掉或靠近停損的，不推「到位」
         const f = coachFollow(W, A, r);
@@ -1389,7 +1395,7 @@ async function runCoach(env, { dry = false } = {}) {
     try { list = JSON.parse((await env.SMC_KV.get(COACH_RECENT_KEY)) || '[]'); } catch { list = []; }
     await env.SMC_KV.put(COACH_RECENT_KEY, JSON.stringify([...records, ...list].slice(0, COACH_RECENT_MAX)));
   }
-  return { analyzed: batch.length, pending: jobs.length - batch.length, sent, errors, autoCandidates };
+  return { analyzed: batch.length, pending: jobs.length - batch.length, sent, errors, autoCandidates, coachSyms };
 }
 
 const COACH_ENDED = ['tp', 'sl', 'missed', 'stale', 'fail'];

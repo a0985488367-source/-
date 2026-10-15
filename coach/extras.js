@@ -84,9 +84,9 @@ function trendLiveHtml(tl) {
   const c = tl.cfg, T = tl.trades || [], done = T.filter((t) => t.state === 'closed');
   const sumR = done.reduce((a, t) => a + (t.r || 0), 0), sumU = done.reduce((a, t) => a + (t.pnl || 0), 0);
   return `<div class="next"><b>💰 超級趨勢（真錢）：${c.enabled ? '<span class="up">開</span>' : '<span class="mut">關</span>'}</b><br>
-    <span class="small mut">4h 超級趨勢有訊號就在真錢帳戶市價進場，每單風險權益 ${Math.round(c.riskPct * 100)}%、最多 ${c.maxOpen} 張；停損掛在 Bybit，不設止盈，賺到 1R 保本、之後追蹤停損。</span>
+    <span class="small mut">${c.entry === 'market' ? '4h 超級趨勢有訊號就在真錢帳戶市價進場' : `4h 超級趨勢翻多／翻空後先不追，等 ${c.waitH || 24} 小時內教練在 15m～1h 找到同方向的劇本回踩，才用教練的停損進場（等不到就不進）`}，每單風險權益 ${Math.round(c.riskPct * 100)}%、最多 ${c.maxOpen} 張；停損掛在 Bybit，不設止盈，賺到一個 4h 停損距離保本、之後追蹤停損。</span>
     ${done.length ? `<br><span class="small">已平倉 ${done.length} 筆：<b class="${sumR >= 0 ? 'up' : 'dn'}">${sumR >= 0 ? '+' : ''}${sumR.toFixed(2)}R（${usd(sumU)}）</b></span>` : ''}
-    ${T.slice(0, 8).map((t) => `<div class="ev"><span class="mut small">${C0.mdhm(t.openedAt / 1000)}</span><span class="side ${t.dir === 'long' ? 'L' : 'S'}">${t.sym.replace(/USDT$/, '')} ${t.iv} ${t.dir === 'long' ? '多' : '空'} ${t.lev}x</span>${t.state === 'closed' ? `<span class="${t.r >= 0 ? 'up' : 'dn'}">${t.r >= 0 ? '+' : ''}${t.r.toFixed(2)}R（${usd(t.pnl)}）</span>` : `<span class="small">持倉中・停損 ${t.stop}${t.beMoved ? '（已保本）' : ''}</span>`}</div>`).join('')}
+    ${T.slice(0, 8).map((t) => `<div class="ev"><span class="mut small">${C0.mdhm((t.openedAt || t.createdAt) / 1000)}</span><span class="side ${t.dir === 'long' ? 'L' : 'S'}">${t.sym.replace(/USDT$/, '')} ${t.iv} ${t.dir === 'long' ? '多' : '空'}${t.lev ? ' ' + t.lev + 'x' : ''}</span>${t.state === 'closed' ? `<span class="${t.r >= 0 ? 'up' : 'dn'}">${t.r >= 0 ? '+' : ''}${t.r.toFixed(2)}R（${usd(t.pnl)}）</span>` : t.state === 'waiting' ? `<span class="small gold">等教練找回踩（到 ${C0.mdhm(t.until / 1000)}）</span>` : t.state === 'expired' ? `<span class="small mut">沒等到回踩・不進</span>` : `<span class="small">持倉中・停損 ${t.stop}${t.beMoved ? '（已保本）' : ''}</span>`}</div>`).join('')}
     <button class="watchbtn" id="tlToggle" style="margin-top:8px">${c.enabled ? '按這裡關掉超級趨勢真錢（已經開的單照停損走）' : '按這裡打開超級趨勢真錢'}</button></div>`;
 }
 
