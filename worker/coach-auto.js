@@ -3,10 +3,10 @@
  *
  * 什麼時候下：教練劇本到位（回踩在結構轉向之後）、跟 4h 同向、盈虧比 ≥ 2R、現在離進場點 0.5R 內、回踩就是剛收盤那一兩根。
  * 怎麼下：在進場點掛限價單，停損、目標一起掛在 Bybit；12 根 K 棒沒成交、或沒成交就先到目標，就取消。
- * 下多大：每筆固定風險 riskU（預設 20U，打到停損虧 20U）；名目價值＝20U ÷ 停損距離、槓桿最高 50 倍且停損一定比強平近，
+ * 下多大：每筆風險＝權益 × riskPct（預設 9%，220U 約 20U；帳戶變大跟著變大、虧了跟著變小）；名目價值＝風險 ÷ 停損距離、槓桿最高 50 倍且停損一定比強平近，
  *         保證金不夠就不下。1R＝打到停損會虧的 U。
  * 條件：真錢只做順 4h＋≥2R；Demo 預設「有訊號就進」（demoLoose），之後看成績再決定真錢要不要放寬。
- * 煞車：同時最多 maxPos 筆（預設 5，含還沒成交的掛單）；當天（台灣時間 08:00 起算）累計虧到 dailyLossR（預設 3R）就停到隔天 08:00。
+ * 煞車：同時最多 maxPos 筆（預設 5，含還沒成交的掛單）；當天（台灣時間 08:00 起算）虧損 dailyLosses 筆（預設 5 筆）就停到隔天 08:00。
  * 帳戶：App 開關 off／demo／live，預設 off。Executor 那邊 demo、live 是兩個分開的帳戶，跟 6 個順勢策略的主帳戶無關。
  */
 
@@ -14,10 +14,11 @@ const CFG_KEY = 'coachauto:cfg';
 const TRADES_KEY = 'coachauto:trades';
 const TRADES_MAX = 400;
 const VALID_BARS = 12;
-// riskU：每筆打到停損虧多少 U（2026-10-15 使用者改成固定 20U）
+// riskPct：每筆打到停損虧權益的幾 %（2026-10-15 使用者選 9%，約 20U，跟著帳戶大小變）
+// dailyLosses：當天虧損幾筆就停（使用者選 5 筆）
 // demoEquity：Demo 帳戶錢比較多（跟順勢策略共用），檢查保證金夠不夠時當成只有這麼多，才跟真錢帳戶（約 220U）一樣
 // demoLoose：Demo 先「有訊號就進」（不限順勢、不限 2R，只要劇本剛回踩、離進場點 0.5R 內），真錢才用嚴格條件
-const DEFAULT_CFG = { mode: 'off', riskU: 20, maxPos: 5, dailyLossR: 3, maxLev: 50, maxNotional: 6000, demoEquity: 220, demoLoose: true };
+const DEFAULT_CFG = { mode: 'off', riskPct: 0.09, maxPos: 5, dailyLosses: 5, maxLev: 50, maxNotional: 6000, demoEquity: 220, demoLoose: true };
 const ACCT_NAME = { demo: 'Demo', live: '真錢' };
 
 async function kvJson(env, key, dflt) {
@@ -66,7 +67,7 @@ export async function handleCoachAuto(request, env, { executorCall } = {}) {
     let b; try { b = await request.json(); } catch { return { status: 400, body: { error: '格式不對' } }; }
     const next = { ...cfg };
     if (b.mode !== undefined) { if (!['off', 'demo', 'live'].includes(b.mode)) return { status: 400, body: { error: 'mode 只能是 off／demo／live' } }; next.mode = b.mode; }
-    for (const [k, lo, hi] of [['riskU', 1, 200], ['maxPos', 1, 10], ['dailyLossR', 1, 20]]) if (b[k] !== undefined) next[k] = Math.max(lo, Math.min(hi, Number(b[k]) || cfg[k]));
+    for (const [k, lo, hi] of [['riskPct', 0.005, 0.2], ['maxPos', 1, 10], ['dailyLosses', 1, 20]]) if (b[k] !== undefined) next[k] = Math.max(lo, Math.min(hi, Number(b[k]) || cfg[k]));
     if (next.mode !== cfg.mode) next.pausedUntil = 0;
     if (env.SMC_KV) await env.SMC_KV.put(CFG_KEY, JSON.stringify(next));
     return { status: 200, body: { ok: true, cfg: next } };
@@ -142,12 +143,13 @@ export async function runCoachAuto(env, { candidates = [], executorCall, postDis
     }
   }
 
-  // ── 煞車：當天（台灣 08:00 起）這個帳戶已平倉的 R 加總
+  // ── 煞車：當天（台灣 08:00 起）這個帳戶虧損的筆數
   const d0 = dayStart(now);
-  const todayR = trades.filter((t) => t.account === cfg.mode && t.state === 'closed' && t.closedAt >= d0).reduce((a, t) => a + (t.r || 0), 0);
-  if (cfg.mode !== 'off' && todayR <= -cfg.dailyLossR && !(cfg.pausedUntil > now)) {
+  const todayClosed = trades.filter((t) => t.account === cfg.mode && t.state === 'closed' && t.closedAt >= d0);
+  const todayLosses = todayClosed.filter((t) => (t.r || 0) < 0).length, todayR = todayClosed.reduce((a, t) => a + (t.r || 0), 0);
+  if (cfg.mode !== 'off' && todayLosses >= cfg.dailyLosses && !(cfg.pausedUntil > now)) {
     cfg.pausedUntil = d0 + 86400e3; cfgDirty = true;
-    await say(`🛑 教練自動下單（${ACCT_NAME[cfg.mode]}）今天累計 ${todayR.toFixed(2)}R，已達 -${cfg.dailyLossR}R，暫停到明天早上 8 點。已經在場內的單照停損／目標走。`);
+    await say(`🛑 教練自動下單（${ACCT_NAME[cfg.mode]}）今天已經虧 ${todayLosses} 筆（合計 ${todayR.toFixed(2)}R），暫停到明天早上 8 點。已經在場內的單照停損／目標走。`);
   }
 
   // ── 下新單
@@ -163,7 +165,8 @@ export async function runCoachAuto(env, { candidates = [], executorCall, postDis
       const st = await getState(cfg.mode);
       if (st.error || !st.configured || !(st.equity > 0)) { out.errors.push(`讀不到 ${ACCT_NAME[cfg.mode]} 帳戶：${st.error || Object.values(st.errors || {})[0] || '權益是 0'}`); break; }
       const usedMargin = live.reduce((a, t) => a + (t.margin || 0), 0);
-      const sz = sizeCoachOrder({ equity: cfg.mode === 'demo' ? Math.min(st.equity, cfg.demoEquity) : st.equity, en: c.en, sl: c.sl, riskU: cfg.riskU, maxLev: cfg.maxLev, maxNotional: cfg.maxNotional, usedMargin });
+      const eq = cfg.mode === 'demo' ? Math.min(st.equity, cfg.demoEquity) : st.equity;
+      const sz = sizeCoachOrder({ equity: eq, en: c.en, sl: c.sl, riskU: eq * (cfg.riskPct ?? 0.09), maxLev: cfg.maxLev, maxNotional: cfg.maxNotional, usedMargin });
       if (sz.skip) { out.errors.push(`${c.id}：${sz.skip}`); continue; }
       const body = { account: cfg.mode, symbol: c.sym, side: c.side === 'L' ? 'Buy' : 'Sell', qty: sz.qty, price: c.en, stopLoss: c.sl, takeProfit: c.tp, leverage: sz.lev, orderLinkId: c.id };
       if (dry) { out.placed.push({ ...body, dry: true }); continue; }

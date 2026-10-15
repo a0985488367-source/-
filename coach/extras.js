@@ -94,8 +94,8 @@ async function loadAuto() {
   const nm = { off: '關', demo: 'Demo（假錢）', live: '真錢' };
   el.innerHTML = `<div class="card auto"><div class="row"><p class="h3" style="margin:0">🤖 教練自動下單</p><span class="sp"></span><span class="small ${cfg.mode === 'live' ? 'dn' : cfg.mode === 'demo' ? 'up' : 'mut'}">現在：${nm[cfg.mode]}</span></div>
     <div class="seg2 sides" style="margin-top:8px">${['off', 'demo', 'live'].map((m) => `<button data-am="${m}" class="${cfg.mode === m ? 'on' : ''}">${m === 'live' && liveConfirm ? '再按一次確認真錢' : nm[m]}</button>`).join('')}</div>
-    <p class="small mut">劇本剛回踩、離進場點 0.5R 內就掛單（真錢只做順 4h＋≥2R${cfg.demoLoose !== false ? '；Demo 有訊號就進' : ''}）。每筆風險 <b>${cfg.riskU ?? 20}U</b>（打到停損虧這麼多），槓桿照停損距離算、最高 ${cfg.maxLev}x、停損一定比強平近，保證金不夠就跳過；同時最多 ${cfg.maxPos} 筆；當天虧到 ${cfg.dailyLossR}R 停到隔天 8 點。停損目標都掛在 Bybit 上。</p>
-    ${cfg.pausedUntil > now ? `<div class="next warn"><b>今天已暫停</b><br>累計虧損達 ${cfg.dailyLossR}R，${C0.mdhm(cfg.pausedUntil / 1000)} 恢復。</div>` : ''}
+    <p class="small mut">劇本剛回踩、離進場點 0.5R 內就掛單（真錢只做順 4h＋≥2R${cfg.demoLoose !== false ? '；Demo 有訊號就進' : ''}）。每筆風險 <b>權益的 ${((cfg.riskPct ?? 0.09) * 100).toFixed(0)}%</b>${j.equity ? `（現在約 ${(Math.min(j.equity, cfg.mode === 'demo' ? (cfg.demoEquity || 220) : Infinity) * (cfg.riskPct ?? 0.09)).toFixed(1)}U）` : ''}，打到停損虧這麼多，槓桿照停損距離算、最高 ${cfg.maxLev}x、停損一定比強平近，保證金不夠就跳過；同時最多 ${cfg.maxPos} 筆；當天虧 ${cfg.dailyLosses ?? 5} 筆就停到隔天 8 點。停損目標都掛在 Bybit 上。</p>
+    ${cfg.pausedUntil > now ? `<div class="next warn"><b>今天已暫停</b><br>今天已經虧 ${cfg.dailyLosses ?? 5} 筆，${C0.mdhm(cfg.pausedUntil / 1000)} 恢復。</div>` : ''}
     ${j.stateError ? `<p class="small dn">帳戶讀取錯誤：${C0.esc(j.stateError)}</p>` : j.equity != null ? `<p class="small">帳戶權益 <b>${j.equity.toFixed(2)}U</b></p>` : ''}
     <div class="filters"><span class="small mut">看成績：</span>${['demo', 'live'].map((a) => `<button class="chip ${view === a ? 'on' : ''}" data-av="${a}">${a === 'demo' ? 'Demo' : '真錢'}</button>`).join('')}</div>
     <div class="row"><b class="bigr ${sum >= 0 ? 'up' : 'dn'}">${sum >= 0 ? '+' : ''}${sum.toFixed(2)}R</b><span class="sp"></span><b class="${usdSum >= 0 ? 'up' : 'dn'}">${usd(usdSum)}</b></div>

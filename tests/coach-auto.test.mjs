@@ -72,7 +72,7 @@ test('條件：真錢只做順勢＋≥2R；Demo 有訊號就進', async () => {
   }
 });
 
-test('煞車：當天虧到 -3R 就暫停；同時最多 5 筆；12 根沒成交就取消', async () => {
+test('煞車：當天虧 5 筆就暫停（虧 4 筆還會繼續下）；同時最多 5 筆；12 根沒成交就取消', async () => {
   const env = { SMC_KV: makeKv(), EXECUTOR_URL: 'x' }, ex = fakeExecutor(), msgs = [];
   const now = Date.UTC(2026, 9, 15, 5);
   const deps = { executorCall: ex.call, postDiscord: async (e, p) => msgs.push(p.content), fetchKlines: async () => [], now };
@@ -85,9 +85,22 @@ test('煞車：當天虧到 -3R 就暫停；同時最多 5 筆；12 根沒成交
   await runCoachAuto(env, { ...deps, now: now + 13 * 9e5 });
   assert.equal(ex.orders.length, 0);
   assert.ok(msgs.some((m) => /取消掛單（12 根沒成交）/.test(m)));
-  // 當天虧 3R → 暫停
-  await env.SMC_KV.put('coachauto:trades', JSON.stringify([1, 2, 3].map((i) => ({ id: 'x' + i, account: 'demo', state: 'closed', r: -1.03, closedAt: dayStart(now) + i }))));
+  // 當天虧 4 筆 → 還會下
+  await env.SMC_KV.put('coachauto:trades', JSON.stringify([1, 2, 3, 4].map((i) => ({ id: 'x' + i, account: 'demo', state: 'closed', r: -1.03, closedAt: dayStart(now) + i }))));
+  const r1 = await runCoachAuto(env, { ...deps, now: now + 14 * 9e5, candidates: [cand({ id: 'cc:four', sym: 'FOURUSDT' })] });
+  assert.equal(r1.placed.length, 1);
+  // 當天虧 5 筆 → 暫停
+  await env.SMC_KV.put('coachauto:trades', JSON.stringify([1, 2, 3, 4, 5].map((i) => ({ id: 'x' + i, account: 'demo', state: 'closed', r: -1.03, closedAt: dayStart(now) + i }))));
   const r2 = await runCoachAuto(env, { ...deps, now: now + 14 * 9e5, candidates: [cand({ id: 'cc:new', sym: 'NEWUSDT' })] });
   assert.equal(r2.placed.length, 0);
   assert.ok(msgs.some((m) => /暫停到明天早上 8 點/.test(m)));
+});
+
+test('每筆風險＝權益 9%：Demo 當成 220U → 約 19.8U', async () => {
+  const env = { SMC_KV: makeKv(), EXECUTOR_URL: 'x' }, ex = fakeExecutor();
+  ex.equity = 1600;
+  await env.SMC_KV.put('coachauto:cfg', JSON.stringify({ mode: 'demo' }));
+  await runCoachAuto(env, { executorCall: ex.call, postDiscord: async () => {}, fetchKlines: async () => [], now: Date.UTC(2026, 9, 15, 5), candidates: [cand({ en: 100, sl: 99, tp: 103 })] });
+  const o = ex.calls.find((c) => c.path === '/coach/order').body;
+  assert.ok(Math.abs(o.qty * 1 - 19.8) < 0.01, `風險 ${o.qty}U`);
 });
