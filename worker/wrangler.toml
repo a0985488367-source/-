@@ -34,7 +34,7 @@ compatibility_date = "2024-11-01"
 
 # 每 2 分鐘檢查一次價格是否進入進場區
 [triggers]
-crons = ["*/2 * * * *"]
+crons = ["*/2 * * * *", "1-59/2 * * * *"]  # 奇數分鐘只做 5/5 劇本即時追蹤（LIGHT_CRON）
 
 [vars]
 MARKET_URL = "https://raw.githubusercontent.com/a0985488367-source/-/main/data/market.json"

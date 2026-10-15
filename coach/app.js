@@ -246,6 +246,69 @@ function nextShort(x) {
 /** 劇本結束後：下一個機會從哪裡開始 */
 function nextAfter(x) { return `接下來：做多等掃下方 ${fmt(x.ssl)}、做空等掃上方 ${fmt(x.bsl)}`; }
 
+/* ═════════ 5/5 劇本即時追蹤：手機直接連 Bybit WebSocket 拿現價，不用等 K 棒收盤 ═════════ */
+const LIVE = {}, LIVE_ST = {};
+let ws = null, wsSubs = new Set(), wsPing = 0, wsRetry = 0, liveT = 0;
+const isFive = (x) => x && x.ready && ['near', 'ran', 'deep'].includes(x.fs) && x.en != null && x.sl != null;
+const lvId = (c, tf, s) => `lv-${c}-${tf}-${s}`;
+function fiveStars() {
+  const out = [];
+  for (const c of COINS) for (const tf of TFS) { const r = getSum(key(c, tf)); if (!r) continue; for (const s of ['L', 'S']) if (isFive(r[s])) out.push({ c, tf, s, x: r[s], closedT: r.closedT }); }
+  return out;
+}
+function liveOf(c, tf, s, x, closedT) {
+  const L = LIVE[c]; if (!L || L.px == null) return null;
+  const d = s === 'L' ? 1 : -1, risk = d * (x.en - x.sl); if (!(risk > 0)) return null;
+  const from = closedT ? closedT * 1000 + MS[tf] : 0; // 正在跑的那根 K 棒開始之後看到的價格
+  let hi = L.px, lo = L.px;
+  for (const [t, p] of L.ticks) if (t >= from) { if (p > hi) hi = p; if (p < lo) lo = p; }
+  if (d > 0 ? lo <= x.sl : hi >= x.sl) return { st: 'sl', px: L.px };
+  if (x.tp != null && (d > 0 ? hi >= x.tp : lo <= x.tp)) return { st: 'tp', px: L.px };
+  let cur = d * (L.px - x.en) / risk; if (Math.abs(cur) < 0.05) cur = 0;
+  return { st: cur > 0.5 ? 'ran' : cur < -0.5 ? 'deep' : 'near', cur, px: L.px };
+}
+const LIVE_TXT = { near: '<b class="up">還來得及</b>', ran: '跑掉了・不追', deep: '<b class="dn">靠近停損・先別進</b>', tp: '<b class="up">✅ 已碰到目標（還沒收盤）</b>', sl: '<b class="dn">⛔ 已打到停損（還沒收盤）</b>' };
+function liveHtml(c, tf, s, x) {
+  const r = getSum(key(c, tf)), v = liveOf(c, tf, s, x, r && r.closedT);
+  if (!v) return `<span class="mut">⚡ 即時：連線中…</span>`;
+  return `⚡ 即時 ${fmt(v.px)}${v.cur != null ? `・${resTxt(v.cur).trim()}` : ''}・${LIVE_TXT[v.st]}`;
+}
+function liveUpdate() {
+  liveT = 0;
+  for (const it of fiveStars()) {
+    const v = liveOf(it.c, it.tf, it.s, it.x, it.closedT); if (!v) continue;
+    const k = lvId(it.c, it.tf, it.s), prev = LIVE_ST[k];
+    if (prev && prev !== v.st && (v.st === 'tp' || v.st === 'sl' || (v.st === 'near' && prev === 'ran'))) {
+      toast(`${it.c} ${it.tf} ${sideName(it.s)}：${v.st === 'tp' ? '碰到目標了' : v.st === 'sl' ? '打到停損了' : '回到進場點附近，又來得及'}（即時）`, () => openDetail(it.c, it.tf, it.s));
+    }
+    LIVE_ST[k] = v.st;
+    const el = document.getElementById(k); if (el) el.innerHTML = liveHtml(it.c, it.tf, it.s, it.x);
+  }
+}
+function onPx(c, px) {
+  const L = LIVE[c] || (LIVE[c] = { ticks: [] }), now = Date.now();
+  if (L.px !== px) { L.ticks.push([now, px]); if (L.ticks.length > 3000 || now - L.ticks[0][0] > 3 * 3600e3) L.ticks = L.ticks.filter(([t]) => now - t < 2 * 3600e3).slice(-2000); }
+  L.px = px;
+  if (!liveT) liveT = setTimeout(liveUpdate, 700);
+}
+function syncWs() {
+  if (document.hidden) return;
+  const want = new Set(fiveStars().map((it) => it.c + 'USDT'));
+  if (!want.size) return;
+  if (!ws || ws.readyState > 1) {
+    try { ws = new WebSocket('wss://stream.bybit.com/v5/public/linear'); } catch { return; }
+    wsSubs = new Set();
+    ws.onopen = () => { wsRetry = 0; syncWs(); clearInterval(wsPing); wsPing = setInterval(() => { try { ws.send('{"op":"ping"}'); } catch { /* 斷線會自己重連 */ } }, 20000); };
+    ws.onmessage = (e) => { try { const m = JSON.parse(e.data); if (m.topic && m.topic.startsWith('tickers.') && m.data && m.data.lastPrice) onPx(m.topic.slice(8).replace(/USDT$/, ''), +m.data.lastPrice); } catch { /* 忽略 */ } };
+    ws.onclose = () => { clearInterval(wsPing); if (!document.hidden) setTimeout(syncWs, Math.min(30000, 2000 * 2 ** wsRetry++)); };
+    return;
+  }
+  if (ws.readyState !== 1) return;
+  const add = [...want].filter((x) => !wsSubs.has(x));
+  for (let i = 0; i < add.length; i += 10) { ws.send(JSON.stringify({ op: 'subscribe', args: add.slice(i, i + 10).map((x) => 'tickers.' + x) })); add.slice(i, i + 10).forEach((x) => wsSubs.add(x)); }
+}
+document.addEventListener('visibilitychange', () => { if (document.hidden) { if (ws) try { ws.close(); } catch { /* */ } } else setTimeout(syncWs, 500); });
+
 /* ═════════ 時段列 ═════════ */
 function nextKz(nowMs) {
   const d = new Date(nowMs), h = d.getUTCHours() + d.getUTCMinutes() / 60;
@@ -328,6 +391,7 @@ function renderBoard() {
   const prog = !booted ? `<span class="mut small">${cache ? '先顯示上次結果，' : ''}更新中 ${loading}/${loadTotal}</span>` : `<span class="mut small">${lastSrc}・${hm(lastFull / 1000)} 更新</span>`;
   $('#app').innerHTML = `<header class="row"><div><p class="eyebrow">SMC COACH</p><h1>🧭 SMC 教練</h1></div><span class="sp"></span>${prog}</header>${sessionBar()}${tabs}${body}`;
   bindBoard();
+  if (P.tab === 'board') syncWs();
   if (P.tab === 'push') loadPush();
   if (P.tab === 'live') X.loadLive();
   if (P.tab === 'journal') X.loadJournal();
@@ -355,7 +419,7 @@ function boardHtml() {
     return `<button class="setup ${hot ? 'ready' : ''} ${x.fs === 'ran' || x.fs === 'deep' ? 'cold' : ''} ${fresh ? '' : 'stale'}" data-open="${c}|${tf}|${s}">
       <div class="row"><b class="sym">${c}</b><span class="mut">${tf}</span><span class="side ${s}">${sideName(s)}</span><span class="sp"></span>${dots(x)}<b class="stg ${hot ? 'gold' : ''}">${x.ready ? 5 : x.stage}/5 ${stageLabel(x)}</b></div>
       <div class="badges"><span class="b${x.bias === 2 ? ' ok' : x.bias === 0 ? ' no' : ''}">${x.bias === 2 ? '✓' : x.bias === 0 ? '✗' : '◐'} ${biasTxt(x.bias, d)}</span><span class="b${x.disc ? ' ok' : ' no'}">${x.disc ? '✓' : '✗'} ${x.disc ? (d > 0 ? '折價' : '溢價') : (d > 0 ? '溢價' : '折價')}</span><span class="b${st[1] === 2 ? ' ok' : st[1] === 0 ? ' no' : ''}">⏰ ${st[0]}</span></div>
-      <div class="nx">下一步：${nextShort(x)}${x.rr && x.fs !== 'ran' && x.fs !== 'deep' && x.rr >= 2 ? `・約 ${x.rr.toFixed(1)}R` : ''}</div></button>`;
+      <div class="nx">下一步：${nextShort(x)}${x.rr && x.fs !== 'ran' && x.fs !== 'deep' && x.rr >= 2 ? `・約 ${x.rr.toFixed(1)}R` : ''}</div>${isFive(x) ? `<div class="lv" id="${lvId(c, tf, s)}">${liveHtml(c, tf, s, x)}</div>` : ''}</button>`;
   }).join('') : `<div class="card mut">${booted || cache ? '目前沒有還能做的劇本' + (P.aligned || P.kz ? '（篩選條件下）' : '') + '。下面的總表可以看每個幣在第幾步。' : '載入中…'}</div>`;
   const endCards = ended.length ? `<p class="h3">剛結束（最近 ${RECENT} 根內，不能再進）</p>` + ended.map(({ c, tf, s, x, fresh }) => `<button class="setup done ${fresh ? '' : 'stale'}" data-open="${c}|${tf}|${s}">
       <div class="row"><b class="sym">${c}</b><span class="mut">${tf}</span><span class="side ${s}">${sideName(s)}</span><span class="sp"></span><b class="stg ${x.fs === 'tp' ? 'up' : x.fs === 'sl' || x.fs === 'fail' ? 'dn' : 'mut'}">${ENDED[x.fs]}${resTxt(x.fres)}</b></div>

@@ -203,6 +203,7 @@ import { analyze as coachAnalyze, structure as coachStructure, atrOf as coachAtr
 import { runCoachAuto, handleCoachAuto, autoCandidate, placeTrendLive, manageTrendLive, fillTrendFromCoach, trendWaitingSyms } from './coach-auto.js';
 import { sessionOf } from '../src/smc/sessions.js';
 import { coachCoins, handleCoachCoins } from './coach-coins.js';
+import { addReady, checkReady } from './coach-live5.js';
 import { appTokenOk, loadCoachLive, saveCoachLive, trackCoachLive, coachLiveResponse, handleWatch, checkWatches, journalResponse, maybeDailyReport } from './coach-extras.js';
 
 const DEFAULTS = {
@@ -443,7 +444,9 @@ const excludedPoiTypes = (env) => csv(cfg(env, 'AUTO_TRADE_EXCLUDE_POI'));
 
 export default {
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(run(env));
+    // 奇數分鐘只做輕量的即時追蹤（5/5 劇本到目標／打停損），偶數分鐘跑完整流程（裡面也會追蹤一次）
+    if (event.cron === LIGHT_CRON) ctx.waitUntil(checkReady(env, { fetchKlines: fetchKlinesAny, postDiscord }).catch(() => {}));
+    else ctx.waitUntil(run(env));
   },
 
   async fetch(request, env, ctx) {
@@ -721,6 +724,8 @@ async function run(env, { dry = false } = {}) {
   const coachAuto = await runCoachAuto(env, { candidates: coachCands, executorCall, postDiscord, fetchKlines: fetchKlinesAny, dry }).catch((e) => ({ error: e.message }));
   const trendLive = dry ? null : await manageTrendLive(env, { executorCall, postDiscord, getPrices }).catch((e) => ({ error: e.message }));
   if (coach) { delete coach.autoCandidates; delete coach.coachSyms; }
+  // 5/5 劇本即時追蹤（偶數分鐘這裡一次、奇數分鐘 scheduled 另外一次）
+  const live5 = dry ? null : await checkReady(env, { fetchKlines: fetchKlinesAny, postDiscord }).catch((e) => ({ error: e.message }));
   // App 的「盯這單」：每次排程都看一次
   const watches = await checkWatches(env, { fetchKlines: fetchKlinesAny, postDiscord, intervalToMs, dry }).catch((e) => ({ error: e.message }));
   // 每日戰報：台灣時間每天早上 8 點（UTC 00:00～00:30 之間第一次排程）推一次
@@ -729,7 +734,7 @@ async function run(env, { dry = false } = {}) {
   const market = await getFreshMarket(env);
   const ageMin = (Date.now() - new Date(market.generatedAt).getTime()) / 60000;
   // 教練模式：照樣更新掃描結果（App 用），但不推原本的進場區到價提醒
-  if (cfg(env, 'SMC_PUSH_MODE') === 'coach') return { mode: 'coach', coach, coachAuto, trendFill, trendLive, watches, daily, ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout };
+  if (cfg(env, 'SMC_PUSH_MODE') === 'coach') return { mode: 'coach', coach, coachAuto, trendFill, trendLive, live5, watches, daily, ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout };
   if (ageMin > Number(cfg(env, 'MAX_MARKET_AGE_MIN'))) {
     return { skipped: 'market-too-old', ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout };
   }
@@ -1390,6 +1395,9 @@ async function runCoach(env, { dry = false } = {}) {
     }
     sent.push(`${a.sym} ${a.iv} ${a.r.d > 0 ? '多' : '空'} ${a.event === 'ready' ? '到位' : '成形'}`);
   }
+  // 推了「到位」的劇本：之後每分鐘即時追蹤（到目標／打停損／跑掉／回到進場點），不用等下一根收盤（worker/coach-live5.js）
+  const ready = dry ? [] : alerts.filter((a) => a.event === 'ready' && a.f && a.f.plan).map((a) => ({ id: a.key, sym: a.sym, iv: a.iv, ms: intervalToMs(a.iv), side: a.r.d > 0 ? 'L' : 'S', en: a.f.plan.en, sl: a.f.plan.sl, tp: a.f.plan.tp, rr: Math.round(a.f.plan.rr * 10) / 10 }));
+  if (ready.length) await addReady(env, ready).catch((e) => errors.push('即時追蹤寫入失敗：' + e.message));
   if (records.length && env.SMC_KV) {
     let list = [];
     try { list = JSON.parse((await env.SMC_KV.get(COACH_RECENT_KEY)) || '[]'); } catch { list = []; }
@@ -1399,6 +1407,7 @@ async function runCoach(env, { dry = false } = {}) {
 }
 
 const COACH_ENDED = ['tp', 'sl', 'missed', 'stale', 'fail'];
+const LIGHT_CRON = '1-59/2 * * * *';
 /** 教練名單的 Bybit 成交額排名：Worker 連不到 Bybit，請 Executor 代拿 */
 const coachUniverse = (env) => (env.EXECUTOR_URL && env.EXECUTOR_HMAC_SECRET ? () => executorCall(env, 'GET', '/coach/universe') : null);
 
