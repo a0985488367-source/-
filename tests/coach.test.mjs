@@ -76,8 +76,9 @@ function makeKv() {
 /** 找一段「多單或空單劇本已成形」的真實行情，時間平移到現在（最後一根已收盤） */
 function scenario() {
   for (let j = 700; j < BTC.length; j++) {
-    const W = BTC.slice(j - 499, j + 1), st = coachState(W, analyze(W, 4, 2), 0);
-    if (st.L.stage >= 2 || st.S.stage >= 2) {
+    const W = BTC.slice(j - 499, j + 1), A = analyze(W, 4, 2), st = coachState(W, A, 0);
+    const pushable = (r) => { if (r.stage < 2) return false; const f = coachFollow(W, A, r); return !['tp', 'sl', 'missed', 'stale', 'fail'].includes(f.status) && (r.stage < 4 || f.status === 'near'); };
+    if (pushable(st.L) || pushable(st.S)) {
       const hour = 3_600_000, lastOpen = Math.floor(Date.now() / hour) * hour - hour;
       const shift = lastOpen - W[W.length - 1].t * 1000;
       const rows = [...W, { ...W[W.length - 1] }].map((k, i, a) => ({ ...k, ms: k.t * 1000 + shift + (i === a.length - 1 ? hour : 0) }));
@@ -102,6 +103,29 @@ function stubOkx(rows, discord, market) {
     throw new Error('未預期的請求：' + u);
   };
 }
+
+test('教練推播：已經到目標／停損、回踩後已經跑掉的劇本不推', async () => {
+  // 找一段「劇本還是第 4 步、但後續已經到目標」的行情，推播應該是空的
+  let found = 0;
+  for (let j = 700; j < BTC.length && found < 3; j++) {
+    const W = BTC.slice(j - 499, j + 1), A = analyze(W, 4, 2), st = coachState(W, A, 0);
+    for (const side of ['L', 'S']) {
+      const r = st[side];
+      if (r.stage < 4 || coachFollow(W, A, r).status !== 'tp') continue;
+      found++;
+      const hour = 3_600_000, lastOpen = Math.floor(Date.now() / hour) * hour - hour, shift = lastOpen - W[W.length - 1].t * 1000;
+      const rows = [...W, { ...W[W.length - 1] }].map((k, i, a2) => ({ ...k, ms: k.t * 1000 + shift + (i === a2.length - 1 ? hour : 0) }));
+      const discord = [];
+      stubOkx(rows, discord, { generatedAt: new Date().toISOString(), rows: [] });
+      const env = { MARKET_URL: 'https://example.test/market.json', DISCORD_WEBHOOK_URL: 'https://discord.com/api/webhooks/1/abc', SMC_KV: makeKv(), SMC_PUSH_MODE: 'coach', SMC_SYMBOLS: 'BTCUSDT', SMC_PUSH_INTERVALS: '1h', COACH_BIAS_TF: '1h', COACH_ONLY_ALIGNED: 'false', BREAKOUT_PROVIDERS: 'okx' };
+      await worker.fetch(new Request('https://w.test/run'), env);
+      const titles = discord.map((p) => p.embeds?.[0]?.title || '').filter((t) => t.includes(side === 'L' ? '多單' : '空單'));
+      assert.ok(!titles.some((t) => t.includes('到位')), `已到目標的劇本不該推到位：${titles}`);
+      break;
+    }
+  }
+  assert.ok(found >= 1, '應該找得到已到目標的劇本');
+});
 
 test('SMC_PUSH_MODE=coach：推教練提醒、不推原本的進場區到價，同一個劇本不重複推', async () => {
   const rows = scenario(), discord = [];

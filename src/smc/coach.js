@@ -82,7 +82,7 @@ export function aggregate(C,upto,g,dt){
  *   5 計畫：進場＝POI 邊緣、停損＝掃出來的極值外 0.15 ATR、目標＝最近還沒被掃的對面擺動點（沒有就用近 80 根區間極值）
  *   背景：大週期方向 bias（另外算）、折價／溢價（近 80 根區間 50%）
  */
-export function coachState(W, A, bias) {
+export function coachState(W, A, bias, opt = {}) {
   const n = W.length, j = n - 1, px = W[j].c, a = A.atr[j], out = {};
   let rH = -1e18, rL = 1e18;
   for (let i = Math.max(0, n - 80); i < n; i++) { rH = Math.max(rH, W[i].h); rL = Math.min(rL, W[i].l); }
@@ -120,7 +120,8 @@ export function coachState(W, A, bias) {
       if (!poi) for (const o of A.obs) if (o.dir === d && o.i >= sw.u - 2 && o.k <= j && (o.inv == null || o.inv > j)) { poi = { kind: 'OB', top: o.p1, bot: o.p2, i: o.i, k: o.k }; break; }
     }
     let rt = null;
-    if (poi) for (let u = poi.k + 1; u <= j; u++) if (d > 0 ? W[u].l <= poi.top : W[u].h >= poi.bot) { rt = u; break; }
+    // afterShift（研究中）：回踩一定要在結構轉向收盤之後才算；預設 false＝原本規則（POI 形成後碰到就算）
+    if (poi) for (let u = Math.max(poi.k, opt.afterShift && ev ? ev.i : -1) + 1; u <= j; u++) if (d > 0 ? W[u].l <= poi.top : W[u].h >= poi.bot) { rt = u; break; }
     r.ev = ev ? { p: ev.p, t: ev.t, i: ev.i } : null;
     r.poi = poi;
     r.rt = rt;

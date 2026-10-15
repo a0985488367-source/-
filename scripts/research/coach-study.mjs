@@ -36,6 +36,7 @@ const MIN_RR = Number(opt('min-rr', 2));
 const MAKER = Number(opt('maker-fee', 0.0002));
 const TAKER = Number(opt('taker-fee', 0.00055));
 const OUT = opt('out', 'data/research/coach-study.json');
+const AFTER_SHIFT = opt('after-shift', '0') === '1'; // 回踩一定要在結構轉向之後（2026-10-15 ADA 15m 推播比顯示晚的問題）
 const MS = { '5m': 3e5, '15m': 9e5, '30m': 18e5, '1h': 36e5, '2h': 72e5, '4h': 144e5, '6h': 216e5, '1d': 864e5 };
 const log = (...a) => console.log(...a);
 const toC = (k) => ({ t: k.time / 1000, time: k.time, o: k.open, h: k.high, l: k.low, c: k.close });
@@ -92,7 +93,7 @@ async function main() {
         if (closeMs < from) continue;
         while (hk + 1 < htf.length && hClose[hk + 1] <= closeMs) hk++;
         const bias = hk >= 0 ? hTrend[hk] : 0;
-        const W = C.slice(j - WIN + 1, j + 1), A = analyze(W, 4, 2), st = coachState(W, A, bias);
+        const W = C.slice(j - WIN + 1, j + 1), A = analyze(W, 4, 2), st = coachState(W, A, bias, { afterShift: AFTER_SHIFT });
         for (const side of ['L', 'S']) {
           const r = st[side];
           if (!r.ready) continue;
@@ -137,6 +138,7 @@ async function main() {
     return [String(n), (w / n * 100).toFixed(0) + '%', (sum / n).toFixed(3), sum.toFixed(1), gl ? (gp / gl).toFixed(2) : '∞', (n / DAYS).toFixed(1)];
   };
   const V = ['all', 'bias', 'bias+pd', 'market'];
+  log(`\n● 回踩規則：${AFTER_SHIFT ? '一定要在結構轉向之後（新）' : 'POI 形成後碰到就算（原本）'}`);
   log(`\n● 教練劇本回測：${SYMBOLS.length} 檔 × ${INTERVALS.join('/')}，最近 ${DAYS} 天，${SUB} 精算、扣手續費`);
   printTable(log, ['變體', '筆數', '勝率', '平均R', '總R', '獲利因子', '每天幾筆'], V.map((v) => [v, ...stat(trades.filter((t) => t.v === v))]));
   log('\n● 前半段／後半段（看是不是兩段都成立）');
@@ -163,7 +165,7 @@ async function main() {
   printTable(log, ['幣', '筆數', '勝率', '平均R', '總R', '獲利因子', '每天幾筆'], SYMBOLS.map((s) => [s, ...stat(trades.filter((t) => t.v === 'bias' && t.sym === s))]));
 
   fs.mkdirSync('data/research', { recursive: true });
-  fs.writeFileSync(OUT, JSON.stringify({ generatedAt: new Date().toISOString(), days: DAYS, symbols: SYMBOLS, intervals: INTERVALS, sub: SUB, htf: HTF, minRR: MIN_RR, trades }, null, 0));
+  fs.writeFileSync(OUT, JSON.stringify({ generatedAt: new Date().toISOString(), afterShift: AFTER_SHIFT, days: DAYS, symbols: SYMBOLS, intervals: INTERVALS, sub: SUB, htf: HTF, minRR: MIN_RR, trades }, null, 0));
   log(`\n結果存到 ${OUT}`);
 }
 
