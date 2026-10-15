@@ -14,7 +14,8 @@ const CFG_KEY = 'coachauto:cfg';
 const TRADES_KEY = 'coachauto:trades';
 const TRADES_MAX = 400;
 const VALID_BARS = 12;
-const DEFAULT_CFG = { mode: 'off', marginU: 20, maxPos: 5, dailyLossR: 3, maxLev: 50 };
+// demoEquity：Demo 帳戶錢比較多（跟順勢策略共用），算倉位時當成只有這麼多，才跟真錢帳戶（約 220U）的槓桿一樣
+const DEFAULT_CFG = { mode: 'off', marginU: 20, maxPos: 5, dailyLossR: 3, maxLev: 50, demoEquity: 220 };
 const ACCT_NAME = { demo: 'Demo', live: '真錢' };
 
 async function kvJson(env, key, dflt) {
@@ -151,7 +152,7 @@ export async function runCoachAuto(env, { candidates = [], executorCall, postDis
       if (live.some((t) => t.sym === c.sym)) continue;
       const st = await getState(cfg.mode);
       if (st.error || !st.configured || !(st.equity > 0)) { out.errors.push(`讀不到 ${ACCT_NAME[cfg.mode]} 帳戶：${st.error || Object.values(st.errors || {})[0] || '權益是 0'}`); break; }
-      const sz = sizeCoachOrder({ equity: st.equity, en: c.en, sl: c.sl, disc: c.disc, sessKz: c.sessKz, marginU: cfg.marginU, maxLev: cfg.maxLev });
+      const sz = sizeCoachOrder({ equity: cfg.mode === 'demo' ? Math.min(st.equity, cfg.demoEquity) : st.equity, en: c.en, sl: c.sl, disc: c.disc, sessKz: c.sessKz, marginU: cfg.marginU, maxLev: cfg.maxLev });
       if (sz.skip) continue;
       const body = { account: cfg.mode, symbol: c.sym, side: c.side === 'L' ? 'Buy' : 'Sell', qty: sz.qty, price: c.en, stopLoss: c.sl, takeProfit: c.tp, leverage: sz.lev, orderLinkId: c.id };
       if (dry) { out.placed.push({ ...body, dry: true }); continue; }
