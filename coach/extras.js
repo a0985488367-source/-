@@ -87,16 +87,16 @@ async function loadAuto() {
     el.innerHTML = `<div class="card no">讀不到自動下單狀態：${C0.esc(e.message)}</div>`; return;
   }
   if (!$('#auto')) return;
-  const cfg = j.cfg, view = autoView || (cfg.mode === 'off' ? 'demo' : cfg.mode), now = Date.now();
+  const cfg = j.cfg, view = autoView || (cfg.mode === 'off' || cfg.mode === 'both' ? (cfg.mode === 'both' ? 'live' : 'demo') : cfg.mode), now = Date.now();
   const T = (j.trades || []).filter((t) => t.account === view), closed = T.filter((t) => t.state === 'closed'), act = T.filter((t) => t.state === 'pending' || t.state === 'open');
   const sum = closed.reduce((a, t) => a + (t.r || 0), 0), usdSum = closed.reduce((a, t) => a + (t.pnl || 0), 0), d0 = Math.floor(now / 86400e3) * 86400e3;
   const today = closed.filter((t) => t.closedAt >= d0).reduce((a, t) => a + (t.r || 0), 0), wr = closed.length ? closed.filter((t) => t.r > 0).length / closed.length : 0;
-  const nm = { off: '關', demo: 'Demo（假錢）', live: '真錢' };
+  const nm = { off: '關', demo: 'Demo', live: '真錢', both: 'Demo＋真錢' };
   el.innerHTML = `<div class="card auto"><div class="row"><p class="h3" style="margin:0">🤖 教練自動下單</p><span class="sp"></span><span class="small ${cfg.mode === 'live' ? 'dn' : cfg.mode === 'demo' ? 'up' : 'mut'}">現在：${nm[cfg.mode]}</span></div>
-    <div class="seg2 sides" style="margin-top:8px">${['off', 'demo', 'live'].map((m) => `<button data-am="${m}" class="${cfg.mode === m ? 'on' : ''}">${m === 'live' && liveConfirm ? '再按一次確認真錢' : nm[m]}</button>`).join('')}</div>
+    <div class="seg2 sides" style="margin-top:8px">${['off', 'demo', 'live', 'both'].map((m) => `<button data-am="${m}" class="${cfg.mode === m ? 'on' : ''}">${liveConfirm === m ? '再按一次確認' : nm[m]}</button>`).join('')}</div>
     <p class="small mut">劇本剛回踩、離進場點 0.5R 內就掛單（真錢只做順 4h＋≥2R${cfg.demoLoose !== false ? '；Demo 有訊號就進' : ''}）。每筆風險 <b>權益的 ${((cfg.riskPct ?? 0.09) * 100).toFixed(0)}%</b>${j.equity ? `（現在約 ${(Math.min(j.equity, cfg.mode === 'demo' ? (cfg.demoEquity || 220) : Infinity) * (cfg.riskPct ?? 0.09)).toFixed(1)}U）` : ''}，打到停損虧這麼多，槓桿照停損距離算、最高 ${cfg.maxLev}x、停損一定比強平近，保證金不夠就跳過；同時最多 ${cfg.maxPos} 筆；當天虧 ${cfg.dailyLosses ?? 5} 筆就停到隔天 8 點。停損目標都掛在 Bybit 上。</p>
     ${cfg.pausedUntil > now ? `<div class="next warn"><b>今天已暫停</b><br>今天已經虧 ${cfg.dailyLosses ?? 5} 筆，${C0.mdhm(cfg.pausedUntil / 1000)} 恢復。</div>` : ''}
-    ${j.stateError ? `<p class="small dn">帳戶讀取錯誤：${C0.esc(j.stateError)}</p>` : j.equity != null ? `<p class="small">帳戶權益 <b>${j.equity.toFixed(2)}U</b></p>` : ''}
+    ${Object.entries(j.accounts || {}).map(([a, s]) => s.error ? `<p class="small dn">${a === 'live' ? '真錢' : 'Demo'}帳戶讀取錯誤：${C0.esc(s.error)}</p>` : `<p class="small">${a === 'live' ? '💰 真錢' : '🧪 Demo'}帳戶權益 <b>${s.equity != null ? s.equity.toFixed(2) : '—'}U</b>${s.pausedUntil > now ? `・<b class="dn">今天已暫停</b>` : ''}</p>`).join('')}
     <div class="filters"><span class="small mut">看成績：</span>${['demo', 'live'].map((a) => `<button class="chip ${view === a ? 'on' : ''}" data-av="${a}">${a === 'demo' ? 'Demo' : '真錢'}</button>`).join('')}</div>
     <div class="row"><b class="bigr ${sum >= 0 ? 'up' : 'dn'}">${sum >= 0 ? '+' : ''}${sum.toFixed(2)}R</b><span class="sp"></span><b class="${usdSum >= 0 ? 'up' : 'dn'}">${usd(usdSum)}</b></div>
     <div class="row small"><span>${closed.length} 筆・勝率 ${closed.length ? pct(wr) : '—'}</span><span>今天 <b class="${today >= 0 ? 'up' : 'dn'}">${today >= 0 ? '+' : ''}${today.toFixed(2)}R</b></span><span>進行中 ${act.length}</span></div>
@@ -107,9 +107,9 @@ async function loadAuto() {
     b.onclick = async () => {
       const m = b.dataset.am;
       if (m === cfg.mode) return;
-      if (m === 'live' && !liveConfirm) { liveConfirm = true; loadAuto(); return; }
+      if ((m === 'live' || m === 'both') && liveConfirm !== m) { liveConfirm = m; loadAuto(); return; }
       liveConfirm = false;
-      try { await api('/coach-auto', { method: 'POST', body: { mode: m } }); C0.toast(`自動下單：${nm[m]}`); autoView = m === 'off' ? autoView : m; } catch (e) { C0.toast('設定失敗：' + e.message); }
+      try { await api('/coach-auto', { method: 'POST', body: { mode: m } }); C0.toast(`自動下單：${nm[m]}`); autoView = m === 'off' ? autoView : m === 'both' ? 'live' : m; } catch (e) { C0.toast('設定失敗：' + e.message); }
       loadAuto();
     };
   });
