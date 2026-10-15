@@ -18,6 +18,8 @@
   改了 `src/smc/` 的規則要同步改 Pine 版，`tests/tradingview-parity.test.mjs` 會比對兩邊結果。
 - `coach/` 是獨立的「SMC 教練」手機 App（掃描板＋圖表教練＋時段），直接 import `src/smc/coach.js`、`src/smc/sessions.js`，
   規則只有一份；`dojo/` 是 SMC 道場學習 App。兩個都靠 GitHub Pages（pages.yml）上線。
+  2026-10-15 起教練看的幣＝Bybit 成交額前 50（`COACH_TOP`）＋`SMC_SYMBOLS`＋App 搜尋後自己加的（`worker/coach-coins.js`、`/coach-coins`），
+  App 掃描板、Discord 教練提醒、教練自動下單共用同一份名單。
   教練 App 的戰績（`/coach-live`）、盯這單（`/watch`）、交易日誌（`/journal`）後端在 `worker/coach-extras.js`；
   日誌經 Executor 的 `GET /journal` 讀使用者真實帳戶（唯讀金鑰 `BYBIT_READ_API_KEY/SECRET`，用 executor-deploy.yml 同步到 Fly）。
   2026-10-15 起有「教練自動下單」（`worker/coach-auto.js`＋Executor `/coach/*`）：App 開關 關／Demo／真錢（預設關），
