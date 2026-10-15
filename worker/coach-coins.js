@@ -15,9 +15,28 @@ async function kvJson(env, key, dflt) {
   try { const v = await env.SMC_KV.get(key); return v ? JSON.parse(v) : dflt; } catch { return dflt; }
 }
 
-/** Bybit 永續 USDT 合約，照 24 小時成交額排（大到小） */
+/** Bybit 永續 USDT 合約，照 24 小時成交額排（大到小）；Cloudflare 連 api.bybit.com 常被擋，先試 bytick 備用網址，再不行用 OKX 永續的成交額排 */
 export async function bybitUniverse(fetchImpl = fetch) {
-  const res = await fetchImpl('https://api.bybit.com/v5/market/tickers?category=linear');
+  const errs = [];
+  for (const host of ['https://api.bybit.com', 'https://api.bytick.com']) {
+    try { return await bybitFrom(host, fetchImpl); } catch (e) { errs.push(e.message); }
+  }
+  try { return await okxUniverse(fetchImpl); } catch (e) { errs.push(e.message); }
+  throw new Error(errs.join('；'));
+}
+async function okxUniverse(fetchImpl) {
+  const res = await fetchImpl('https://www.okx.com/api/v5/market/tickers?instType=SWAP');
+  if (!res.ok) throw new Error(`OKX tickers HTTP ${res.status}`);
+  const j = await res.json();
+  if (j.code !== '0' || !Array.isArray(j.data)) throw new Error(j.msg || 'OKX tickers 格式不對');
+  return j.data
+    .map((r) => ({ m: /^([A-Z0-9]+)-USDT-SWAP$/.exec(r.instId), v: Number(r.volCcy24h) * Number(r.last) || 0 }))
+    .filter((x) => x.m && !SKIP.has(x.m[1]))
+    .map((x) => ({ s: x.m[1] + 'USDT', v: x.v, src: 'okx' }))
+    .sort((a, b) => b.v - a.v);
+}
+async function bybitFrom(host, fetchImpl) {
+  const res = await fetchImpl(`${host}/v5/market/tickers?category=linear`);
   if (!res.ok) throw new Error(`Bybit tickers HTTP ${res.status}`);
   const j = await res.json();
   if (j.retCode !== 0 || !Array.isArray(j.result?.list)) throw new Error(j.retMsg || 'Bybit tickers 格式不對');
@@ -34,13 +53,13 @@ export async function coachCoins(env, { base = [], topN = 50, fetchImpl = fetch,
   if (!top || top.day !== day || top.n !== topN) {
     try {
       const all = await bybitUniverse(fetchImpl);
-      top = { day, n: topN, list: all.slice(0, topN).map((x) => x.s), all: all.map((x) => x.s) };
+      top = { day, n: topN, list: all.slice(0, topN).map((x) => x.s), all: all.map((x) => x.s), src: all[0]?.src || 'bybit' };
       if (env.SMC_KV) await env.SMC_KV.put(TOP_KEY, JSON.stringify(top), { expirationTtl: 7 * 86400 });
     } catch { top = top || { day: null, list: [], all: [] }; }
   }
   const extra = await kvJson(env, EXTRA_KEY, []);
   const coins = [...new Set([...base, ...top.list, ...extra])];
-  return { coins, base, top: top.list, extra, all: top.all || [], day: top.day };
+  return { coins, base, top: top.list, extra, all: top.all || [], day: top.day, src: top.src || null };
 }
 
 /** GET（公開）回傳名單＋全部可以搜的幣；POST { add } / { remove }（要 App 密碼，index.js 先檢查） */
@@ -52,7 +71,7 @@ export async function handleCoachCoins(request, env, opts = {}) {
   let extra = [...info.extra];
   if (b.add) {
     const s = norm(b.add);
-    if (info.all.length && !info.all.includes(s)) return { status: 400, body: { error: `Bybit 沒有 ${s} 永續合約` } };
+    if (info.all.length && info.src !== 'okx' && !info.all.includes(s)) return { status: 400, body: { error: `Bybit 沒有 ${s} 永續合約` } };
     if (!extra.includes(s) && !info.coins.includes(s)) {
       if (extra.length >= EXTRA_MAX) return { status: 400, body: { error: `自己加的最多 ${EXTRA_MAX} 個，先移掉幾個` } };
       extra.push(s);

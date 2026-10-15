@@ -172,7 +172,7 @@ async function syncCoins() {
   try {
     const r = await fetch(WORKER + '/coach-coins', { cache: 'no-store' }); if (!r.ok) return;
     const j = await r.json(); if (!j.coins || !j.coins.length) return;
-    ALL = (j.all || []).map((x) => x.replace(/USDT$/, '')); EXTRA = (j.extra || []).map((x) => x.replace(/USDT$/, ''));
+    ALL = j.src === 'okx' ? ALL : (j.all || []).map((x) => x.replace(/USDT$/, '')); EXTRA = (j.extra || []).map((x) => x.replace(/USDT$/, ''));
     const next = j.coins.map((x) => x.replace(/USDT$/, ''));
     localStorage.setItem('smc-coach-coins', JSON.stringify({ at: Date.now(), coins: next, extra: EXTRA }));
     const add = next.filter((c) => !COINS.includes(c));
@@ -183,6 +183,11 @@ async function syncCoins() {
   } catch { /* 下次再拿 */ }
 }
 const SYNC = syncCoins();
+/* 搜尋用的完整幣種清單：手機直接跟 Bybit 拿（Worker 拿不到 Bybit 時用這個） */
+fetch('https://api.bybit.com/v5/market/tickers?category=linear').then((r) => r.json()).then((j) => {
+  const list = (j.result && j.result.list || []).filter((x) => /^[A-Z0-9]+USDT$/.test(x.symbol)).sort((a, b) => b.turnover24h - a.turnover24h).map((x) => x.symbol.replace(/USDT$/, ''));
+  if (list.length) ALL = list;
+}).catch(() => {});
 let lastFull = 0, ticking = false;
 async function tick() {
   if (!booted || ticking || document.hidden) return;
