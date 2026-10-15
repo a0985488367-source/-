@@ -20,8 +20,9 @@ import { coachFollow } from '../src/smc/coach.js';
 import { sessionOf } from '../src/smc/sessions.js';
 import { rebuildTrades } from '../scripts/lib/demo-trades.mjs';
 
-const LIVE_OPEN_KEY = 'coachlive:open';
-const LIVE_DONE_KEY = 'coachlive:done';
+// v2：2026-10-15 換成「回踩一定在結構轉向之後」，舊規則的紀錄不混在一起
+const LIVE_OPEN_KEY = 'coachlive2:open';
+const LIVE_DONE_KEY = 'coachlive2:done';
 const LIVE_DONE_MAX = 1500;
 const LIVE_MAX_HOLD = 300;
 const MAKER = 0.0002, TAKER = 0.00055;
