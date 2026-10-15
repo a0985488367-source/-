@@ -10,6 +10,11 @@ on:
       days:
         description: '往前查幾天（最多 90）'
         default: '30'
+      mode:
+        description: 'report＝成交報告；st-whatif＝超級趨勢如果沒手動平倉會怎樣'
+        type: choice
+        options: [report, st-whatif]
+        default: report
       strategy:
         description: '明細只列某個策略（st 超級趨勢、coach 教練、bo 突破…空白＝全部）'
         default: ''
@@ -29,4 +34,4 @@ jobs:
           EXECUTOR_HMAC_SECRET: ${{ secrets.EXECUTOR_HMAC_SECRET }}
           DAYS: ${{ inputs.days }}
           ONLY_STRATEGY: ${{ inputs.strategy }}
-        run: node scripts/demo-report.mjs
+        run: if [ "${{ inputs.mode }}" = "st-whatif" ]; then node scripts/research/st-whatif.mjs; else node scripts/demo-report.mjs; fi
