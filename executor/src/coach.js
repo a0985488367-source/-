@@ -226,7 +226,8 @@ export async function handleCoachUniverse(req, res) {
     const get = async (path) => { const r = await fetch('https://api.bybit.com' + path); const j = await r.json(); if (j.retCode !== 0) throw new Error(j.retMsg); return j.result; };
     const [t, info] = await Promise.all([get('/v5/market/tickers?category=linear'), get('/v5/market/instruments-info?category=linear&limit=1000')]);
     const ok = new Set((info.list || []).filter((x) => x.status === 'Trading' && x.quoteCoin === 'USDT' && x.contractType === 'LinearPerpetual' && !/stock|commodit|metal|forex|index/i.test(String(x.symbolType || ''))).map((x) => x.symbol));
-    const list = (t.list || []).filter((r) => ok.has(r.symbol)).map((r) => ({ s: r.symbol, v: Number(r.turnover24h) || 0 })).sort((a, b) => b.v - a.v);
+    const typeOf = new Map((info.list || []).map((x) => [x.symbol, String(x.symbolType || '')]));
+    const list = (t.list || []).filter((r) => ok.has(r.symbol)).map((r) => ({ s: r.symbol, v: Number(r.turnover24h) || 0, t: typeOf.get(r.symbol) || '' })).sort((a, b) => b.v - a.v);
     const types = [...new Set((info.list || []).map((x) => String(x.symbolType || '')))];
     return json(res, 200, { list, types });
   } catch (e) {
