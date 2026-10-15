@@ -1,5 +1,5 @@
 import { logger } from './logger.js';
-import { handleCoachOrder, handleCoachCancel, handleCoachState, handleCoachLeverage, handleCoachMarket, handleCoachSetStop } from './coach.js';
+import { handleCoachOrder, handleCoachCancel, handleCoachState, handleCoachLeverage, handleCoachMarket, handleCoachSetStop, handleCoachUniverse } from './coach.js';
 import { verifyRequest } from './hmac.js';
 import {
   handleTrade, handleAddExitLeg, handleSetStop, handleCancelAll, handleClose,
@@ -66,6 +66,10 @@ async function router(req, res) {
   if (key === 'GET /journal') {
     if (!(await checkAuth(req, res, ''))) return;
     return handleJournal(req, res, Object.fromEntries(url.searchParams));
+  }
+  if (key === 'GET /coach/universe') {
+    if (!(await checkAuth(req, res, ''))) return;
+    return handleCoachUniverse(req, res);
   }
   if (key === 'GET /coach/state') {
     if (!(await checkAuth(req, res, ''))) return;

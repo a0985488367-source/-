@@ -59,3 +59,16 @@ test('Bybit 連不到時改用 OKX 永續成交額排名', async () => {
   const r = await handleCoachCoins(new Request('https://w/coach-coins', { method: 'POST', body: JSON.stringify({ add: 'SUI' }) }), env, { base: [], topN: 50, fetchImpl: f });
   assert.equal(r.status, 200, 'OKX 名單不完整，不擋 Bybit 才有的幣');
 });
+
+test('名單優先用 Executor 代拿的 Bybit 排名；OKX 備用時只留加密貨幣', async () => {
+  const via = async () => ({ list: [{ s: 'SUIUSDT', v: 9 }, { s: 'BTCUSDT', v: 8 }] });
+  const x = await coachCoins({ SMC_KV: makeKv() }, { base: [], topN: 50, fetchImpl: async () => { throw new Error('不該用到'); }, viaExecutor: via });
+  assert.deepEqual(x.top, ['SUIUSDT', 'BTCUSDT']);
+  const f = async (u) => {
+    if (u.includes('instruments')) return { ok: true, json: async () => ({ code: '0', data: [{ instId: 'BTC-USDT-SWAP', instCategory: '1' }, { instId: 'NVDA-USDT-SWAP', instCategory: '3' }] }) };
+    if (u.includes('okx')) return { ok: true, json: async () => ({ code: '0', data: [{ instId: 'NVDA-USDT-SWAP', volCcy24h: '1e9', last: '100' }, { instId: 'BTC-USDT-SWAP', volCcy24h: '1', last: '60000' }] }) };
+    return { ok: false, status: 403 };
+  };
+  const all = await bybitUniverse(f, async () => ({ error: 'down' }));
+  assert.deepEqual(all.map((x) => x.s), ['BTCUSDT']);
+});

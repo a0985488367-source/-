@@ -16,8 +16,11 @@ async function kvJson(env, key, dflt) {
 }
 
 /** Bybit 永續 USDT 合約，照 24 小時成交額排（大到小）；Cloudflare 連 api.bybit.com 常被擋，先試 bytick 備用網址，再不行用 OKX 永續的成交額排 */
-export async function bybitUniverse(fetchImpl = fetch) {
+export async function bybitUniverse(fetchImpl = fetch, viaExecutor = null) {
   const errs = [];
+  if (viaExecutor) {
+    try { const r = await viaExecutor(); if (r && Array.isArray(r.list) && r.list.length) return r.list; errs.push(r?.error || 'Executor 沒回名單'); } catch (e) { errs.push('Executor ' + e.message); }
+  }
   for (const host of ['https://api.bybit.com', 'https://api.bytick.com']) {
     try { return await bybitFrom(host, fetchImpl); } catch (e) { errs.push(e.message); }
   }
@@ -29,9 +32,17 @@ async function okxUniverse(fetchImpl) {
   if (!res.ok) throw new Error(`OKX tickers HTTP ${res.status}`);
   const j = await res.json();
   if (j.code !== '0' || !Array.isArray(j.data)) throw new Error(j.msg || 'OKX tickers 格式不對');
+  // OKX 永續也有股票、商品（NVDA、XAU、CL…）：instruments 的 instCategory 1＝加密貨幣，只留這些
+  let crypto = null;
+  try {
+    const ir = await fetchImpl('https://www.okx.com/api/v5/public/instruments?instType=SWAP');
+    const ij = await ir.json();
+    if (ij.code === '0' && Array.isArray(ij.data) && ij.data.some((x) => x.instCategory != null)) crypto = new Set(ij.data.filter((x) => String(x.instCategory) === '1').map((x) => x.instId));
+  } catch { /* 拿不到就不過濾 */ }
   return j.data
+    .filter((r) => !crypto || crypto.has(r.instId))
     .map((r) => ({ m: /^([A-Z0-9]+)-USDT-SWAP$/.exec(r.instId), v: Number(r.volCcy24h) * Number(r.last) || 0 }))
-    .filter((x) => x.m && !SKIP.has(x.m[1]))
+    .filter((x) => x.m && !SKIP.has(x.m[1]) && x.m[1] !== 'OKB')
     .map((x) => ({ s: x.m[1] + 'USDT', v: x.v, src: 'okx' }))
     .sort((a, b) => b.v - a.v);
 }
@@ -47,13 +58,14 @@ async function bybitFrom(host, fetchImpl) {
 }
 
 /** 今天的名單（KV 有今天的就用，沒有就跟 Bybit 拿；拿不到就用舊的，再不行就只有 base） */
-export async function coachCoins(env, { base = [], topN = 50, fetchImpl = fetch, now = Date.now() } = {}) {
+export async function coachCoins(env, { base = [], topN = 50, fetchImpl = fetch, now = Date.now(), viaExecutor = null } = {}) {
   const day = new Date(now).toISOString().slice(0, 10);
   let top = await kvJson(env, TOP_KEY, null);
-  if (!top || top.day !== day || top.n !== topN) {
+  // OKX 是備用（名字跟 Bybit 不一定一樣），用 OKX 的名單每小時再試一次 Bybit
+  if (!top || top.day !== day || top.n !== topN || (top.src === 'okx' && now - (top.at || 0) > 3600e3)) {
     try {
-      const all = await bybitUniverse(fetchImpl);
-      top = { day, n: topN, list: all.slice(0, topN).map((x) => x.s), all: all.map((x) => x.s), src: all[0]?.src || 'bybit' };
+      const all = await bybitUniverse(fetchImpl, viaExecutor);
+      top = { day, n: topN, list: all.slice(0, topN).map((x) => x.s), all: all.map((x) => x.s), src: all[0]?.src || 'bybit', at: now };
       if (env.SMC_KV) await env.SMC_KV.put(TOP_KEY, JSON.stringify(top), { expirationTtl: 7 * 86400 });
     } catch { top = top || { day: null, list: [], all: [] }; }
   }
