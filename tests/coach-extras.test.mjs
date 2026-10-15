@@ -118,3 +118,11 @@ test('每日戰報：台灣 8 點推一次、同一天不重複，內容有總�
   assert.equal((await maybeDailyReport(env, deps)).skipped, 'already-sent');
   assert.equal(msgs.length, 1);
 });
+
+test('教練劇本紀錄：事後才看到的回踩（超過 2 根）不記、舊的也不算進戰績', async () => {
+  const { fairLive } = await import('../worker/coach-extras.js');
+  assert.equal(fairLive({ late: 0 }), true);
+  assert.equal(fairLive({ late: 2 }), true);
+  assert.equal(fairLive({ late: 40 }), false);
+  assert.equal(fairLive({}), true);
+});
