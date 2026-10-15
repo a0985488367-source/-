@@ -94,8 +94,9 @@ async function loadAuto() {
   const nm = { off: '關', demo: 'Demo', live: '真錢', both: 'Demo＋真錢' };
   el.innerHTML = `<div class="card auto"><div class="row"><p class="h3" style="margin:0">🤖 教練自動下單</p><span class="sp"></span><span class="small ${cfg.mode === 'live' ? 'dn' : cfg.mode === 'demo' ? 'up' : 'mut'}">現在：${nm[cfg.mode]}</span></div>
     <div class="seg2 sides" style="margin-top:8px">${['off', 'demo', 'live', 'both'].map((m) => `<button data-am="${m}" class="${cfg.mode === m ? 'on' : ''}">${liveConfirm === m ? '再按一次確認' : nm[m]}</button>`).join('')}</div>
-    <p class="small mut">劇本剛回踩、離進場點 0.5R 內就掛單（真錢只做順 4h＋≥2R${cfg.demoLoose !== false ? '；Demo 有訊號就進' : ''}）。每筆風險 <b>權益的 ${((cfg.riskPct ?? 0.09) * 100).toFixed(0)}%</b>${j.equity ? `（現在約 ${(Math.min(j.equity, cfg.mode === 'demo' ? (cfg.demoEquity || 220) : Infinity) * (cfg.riskPct ?? 0.09)).toFixed(1)}U）` : ''}，打到停損虧這麼多，槓桿照停損距離算、最高 ${cfg.maxLev}x、停損一定比強平近，保證金不夠就跳過；同時最多 ${cfg.maxPos} 筆；當天虧 ${cfg.dailyLosses ?? 5} 筆就停到隔天 8 點。停損目標都掛在 Bybit 上。</p>
+    <p class="small mut">劇本剛回踩、離進場點 0.5R 內就掛單（Demo ${cfg.demoLoose !== false ? '有訊號就進' : '只做順 4h＋≥2R'}；真錢 ${cfg.liveLoose ? '<b class="dn">有訊號就進（寬鬆）</b>' : '只做順 4h＋≥2R（嚴格）'}）。每筆風險 <b>權益的 ${((cfg.riskPct ?? 0.09) * 100).toFixed(0)}%</b>${j.equity ? `（現在約 ${(Math.min(j.equity, cfg.mode === 'demo' ? (cfg.demoEquity || 220) : Infinity) * (cfg.riskPct ?? 0.09)).toFixed(1)}U）` : ''}，打到停損虧這麼多，槓桿照停損距離算、最高 ${cfg.maxLev}x、停損一定比強平近，保證金不夠就跳過；同時最多 ${cfg.maxPos} 筆；當天虧 ${cfg.dailyLosses ?? 5} 筆就停到隔天 8 點。停損目標都掛在 Bybit 上。</p>
     ${cfg.pausedUntil > now ? `<div class="next warn"><b>今天已暫停</b><br>今天已經虧 ${cfg.dailyLosses ?? 5} 筆，${C0.mdhm(cfg.pausedUntil / 1000)} 恢復。</div>` : ''}
+    <button class="watchbtn" id="liveRule" style="${cfg.liveLoose ? '' : 'border-color:var(--line);color:var(--mut)'}">${cfg.liveLoose ? '真錢現在：有訊號就進 → 按這裡改回「只做順勢＋≥2R」' : '真錢現在：只做順勢＋≥2R → 按這裡改成跟模擬一樣（有訊號就進）'}</button>
     ${Object.entries(j.accounts || {}).map(([a, s]) => s.error ? `<p class="small dn">${a === 'live' ? '真錢' : 'Demo'}帳戶讀取錯誤：${C0.esc(s.error)}</p>` : `<p class="small">${a === 'live' ? '💰 真錢' : '🧪 Demo'}帳戶權益 <b>${s.equity != null ? s.equity.toFixed(2) : '—'}U</b>${s.pausedUntil > now ? `・<b class="dn">今天已暫停</b>` : ''}</p>`).join('')}
     <div class="filters"><span class="small mut">看成績：</span>${['demo', 'live'].map((a) => `<button class="chip ${view === a ? 'on' : ''}" data-av="${a}">${a === 'demo' ? 'Demo' : '真錢'}</button>`).join('')}</div>
     <div class="row"><b class="bigr ${sum >= 0 ? 'up' : 'dn'}">${sum >= 0 ? '+' : ''}${sum.toFixed(2)}R</b><span class="sp"></span><b class="${usdSum >= 0 ? 'up' : 'dn'}">${usd(usdSum)}</b></div>
@@ -103,6 +104,11 @@ async function loadAuto() {
     ${T.slice(0, 15).map((t) => `<div class="ev"><span class="mut small">${C0.mdhm(t.placedAt / 1000)}</span><span class="side ${t.side}">${t.sym.replace(/USDT$/, '')} ${t.iv} ${t.side === 'L' ? '多' : '空'} ${t.lev}x</span>${t.bias === 2 && t.rr >= 2 ? '<span class="small up">嚴格✓</span>' : t.bias != null ? '<span class="small mut">寬鬆</span>' : ''}<span class="small">${t.state === 'pending' ? '掛單中' : t.state === 'open' ? '持倉中' : t.state === 'cancelled' ? '取消・' + (t.why || '') : ''}</span>${t.state === 'closed' ? `<span class="${t.r >= 0 ? 'up' : 'dn'}">${t.r >= 0 ? '+' : ''}${t.r.toFixed(2)}R（${usd(t.pnl)}）</span>` : `<span class="small mut">1R＝${(t.riskU || 0).toFixed(2)}U</span>`}</div>`).join('') || '<p class="small mut">還沒有單。</p>'}
   </div>`;
   el.querySelectorAll('[data-av]').forEach((b) => { b.onclick = () => { autoView = b.dataset.av; loadAuto(); }; });
+  $('#liveRule').onclick = async () => {
+    const b = $('#liveRule'); b.disabled = true;
+    try { await api('/coach-auto', { method: 'POST', body: { liveLoose: !cfg.liveLoose } }); C0.toast(cfg.liveLoose ? '真錢改回：只做順勢＋≥2R' : '真錢改成：有訊號就進'); } catch (e) { C0.toast('設定失敗：' + e.message); }
+    loadAuto();
+  };
   el.querySelectorAll('[data-am]').forEach((b) => {
     b.onclick = async () => {
       const m = b.dataset.am;
