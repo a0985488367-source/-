@@ -59,7 +59,7 @@ async function loadLive() {
   const table = (title, groups) => `<p class="h3">${title}</p><table class="tt st"><tr><th></th><th>筆數</th><th>勝率</th><th>平均</th><th>總 R</th></tr>${groups.map(([n, l]) => row(n, l)).join('')}</table>`;
   const s = st(list), since = all.length ? Math.min(...all.map((x) => x.rtT)) : null;
   el.classList.remove('mut');
-  el.innerHTML = `<div id="auto"></div><p class="h3">📋 教練劇本紀錄（每個到位的劇本都算，不是真的下單）</p><p class="small mut" style="margin-top:0">Worker 每根 K 棒收盤自動記錄 15 檔 × 15m／30m／1h 的教練劇本：回踩就算成交，用回踩那根的進場／停損／目標往後算，扣手續費。是真實紀錄，不是回測。${since ? '從 ' + C0.mdhm(since) + ' 開始。' : ''}</p>
+  el.innerHTML = `<div id="auto"></div><p class="h3">📋 教練劇本紀錄（每個到位的劇本都算，不是真的下單）</p><p class="small mut" style="margin-top:0">Worker 每根 K 棒收盤自動記錄教練名單上每個幣 × 15m／30m／1h 的劇本：剛回踩（收盤後 2 根內看到）就算成交，用回踩那根的進場／停損／目標往後算，扣手續費。是真實紀錄，不是回測；事後才看到的回踩不算（會偏向贏的）。${since ? '從 ' + C0.mdhm(since) + ' 開始。' : ''}</p>
     <div class="filters">${[['all', '全部'], ['aligned', '只算順勢'], ['rr2', '只算 ≥2R'], ['both', '順勢＋≥2R'], ['new', '只算新規則']].map(([k, n]) => `<button class="chip ${liveFilter === k ? 'on' : ''}" data-lf="${k}">${n}</button>`).join('')}</div>
     ${totalHtml(list)}
     <div class="kpis"><div><b>${s.n || 0}</b><span>已結束</span></div><div><b>${s.n ? pct(s.wr) : '—'}</b><span>勝率</span></div><div><b class="${s.n && s.avg >= 0 ? 'up' : 'dn'}">${s.n ? r1(s.avg) : '—'}</b><span>平均每筆</span></div><div><b>${open.length}</b><span>進行中</span></div></div>

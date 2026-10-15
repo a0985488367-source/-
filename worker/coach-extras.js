@@ -26,6 +26,10 @@ const LIVE_DONE_KEY = 'coachlive2:done';
 const LIVE_DONE_MAX = 1500;
 const LIVE_MAX_HOLD = 300;
 const MAKER = 0.0002, TAKER = 0.00055;
+// 回踩要是剛收盤的那 1～2 根才記：Worker 第一次看到一個幣（例如 2026-10-15 名單擴大到 50 檔）時，
+// 會看到很久以前就回踩過的劇本，這種「事後才記」的會偏向贏的（打到停損的劇本通常已經被收盤破掉、不會再出現），不能算
+const LIVE_MAX_LATE = 2;
+export const fairLive = (x) => !(x.late > LIVE_MAX_LATE);
 const WATCH_KEY = 'watch:list';
 const WATCH_MAX = 10;
 const WATCH_TTL_MS = 3 * 86400e3;
@@ -78,6 +82,7 @@ export function trackCoachLive(S, job, W, A, st, biasTf) {
     if (!f.plan) continue;
     const id = `${job.sym}:${job.iv}:${side}:${W[r.sweep.u].t}`;
     if (S.ids.has(id)) continue;
+    if (j - r.rt > LIVE_MAX_LATE) continue; // 事後才看到的回踩不記
     S.ids.add(id);
     const rec = {
       id, sym: job.sym, iv: job.iv, side, en: f.plan.en, sl: f.plan.sl, tp: f.plan.tp, rr: Math.round(f.plan.rr * 100) / 100,
@@ -109,8 +114,10 @@ export async function coachLiveResponse(env) {
   const open = await kvJson(env, LIVE_OPEN_KEY, []);
   // 戰績從 10/14 開始算：舊規則（回踩可以在轉向之前）那天的紀錄也一起給，標 rule:1，App 可以篩掉
   const old = (await kvJson(env, 'coachlive:done', [])).map((x) => ({ ...x, rule: 1 }));
-  const done = [...(await kvJson(env, LIVE_DONE_KEY, [])), ...old];
-  return { open, done, fees: { maker: MAKER, taker: TAKER }, maxHold: LIVE_MAX_HOLD };
+  const all = [...(await kvJson(env, LIVE_DONE_KEY, [])), ...old];
+  const done = all.filter(fairLive), late = all.filter((x) => !fairLive(x));
+  const lateR = late.reduce((a, x) => a + (x.r || 0), 0);
+  return { open: open.filter(fairLive), done, fees: { maker: MAKER, taker: TAKER }, maxHold: LIVE_MAX_HOLD, excluded: { n: late.length, r: Math.round(lateR * 100) / 100, wins: late.filter((x) => x.r > 0).length } };
 }
 
 /* ═════════ 2. 盯這單 ═════════ */
@@ -231,7 +238,7 @@ export async function maybeDailyReport(env, { executorCall, postDiscord, dry = f
 
 export async function buildDailyReport(env, { executorCall, now = Date.now() } = {}) {
   const sec = now / 1000, from = sec - 86400;
-  const done = await kvJson(env, LIVE_DONE_KEY, []), open = await kvJson(env, LIVE_OPEN_KEY, []);
+  const done = (await kvJson(env, LIVE_DONE_KEY, [])).filter(fairLive), open = (await kvJson(env, LIVE_OPEN_KEY, [])).filter(fairLive);
   const y = done.filter((x) => x.endT >= from && x.endT < sec);
   const sumR = (l) => l.reduce((a, x) => a + x.r, 0);
   const fR = (v) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}R`;
