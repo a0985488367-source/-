@@ -1,5 +1,5 @@
 /**
- * SMC 教練 App：一次掃 15 檔主流幣 × 15m／30m／1h，列出每個劇本走到哪一步，點進去看圖表＋教練清單。
+ * SMC 教練 App：一次掃 Bybit 成交額前 50＋主流 15＋自己加的幣 × 15m／30m／1h（名單跟 Worker 共用，/coach-coins），列出每個劇本走到哪一步，點進去看圖表＋教練清單。
  * 規則直接用 src/smc/coach.js（跟 Discord 教練提醒、道場看盤教室同一份），時段用 src/smc/sessions.js。
  * 行情由手機直接向交易所拿（Bybit 永續 → Binance 永續 → Binance 現貨），第一次抓 500 根，之後每根收盤只補最新幾根。
  */
@@ -9,7 +9,10 @@ import { sessionOf } from '../src/smc/sessions.js';
 /* 戰績、日誌、盯這單在 extras.js，載入之前先放空函式 */
 const X = window.__coachX = { loadLive() {}, loadJournal() {}, loadWatches() {}, watchButton() {} };
 
-const COINS = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'DOGE', 'ADA', 'AVAX', 'LINK', 'LTC', 'DOT', 'NEAR', 'APT', 'ARB', 'OP'];
+const BASE_COINS = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'DOGE', 'ADA', 'AVAX', 'LINK', 'LTC', 'DOT', 'NEAR', 'APT', 'ARB', 'OP'];
+/* 掃描板的幣：Worker /coach-coins 給的名單（成交額前 50＋主流 15＋自己加的），先用上次存的；COINS 原地更新，extras.js 拿到的是同一個陣列 */
+const COINS = [...(((JSON.parse(localStorage.getItem('smc-coach-coins') || 'null') || {}).coins) || BASE_COINS)];
+let ALL = [], EXTRA = [], started = false;
 const TFS = ['15m', '30m', '1h'];
 const MS = { '15m': 9e5, '30m': 18e5, '1h': 36e5, '4h': 144e5 };
 const IV = { '15m': ['15', '15m'], '30m': ['30', '30m'], '1h': ['60', '1h'], '4h': ['240', '4h'] };
@@ -143,10 +146,11 @@ function saveCache() {
 }
 
 /* ═════════ 載入與更新 ═════════ */
-async function loadAll() {
+async function loadAll(list = COINS) {
   const tasks = [];
-  loading = 0; loadTotal = COINS.length * (TFS.length + 1);
-  for (const coin of COINS) {
+  if (list === COINS) { loading = 0; loadTotal = 0; started = true; }
+  loadTotal += list.length * (TFS.length + 1);
+  for (const coin of list) {
     let hp;
     tasks.push(() => (hp = fetchK(coin, '4h', 300).then((r) => { H[coin] = { C: r.C }; computeBias(coin); lastSrc = r.src; }).catch(() => {}).finally(() => { loading++; paint(); })));
     for (const tf of TFS) {
@@ -160,9 +164,25 @@ async function loadAll() {
       });
     }
   }
-  await pool(tasks, 6);
+  await pool(tasks, 8);
   booted = true; lastFull = Date.now(); paint();
 }
+/* 跟 Worker 拿最新名單；有新的幣就補抓，拿掉的幣從掃描板消失 */
+async function syncCoins() {
+  try {
+    const r = await fetch(WORKER + '/coach-coins', { cache: 'no-store' }); if (!r.ok) return;
+    const j = await r.json(); if (!j.coins || !j.coins.length) return;
+    ALL = (j.all || []).map((x) => x.replace(/USDT$/, '')); EXTRA = (j.extra || []).map((x) => x.replace(/USDT$/, ''));
+    const next = j.coins.map((x) => x.replace(/USDT$/, ''));
+    localStorage.setItem('smc-coach-coins', JSON.stringify({ at: Date.now(), coins: next, extra: EXTRA }));
+    const add = next.filter((c) => !COINS.includes(c));
+    COINS.splice(0, COINS.length, ...next);
+    paint();
+    if (add.length && started) await loadAll(add);
+    return add;
+  } catch { /* 下次再拿 */ }
+}
+const SYNC = syncCoins();
 let lastFull = 0, ticking = false;
 async function tick() {
   if (!booted || ticking || document.hidden) return;
@@ -246,8 +266,50 @@ let view = 'board', DT = null;
 function paint() {
   if (view === 'detail') return renderDetail();
   if (view !== 'board') return;
+  if (typing()) { paint.later = true; return; } // 正在打字搜尋：先不重畫，不然輸入框會被洗掉
   if (paint.raf) return;
   paint.raf = requestAnimationFrame(() => { paint.raf = 0; renderBoard(); });
+}
+const typing = () => document.activeElement && document.activeElement.id === 'q';
+/* ═════════ 搜尋：任何 Bybit 永續幣都能看教練分析，也能加進掃描板（存在 Worker，Discord 提醒和自動下單一起用） ═════════ */
+let Q = '';
+function searchHtml() {
+  return `<div class="search"><input id="q" type="search" inputmode="search" autocomplete="off" autocapitalize="characters" placeholder="🔍 搜尋幣名（例如 PEPE、SUI），看教練分析或加進掃描板" value="${esc(Q)}"><div id="qres">${searchRes()}</div></div>`;
+}
+function searchRes() {
+  const q = Q.trim().toUpperCase().replace(/USDT$/, '').replace(/[^A-Z0-9]/g, '');
+  if (!q) return '';
+  const pool0 = ALL.length ? ALL : COINS;
+  const hits = [...pool0.filter((c) => c.startsWith(q)), ...pool0.filter((c) => !c.startsWith(q) && c.includes(q))].slice(0, 8);
+  if (!hits.length) return `<div class="qrow mut small">${ALL.length ? `Bybit 沒有 ${esc(q)} 的永續合約` : `<button class="qopen" data-q="${esc(q)}">直接打開 ${esc(q)}</button>`}</div>`;
+  return hits.map((c) => {
+    const on = COINS.includes(c), mine = EXTRA.includes(c);
+    return `<div class="qrow"><button class="qopen" data-q="${c}"><b>${c}</b><span class="mut small"> 看教練分析 ›</span></button>${mine ? `<button class="chip" data-qrm="${c}">移除</button>` : on ? '<span class="small mut">掃描板上</span>' : `<button class="chip on" data-qadd="${c}">＋加進掃描板</button>`}</div>`;
+  }).join('');
+}
+async function coinsPost(body) {
+  const tok = store.get('smc-coach-token', '');
+  if (!tok) { toast('先到「戰績」分頁輸入 App 密碼，才能加幣'); return; }
+  try {
+    const r = await fetch(WORKER + '/coach-coins', { method: 'POST', headers: { 'content-type': 'application/json', 'x-app-token': tok }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(j.error || '失敗：HTTP ' + r.status); return; }
+    toast(body.add ? `已加入 ${body.add}：掃描板、Discord 提醒、自動下單都會看它` : `已移除 ${body.remove}`);
+    await syncCoins();
+    if (body.add) { const c = body.add; if (!D[key(c, '15m')]) loadAll([c]); }
+  } catch (e) { toast('失敗：' + e.message); }
+}
+function bindSearch() {
+  const q = $('#q'); if (!q) return;
+  const res = () => { $('#qres').innerHTML = searchRes(); bindRes(); };
+  const bindRes = () => {
+    document.querySelectorAll('[data-q]').forEach((b) => { b.onclick = () => { const c = b.dataset.q; Q = ''; openDetail(c, '15m', 'L'); }; });
+    document.querySelectorAll('[data-qadd]').forEach((b) => { b.onclick = () => { b.disabled = true; coinsPost({ add: b.dataset.qadd }).then(res); }; });
+    document.querySelectorAll('[data-qrm]').forEach((b) => { b.onclick = () => { b.disabled = true; coinsPost({ remove: b.dataset.qrm }).then(res); }; });
+  };
+  q.oninput = () => { Q = q.value; res(); };
+  q.onblur = () => setTimeout(() => { if (!typing() && paint.later) { paint.later = false; paint(); } }, 400);
+  bindRes();
 }
 function getSum(k) { if (R[k] && R[k].L) return { ...R[k], fresh: true }; if (cache && cache.R[k]) return { ...cache.R[k], fresh: false }; return null; }
 function renderBoard() {
@@ -303,8 +365,8 @@ function boardHtml() {
     return `<button class="cell ${n >= 2 ? s : ''} ${hot ? 'ready' : ''} ${r.fresh ? '' : 'stale'}" data-open="${c}|${tf}|${s}">${n ? `${s === 'L' ? '多' : '空'} ${n}` : '—'}${x.bias === 2 && n >= 2 ? '<i>順</i>' : ''}</button>`;
   }).join('')}</div>`).join('')}</div>`;
   const evs = events.length ? `<div class="card"><p class="h3">最新動態（App 開著時）</p>${events.slice(0, 8).map((e) => `<button class="ev" data-open="${e.coin}|${e.tf}|${e.side}"><span class="mut small">${hm(e.at / 1000)}</span><span class="side ${e.side}">${e.coin} ${e.tf} ${sideName(e.side)}</span><span>${evText(e)}${e.ev !== 'end' && e.sess >= 2 ? '・' + SESS_NAME[e.sess].replace('殺區', '') : ''}</span></button>`).join('')}</div>` : '';
-  return `<div id="watches"></div>${filt}<p class="h3">還能做的劇本（第 2 步以上）</p>${cards}${endCards}${evs}<p class="h3">全部幣種（每格顯示走得比較前面的那一邊）</p>${grid}
-    <p class="foot mut small">教練只說劇本走到哪一步，不是進場訊號。回測 150 天、15 檔：教練劇本＋4h 同向平均每筆約 -0.05R，沒有穩定優勢。</p>`;
+  return `${searchHtml()}<div id="watches"></div>${filt}<p class="h3">還能做的劇本（第 2 步以上）</p>${cards}${endCards}${evs}<p class="h3">全部幣種（每格顯示走得比較前面的那一邊）</p>${grid}
+    <p class="foot mut small">掃 ${COINS.length} 個幣：Bybit 成交額前 50＋主流 15＋你自己加的，每天更新名單。教練只說劇本走到哪一步，不是進場訊號。回測 150 天、15 檔：教練劇本＋4h 同向平均每筆約 -0.05R，沒有穩定優勢。</p>`;
 }
 function helpHtml() {
   return `<div class="card help"><p class="h3">教練看的 5 步</p><ol>
@@ -333,6 +395,7 @@ async function loadPush() {
   } catch (e) { el.textContent = '讀不到推播紀錄：' + e.message; }
 }
 function bindBoard() {
+  bindSearch();
   document.querySelectorAll('[data-tab]').forEach((b) => { b.onclick = () => { P.tab = b.dataset.tab; store.set('smc-coach-prefs', P); renderBoard(); }; });
   document.querySelectorAll('[data-tf]').forEach((b) => { b.onclick = () => { P.tf = b.dataset.tf; store.set('smc-coach-prefs', P); renderBoard(); }; });
   document.querySelectorAll('[data-f]').forEach((b) => { b.onclick = () => { P[b.dataset.f] = !P[b.dataset.f]; store.set('smc-coach-prefs', P); renderBoard(); }; });
@@ -521,9 +584,10 @@ function toast(msg, onTap) {
 }
 
 renderBoard();
-loadAll();
+Promise.race([SYNC, new Promise((r) => setTimeout(r, 3000))]).then(() => loadAll());
 setInterval(tick, 20000);
-setInterval(() => { if (view === 'board' && P.tab === 'board' && booted) renderBoard(); }, 60000);
+setInterval(syncCoins, 3600e3);
+setInterval(() => { if (view === 'board' && P.tab === 'board' && booted && !typing()) renderBoard(); }, 60000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { tick(); if (view === 'board') renderBoard(); } });
 if ('serviceWorker' in navigator) addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
 window.__coach = { R, D, H, openDetail, events: () => events };

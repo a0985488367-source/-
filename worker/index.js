@@ -202,6 +202,7 @@ import { trendExtraSignal, trendExtraIndicators, TREND_EXTRA_STOP_ATR } from '..
 import { analyze as coachAnalyze, structure as coachStructure, atrOf as coachAtr, coachState, coachFollow } from '../src/smc/coach.js';
 import { runCoachAuto, handleCoachAuto, autoCandidate, placeTrendLive, manageTrendLive } from './coach-auto.js';
 import { sessionOf } from '../src/smc/sessions.js';
+import { coachCoins, handleCoachCoins } from './coach-coins.js';
 import { appTokenOk, loadCoachLive, saveCoachLive, trackCoachLive, coachLiveResponse, handleWatch, checkWatches, journalResponse, maybeDailyReport } from './coach-extras.js';
 
 const DEFAULTS = {
@@ -299,7 +300,8 @@ const DEFAULTS = {
   SMC_PUSH_MODE: 'plan',
   COACH_BIAS_TF: '4h',           // 教練看大週期方向用哪個週期
   COACH_BARS: '500',             // 每次分析抓幾根已收盤 K 棒
-  COACH_BATCH: '15',             // 每次 tick 最多分析幾組（幣 × 週期），其餘下次 tick 補
+  COACH_BATCH: '60',             // 每次 tick 最多分析幾組（幣 × 週期），其餘下次 tick 補（50 檔 × 3 週期，整點最多 3 個 tick 掃完）
+  COACH_TOP: '50',               // 教練看 Bybit 成交額前幾名（加上 SMC_SYMBOLS 和 App 自己加的，worker/coach-coins.js）
   COACH_TTL_SEC: '259200',       // 同一次掃蕩的同一個提醒 3 天內只推一次
   COACH_ONLY_ALIGNED: 'true',    // 只推跟大週期同向的劇本（回測：同向每筆 -0.04～-0.05R，不分方向 -0.07～-0.19R）
 };
@@ -490,10 +492,16 @@ async function handleFetch(request, env, ctx) {
       return json({ mode: cfg(env, 'SMC_PUSH_MODE'), symbols: smcSymbols(env), intervals: String(cfg(env, 'SMC_PUSH_INTERVALS')).split(',').map((x) => x.trim()).filter(Boolean), alerts }, { headers: { 'cache-control': 'no-store' } });
     }
     // SMC 教練 App：即時戰績（公開唯讀）、盯這單、交易日誌（要 App 密碼）
-    if ((url.pathname === '/journal' || url.pathname === '/watch' || url.pathname === '/coach-auto') && request.method === 'OPTIONS') {
+    if ((url.pathname === '/journal' || url.pathname === '/watch' || url.pathname === '/coach-auto' || url.pathname === '/coach-coins') && request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: { ...CORS_HEADERS, 'access-control-allow-methods': 'GET, POST, DELETE, OPTIONS', 'access-control-allow-headers': 'content-type, x-app-token', 'access-control-max-age': '86400' } });
     }
     if (url.pathname === '/coach-live') return json(await coachLiveResponse(env), { headers: { 'cache-control': 'no-store' } });
+    // 教練看哪些幣（成交額前 50＋主流 15＋App 自己加的）；GET 公開，POST 加／移要 App 密碼
+    if (url.pathname === '/coach-coins') {
+      if (request.method === 'POST' && !appTokenOk(request, env)) return json({ error: '密碼不對：用你設定過的 AI_TOKEN、AUTO_TRADE_TOKEN 或 APP_TOKEN 其中一個' }, { status: 401 });
+      const r = await handleCoachCoins(request, env, { base: smcSymbols(env), topN: Number(cfg(env, 'COACH_TOP')) });
+      return json(r.body, { status: r.status, headers: { 'cache-control': 'no-store' } });
+    }
     // 每日戰報預覽（不推播）：/daily-report
     if (url.pathname === '/daily-report') return json(await maybeDailyReport(env, { executorCall, postDiscord, dry: true, force: true }), { headers: { 'cache-control': 'no-store' } });
     if (url.pathname === '/watch' || url.pathname === '/journal' || url.pathname === '/coach-auto') {
@@ -1309,7 +1317,7 @@ const COACH_RECENT_MAX = 80;
 /** 每個週期有新 K 棒收盤時，對 SMC_SYMBOLS × SMC_PUSH_INTERVALS 跑一次教練劇本；劇本「成形」（掃蕩＋轉向）跟「到位」（回踩 POI）各推一次 */
 async function runCoach(env, { dry = false } = {}) {
   if (cfg(env, 'SMC_PUSH_MODE') !== 'coach') return null;
-  const symbols = smcSymbols(env);
+  const symbols = await coachCoins(env, { base: smcSymbols(env), topN: Number(cfg(env, 'COACH_TOP')) }).then((x) => x.coins).catch(() => smcSymbols(env));
   const ivs = String(cfg(env, 'SMC_PUSH_INTERVALS')).split(',').map((x) => x.trim()).filter(Boolean);
   const intervals = ivs.length ? ivs : ['15m', '30m', '1h'];
   if (!symbols.length) return { skipped: 'no-symbols' };
@@ -1328,7 +1336,7 @@ async function runCoach(env, { dry = false } = {}) {
   const live = batch.length ? await loadCoachLive(env) : null; // 教練即時戰績（App 的「戰績」分頁）
   const autoCandidates = []; // 教練自動下單的候選（runCoachAuto 決定要不要下）
   const closedOnly = (list, ms) => list.filter((c) => c.time + ms <= now).map((c) => ({ t: c.time / 1000, o: +c.open, h: +c.high, l: +c.low, c: +c.close }));
-  await mapLimit(batch, 3, async (job) => {
+  await mapLimit(batch, 5, async (job) => {
     try {
       if (!biasCache.has(job.sym)) {
         biasCache.set(job.sym, fetchKlinesAny(env, job.sym, biasTf, 300).then((list) => {
