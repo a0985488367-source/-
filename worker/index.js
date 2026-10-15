@@ -200,6 +200,8 @@ import { handleAiAsk, aiStatus, aiSetBudget } from './ai.js';
 import { UPPER_TFS, GATE_BARS, structureOf, mtfGate } from '../src/smc/mtf-gate.js';
 import { trendExtraSignal, trendExtraIndicators, TREND_EXTRA_STOP_ATR } from '../src/strategies/trend-extra.js';
 import { analyze as coachAnalyze, structure as coachStructure, atrOf as coachAtr, coachState, coachFollow } from '../src/smc/coach.js';
+import { runCoachAuto, handleCoachAuto, autoCandidate } from './coach-auto.js';
+import { sessionOf } from '../src/smc/sessions.js';
 import { appTokenOk, loadCoachLive, saveCoachLive, trackCoachLive, coachLiveResponse, handleWatch, checkWatches, journalResponse, maybeDailyReport } from './coach-extras.js';
 
 const DEFAULTS = {
@@ -488,14 +490,15 @@ async function handleFetch(request, env, ctx) {
       return json({ mode: cfg(env, 'SMC_PUSH_MODE'), symbols: smcSymbols(env), intervals: String(cfg(env, 'SMC_PUSH_INTERVALS')).split(',').map((x) => x.trim()).filter(Boolean), alerts }, { headers: { 'cache-control': 'no-store' } });
     }
     // SMC 教練 App：即時戰績（公開唯讀）、盯這單、交易日誌（要 App 密碼）
-    if ((url.pathname === '/journal' || url.pathname === '/watch') && request.method === 'OPTIONS') {
+    if ((url.pathname === '/journal' || url.pathname === '/watch' || url.pathname === '/coach-auto') && request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: { ...CORS_HEADERS, 'access-control-allow-methods': 'GET, POST, DELETE, OPTIONS', 'access-control-allow-headers': 'content-type, x-app-token', 'access-control-max-age': '86400' } });
     }
     if (url.pathname === '/coach-live') return json(await coachLiveResponse(env), { headers: { 'cache-control': 'no-store' } });
     // 每日戰報預覽（不推播）：/daily-report
     if (url.pathname === '/daily-report') return json(await maybeDailyReport(env, { executorCall, postDiscord, dry: true, force: true }), { headers: { 'cache-control': 'no-store' } });
-    if (url.pathname === '/watch' || url.pathname === '/journal') {
+    if (url.pathname === '/watch' || url.pathname === '/journal' || url.pathname === '/coach-auto') {
       if (!appTokenOk(request, env)) return json({ error: '密碼不對：用你設定過的 AI_TOKEN、AUTO_TRADE_TOKEN 或 APP_TOKEN 其中一個' }, { status: 401 });
+      if (url.pathname === '/coach-auto') { const r = await handleCoachAuto(request, env, { executorCall }); return json(r.body, { status: r.status, headers: { 'cache-control': 'no-store' } }); }
       if (url.pathname === '/watch') { const r = await handleWatch(request, env); return json(r.body, { status: r.status, headers: { 'cache-control': 'no-store' } }); }
       const days = Math.min(90, Math.max(1, Number(url.searchParams.get('days')) || 30));
       return json(await journalResponse(env, days, executorCall), { headers: { 'cache-control': 'no-store' } });
@@ -703,6 +706,9 @@ async function run(env, { dry = false } = {}) {
   const breakout = await runBreakout(env, { dry }).catch((e) => ({ error: e.message }));
   // 教練提醒（SMC_PUSH_MODE=coach）：自己抓 K 棒判斷，跟 market.json 無關
   const coach = await runCoach(env, { dry }).catch((e) => ({ error: e.message }));
+  // 教練自動下單（App 開關，預設關）：對帳、煞車、下新單
+  const coachAuto = await runCoachAuto(env, { candidates: coach?.autoCandidates || [], executorCall, postDiscord, fetchKlines: fetchKlinesAny, dry }).catch((e) => ({ error: e.message }));
+  if (coach) delete coach.autoCandidates;
   // App 的「盯這單」：每次排程都看一次
   const watches = await checkWatches(env, { fetchKlines: fetchKlinesAny, postDiscord, intervalToMs, dry }).catch((e) => ({ error: e.message }));
   // 每日戰報：台灣時間每天早上 8 點（UTC 00:00～00:30 之間第一次排程）推一次
@@ -711,7 +717,7 @@ async function run(env, { dry = false } = {}) {
   const market = await getFreshMarket(env);
   const ageMin = (Date.now() - new Date(market.generatedAt).getTime()) / 60000;
   // 教練模式：照樣更新掃描結果（App 用），但不推原本的進場區到價提醒
-  if (cfg(env, 'SMC_PUSH_MODE') === 'coach') return { mode: 'coach', coach, watches, daily, ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout };
+  if (cfg(env, 'SMC_PUSH_MODE') === 'coach') return { mode: 'coach', coach, coachAuto, watches, daily, ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout };
   if (ageMin > Number(cfg(env, 'MAX_MARKET_AGE_MIN'))) {
     return { skipped: 'market-too-old', ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout };
   }
@@ -1319,6 +1325,7 @@ async function runCoach(env, { dry = false } = {}) {
   const biasCache = new Map(), alerts = [], errors = [];
   const biasTf = cfg(env, 'COACH_BIAS_TF'), bars = Number(cfg(env, 'COACH_BARS'));
   const live = batch.length ? await loadCoachLive(env) : null; // 教練即時戰績（App 的「戰績」分頁）
+  const autoCandidates = []; // 教練自動下單的候選（runCoachAuto 決定要不要下）
   const closedOnly = (list, ms) => list.filter((c) => c.time + ms <= now).map((c) => ({ t: c.time / 1000, o: +c.open, h: +c.high, l: +c.low, c: +c.close }));
   await mapLimit(batch, 3, async (job) => {
     try {
@@ -1334,6 +1341,14 @@ async function runCoach(env, { dry = false } = {}) {
       if (W.length < 120) throw new Error('K 棒不夠');
       const A = coachAnalyze(W, 4, 2), st = coachState(W, A, bias);
       if (live) trackCoachLive(live, job, W, A, st, biasTf);
+      for (const side of ['L', 'S']) {
+        const r0 = st[side];
+        if (r0.stage >= 4 && r0.sweep) {
+          const sess = sessionOf(W[r0.sweep.u].t * 1000);
+          const c = autoCandidate({ job, side, r: r0, f: coachFollow(W, A, r0), W, sessKz: !!sess && sess.id !== 'asia' });
+          if (c) autoCandidates.push(c);
+        }
+      }
       for (const side of ['L', 'S']) {
         const r = st[side];
         if (!r.sweep || r.stage < 2) continue;
@@ -1365,7 +1380,7 @@ async function runCoach(env, { dry = false } = {}) {
     try { list = JSON.parse((await env.SMC_KV.get(COACH_RECENT_KEY)) || '[]'); } catch { list = []; }
     await env.SMC_KV.put(COACH_RECENT_KEY, JSON.stringify([...records, ...list].slice(0, COACH_RECENT_MAX)));
   }
-  return { analyzed: batch.length, pending: jobs.length - batch.length, sent, errors };
+  return { analyzed: batch.length, pending: jobs.length - batch.length, sent, errors, autoCandidates };
 }
 
 const COACH_ENDED = ['tp', 'sl', 'missed', 'stale', 'fail'];
