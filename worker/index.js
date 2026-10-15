@@ -445,8 +445,8 @@ const excludedPoiTypes = (env) => csv(cfg(env, 'AUTO_TRADE_EXCLUDE_POI'));
 export default {
   async scheduled(event, env, ctx) {
     // 奇數分鐘只做輕量的即時追蹤（5/5 劇本到目標／打停損），偶數分鐘跑完整流程（裡面也會追蹤一次）
-    if (event.cron === LIGHT_CRON) ctx.waitUntil(checkReady(env, { fetchKlines: fetchKlinesAny, postDiscord }).catch(() => {}));
-    else ctx.waitUntil(run(env));
+    if (event.cron === LIGHT_CRON) ctx.waitUntil(checkReady(env, { fetchKlines: fetchKlinesAny, postDiscord }).catch(() => {}).finally(() => flushDiscordLog(env).catch(() => {})));
+    else ctx.waitUntil(run(env).finally(() => flushDiscordLog(env).catch(() => {})));
   },
 
   async fetch(request, env, ctx) {
@@ -499,6 +499,8 @@ async function handleFetch(request, env, ctx) {
       return new Response(null, { status: 204, headers: { ...CORS_HEADERS, 'access-control-allow-methods': 'GET, POST, DELETE, OPTIONS', 'access-control-allow-headers': 'content-type, x-app-token', 'access-control-max-age': '86400' } });
     }
     if (url.pathname === '/coach-live') return json(await coachLiveResponse(env), { headers: { 'cache-control': 'no-store' } });
+    // 最近的 Discord 推播結果（成功／被限流／錯誤）
+    if (url.pathname === '/discord-log') return json({ webhook: !!env.DISCORD_WEBHOOK_URL, log: env.SMC_KV ? JSON.parse((await env.SMC_KV.get('discord:log')) || '[]') : [] }, { headers: { 'cache-control': 'no-store' } });
     // 教練看哪些幣（成交額前 50＋主流 15＋App 自己加的）；GET 公開，POST 加／移要 App 密碼
     if (url.pathname === '/coach-coins') {
       if (request.method === 'POST' && !appTokenOk(request, env)) return json({ error: '密碼不對：用你設定過的 AI_TOKEN、AUTO_TRADE_TOKEN 或 APP_TOKEN 其中一個' }, { status: 401 });
@@ -1300,19 +1302,38 @@ function autoTradeText(t) {
   return `✅ 已送出市價單 · 數量 ${t.qty} · ${t.leverage}x 槓桿 · 這筆最多虧 ${fmt(t.riskAmount)} USDT${warn}`;
 }
 
-async function postDiscord(env, payload) {
-  if (!env.DISCORD_WEBHOOK_URL) throw new Error('缺少 DISCORD_WEBHOOK_URL');
-  const res = await fetch(env.DISCORD_WEBHOOK_URL, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (res.status === 429) {
+async function postDiscord(env, payload, tries = 0) {
+  if (!env.DISCORD_WEBHOOK_URL) { discordLog(env, payload, 'no-webhook'); throw new Error('缺少 DISCORD_WEBHOOK_URL'); }
+  let res;
+  try {
+    res = await fetch(env.DISCORD_WEBHOOK_URL, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+  } catch (e) { discordLog(env, payload, 'fetch:' + e.message); throw e; }
+  if (res.status === 429 && tries < 5) {
     const body = await res.json().catch(() => ({}));
-    await new Promise((r) => setTimeout(r, Math.ceil((body.retry_after ?? 1) * 1000)));
-    return postDiscord(env, payload);
+    discordLog(env, payload, `429 retry_after=${body.retry_after}${body.global ? ' global' : ''}`);
+    await new Promise((r) => setTimeout(r, Math.min(30000, Math.ceil((body.retry_after ?? 1) * 1000))));
+    return postDiscord(env, payload, tries + 1);
   }
-  if (!res.ok && res.status !== 204) throw new Error(`Discord ${res.status}`);
+  if (!res.ok && res.status !== 204) {
+    const t = await res.text().catch(() => '');
+    discordLog(env, payload, `${res.status} ${t.slice(0, 160)}`);
+    throw new Error(`Discord ${res.status}`);
+  }
+  discordLog(env, payload, 'ok');
+}
+/** 最近的 Discord 推播結果（查「為什麼 Discord 沒收到」用）：記在記憶體，run() 結束時寫進 KV discord:log */
+const DLOG = [];
+function discordLog(env, payload, result) {
+  const text = payload?.content || payload?.embeds?.[0]?.title || '';
+  DLOG.push({ at: Date.now(), result, text: String(text).slice(0, 60) });
+  if (DLOG.length > 60) DLOG.splice(0, DLOG.length - 60);
+}
+async function flushDiscordLog(env) {
+  if (!env.SMC_KV || !DLOG.length) return;
+  let old = [];
+  try { old = JSON.parse((await env.SMC_KV.get('discord:log')) || '[]'); } catch { old = []; }
+  const merged = [...DLOG.splice(0), ...old].sort((a, b) => b.at - a.at).slice(0, 80);
+  await env.SMC_KV.put('discord:log', JSON.stringify(merged), { expirationTtl: 3 * 86400 });
 }
 
 
