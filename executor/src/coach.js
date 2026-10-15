@@ -216,3 +216,20 @@ export async function handleCoachState(req, res, q) {
   });
   return json(res, 200, out);
 }
+
+/**
+ * GET /coach/universe —— Bybit 永續 USDT 合約照 24 小時成交額排（教練名單用；Worker 連不到 Bybit）
+ * 只留一般加密貨幣：instruments-info 的 symbolType 有寫股票／商品之類的排掉
+ */
+export async function handleCoachUniverse(req, res) {
+  try {
+    const get = async (path) => { const r = await fetch('https://api.bybit.com' + path); const j = await r.json(); if (j.retCode !== 0) throw new Error(j.retMsg); return j.result; };
+    const [t, info] = await Promise.all([get('/v5/market/tickers?category=linear'), get('/v5/market/instruments-info?category=linear&limit=1000')]);
+    const ok = new Set((info.list || []).filter((x) => x.status === 'Trading' && x.quoteCoin === 'USDT' && x.contractType === 'LinearPerpetual' && !/stock|commodit|metal|forex|index/i.test(String(x.symbolType || ''))).map((x) => x.symbol));
+    const list = (t.list || []).filter((r) => ok.has(r.symbol)).map((r) => ({ s: r.symbol, v: Number(r.turnover24h) || 0 })).sort((a, b) => b.v - a.v);
+    const types = [...new Set((info.list || []).map((x) => String(x.symbolType || '')))];
+    return json(res, 200, { list, types });
+  } catch (e) {
+    return json(res, 200, { error: e.message });
+  }
+}

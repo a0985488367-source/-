@@ -499,7 +499,7 @@ async function handleFetch(request, env, ctx) {
     // 教練看哪些幣（成交額前 50＋主流 15＋App 自己加的）；GET 公開，POST 加／移要 App 密碼
     if (url.pathname === '/coach-coins') {
       if (request.method === 'POST' && !appTokenOk(request, env)) return json({ error: '密碼不對：用你設定過的 AI_TOKEN、AUTO_TRADE_TOKEN 或 APP_TOKEN 其中一個' }, { status: 401 });
-      const r = await handleCoachCoins(request, env, { base: smcSymbols(env), topN: Number(cfg(env, 'COACH_TOP')) });
+      const r = await handleCoachCoins(request, env, { base: smcSymbols(env), topN: Number(cfg(env, 'COACH_TOP')), viaExecutor: coachUniverse(env) });
       return json(r.body, { status: r.status, headers: { 'cache-control': 'no-store' } });
     }
     // 每日戰報預覽（不推播）：/daily-report
@@ -1317,7 +1317,7 @@ const COACH_RECENT_MAX = 80;
 /** 每個週期有新 K 棒收盤時，對 SMC_SYMBOLS × SMC_PUSH_INTERVALS 跑一次教練劇本；劇本「成形」（掃蕩＋轉向）跟「到位」（回踩 POI）各推一次 */
 async function runCoach(env, { dry = false } = {}) {
   if (cfg(env, 'SMC_PUSH_MODE') !== 'coach') return null;
-  const symbols = await coachCoins(env, { base: smcSymbols(env), topN: Number(cfg(env, 'COACH_TOP')) }).then((x) => x.coins).catch(() => smcSymbols(env));
+  const symbols = await coachCoins(env, { base: smcSymbols(env), topN: Number(cfg(env, 'COACH_TOP')), viaExecutor: coachUniverse(env) }).then((x) => x.coins).catch(() => smcSymbols(env));
   const ivs = String(cfg(env, 'SMC_PUSH_INTERVALS')).split(',').map((x) => x.trim()).filter(Boolean);
   const intervals = ivs.length ? ivs : ['15m', '30m', '1h'];
   if (!symbols.length) return { skipped: 'no-symbols' };
@@ -1393,6 +1393,8 @@ async function runCoach(env, { dry = false } = {}) {
 }
 
 const COACH_ENDED = ['tp', 'sl', 'missed', 'stale', 'fail'];
+/** 教練名單的 Bybit 成交額排名：Worker 連不到 Bybit，請 Executor 代拿 */
+const coachUniverse = (env) => (env.EXECUTOR_URL && env.EXECUTOR_HMAC_SECRET ? () => executorCall(env, 'GET', '/coach/universe') : null);
 
 /** 給 App 看的精簡紀錄（不含進場價） */
 function coachRecord({ sym, iv, r, f, event, W, biasTf }) {
