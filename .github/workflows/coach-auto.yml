@@ -7,7 +7,7 @@ on:
       mode:
         description: '要切到哪裡'
         type: choice
-        options: [status, demo, live, both, off]
+        options: ['status', 'demo', 'live', 'both', 'off']
         default: status
       confirm:
         description: '切到真錢（live 或 both）時請輸入 REAL（大寫）確認'
