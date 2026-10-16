@@ -19,3 +19,5 @@ jobs:
       - name: 教練劇本紀錄（算數的）
         run: |
           curl -sS -m 30 "${{ vars.WORKER_URL || 'https://smc-signals.crypto-radar-guardian-24x7.workers.dev' }}/coach-live" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);const tpe=(x)=>new Date(x*1000+8*3600e3).toISOString().slice(5,16).replace("T"," ");const d=j.done.filter(x=>!x.rule);const L=d.map(x=>`${tpe(x.rtT)}→${x.endT?tpe(x.endT):"-"} ${x.sym.replace(/USDT$/,"")} ${x.iv} ${x.side==="L"?"多":"空"} ${x.rr}R 順勢=${x.bias} ${x.out} ${x.r>=0?"+":""}${x.r}R`);L.push(`進行中 ${j.open.length} 筆：`+j.open.map(x=>`${x.sym.replace(/USDT$/,"")} ${x.iv} ${x.side==="L"?"多":"空"} ${x.rr}R`).join("、"));const enc=(x)=>x.replace(/%/g,"%25").replace(/\n/g,"%0A");for(let k=0;k<L.length;k+=25)console.log(`::notice title=教練紀錄 ${k/25+1}::${enc(L.slice(k,k+25).join("\n"))}`)})'
+      - name: 教練劇本紀錄分組
+        run: curl -sS -m 30 "${{ vars.WORKER_URL || 'https://smc-signals.crypto-radar-guardian-24x7.workers.dev' }}/coach-live" | node scripts/research/coach-factors.mjs
