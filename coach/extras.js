@@ -42,14 +42,16 @@ function tokenForm(el, why, after) {
 }
 
 /* ═════════ 戰績 ═════════ */
-let liveFilter = 'all';
+let liveFilter = 'planB';
 async function loadLive() {
   const el = $('#live'); if (!el) return;
   let j;
   try { j = await (await fetch(C0.WORKER + '/coach-live', { cache: 'no-store' })).json(); } catch (e) { el.textContent = '讀不到戰績：' + e.message; return; }
   if (!$('#live')) return;
   const all = j.done || [], open = j.open || [];
-  const list = all.filter((x) => liveFilter === 'all' || (liveFilter === 'aligned' ? x.bias === 2 : liveFilter === 'rr2' ? x.rr >= 2 : liveFilter === 'both' ? x.bias === 2 && x.rr >= 2 : liveFilter === 'new' ? x.rule !== 1 : true));
+  // 方案 B：只算 1h、停損 ≥1.5 ATR 的劇本，而且用「固定 1R 出場」的結果（r1，10/17 下午開始才有）
+  const planB = (x) => x.iv === '1h' && x.stopAtr >= 1.5 && x.r1 != null;
+  const list = liveFilter === 'planB' ? all.filter(planB).map((x) => ({ ...x, r: x.r1, endT: x.endT1 ?? x.endT, out: x.out1 })) : all.filter((x) => liveFilter === 'all' || (liveFilter === 'aligned' ? x.bias === 2 : liveFilter === 'rr2' ? x.rr >= 2 : liveFilter === 'both' ? x.bias === 2 && x.rr >= 2 : liveFilter === 'new' ? x.rule !== 1 : true));
   const st = (l) => {
     const n = l.length; if (!n) return { n: 0 };
     const w = l.filter((x) => x.r > 0).length, sum = l.reduce((a, x) => a + x.r, 0);
@@ -59,8 +61,8 @@ async function loadLive() {
   const table = (title, groups) => `<p class="h3">${title}</p><table class="tt st"><tr><th></th><th>筆數</th><th>勝率</th><th>平均</th><th>總 R</th></tr>${groups.map(([n, l]) => row(n, l)).join('')}</table>`;
   const s = st(list), since = all.length ? Math.min(...all.map((x) => x.rtT)) : null;
   el.classList.remove('mut');
-  el.innerHTML = `<div id="auto"></div><p class="h3">📋 教練劇本紀錄（每個到位的劇本都算，不是真的下單）</p><p class="small mut" style="margin-top:0">Worker 每根 K 棒收盤自動記錄教練名單上每個幣 × 15m／30m／1h 的劇本：剛回踩（收盤後 2 根內看到）就算成交，用回踩那根的進場／停損／目標往後算，扣手續費。是真實紀錄，不是回測；事後才看到的回踩不算（會偏向贏的）。${since ? '從 ' + C0.mdhm(since) + ' 開始。' : ''}</p>
-    <div class="filters">${[['all', '全部'], ['aligned', '只算順勢'], ['rr2', '只算 ≥2R'], ['both', '順勢＋≥2R'], ['new', '只算新規則']].map(([k, n]) => `<button class="chip ${liveFilter === k ? 'on' : ''}" data-lf="${k}">${n}</button>`).join('')}</div>
+  el.innerHTML = `<div id="auto"></div><p class="h3">📋 教練劇本紀錄（每個到位的劇本都算，不是真的下單）</p><p class="small mut" style="margin-top:0">Worker 每根 K 棒收盤自動記錄教練名單上每個幣 × 15m／30m／1h 的劇本：剛回踩（收盤後 2 根內看到）就算成交，用回踩那根的進場／停損／目標往後算，扣手續費。是真實紀錄，不是回測；事後才看到的回踩不算（會偏向贏的）。${since ? '從 ' + C0.mdhm(since) + ' 開始。' : ''}${liveFilter === 'planB' ? '<br><b>現在看的是方案 B</b>：只算 1h、停損至少 1.5 ATR 的劇本，出場改成固定 1R（跟自動下單一樣），10/17 下午開始記錄。其他按鈕是全部週期、出在結構目標（原本的做法）。' : ''}</p>
+    <div class="filters">${[['planB', '方案 B（1h・1R 出場）'], ['all', '全部'], ['aligned', '只算順勢'], ['rr2', '只算 ≥2R'], ['both', '順勢＋≥2R'], ['new', '只算新規則']].map(([k, n]) => `<button class="chip ${liveFilter === k ? 'on' : ''}" data-lf="${k}">${n}</button>`).join('')}</div>
     ${totalHtml(list)}
     <div class="kpis"><div><b>${s.n || 0}</b><span>已結束</span></div><div><b>${s.n ? pct(s.wr) : '—'}</b><span>勝率</span></div><div><b class="${s.n && s.avg >= 0 ? 'up' : 'dn'}">${s.n ? r1(s.avg) : '—'}</b><span>平均每筆</span></div><div><b>${open.length}</b><span>進行中</span></div></div>
     ${s.n < 30 ? `<p class="small mut">筆數還少（${s.n || 0} 筆），至少 30～50 筆再下結論。</p>` : ''}

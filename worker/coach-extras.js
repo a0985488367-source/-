@@ -68,10 +68,13 @@ export function trackCoachLive(S, job, W, A, st, biasTf) {
   const j = W.length - 1;
   // 結算
   for (const rec of S.open.filter((x) => x.sym === job.sym && x.iv === job.iv)) {
-    const res = resolveLive(rec, W);
-    if (!res) continue;
+    const res = rec.out ? null : resolveLive(rec, W);
+    if (res) { Object.assign(rec, res); S.dirty = true; }
+    // 方案 B 的算法：同一個劇本改成固定 1R 出場（tp1），另外記 out1／r1
+    if (rec.tp1 != null && rec.out1 == null) { const r1 = resolveLive({ ...rec, tp: rec.tp1 }, W); if (r1) { Object.assign(rec, { out1: r1.out, r1: r1.r, endT1: r1.endT }); S.dirty = true; } }
+    if (!rec.out || (rec.tp1 != null && rec.out1 == null)) continue;
     S.open = S.open.filter((x) => x !== rec);
-    S.done.unshift({ ...rec, ...res });
+    S.done.unshift(rec);
     S.dirty = true;
   }
   // 新紀錄：第 4 步（已回踩＝限價單成交），計畫固定在回踩那根
@@ -88,9 +91,12 @@ export function trackCoachLive(S, job, W, A, st, biasTf) {
       id, sym: job.sym, iv: job.iv, side, en: f.plan.en, sl: f.plan.sl, tp: f.plan.tp, rr: Math.round(f.plan.rr * 100) / 100,
       rtT: W[r.rt].t, late: j - r.rt, bias: r.bias, biasTf, disc: r.disc, sess: sessId(W[r.sweep.u].t * 1000), sessEntry: sessId(W[r.rt].t * 1000),
       kind: r.poi.kind, at: Date.now(),
+      tp1: f.plan.en + (side === 'L' ? 1 : -1) * Math.abs(f.plan.en - f.plan.sl), stopAtr: A.atr[j] > 0 ? Math.round(Math.abs(f.plan.en - f.plan.sl) / A.atr[j] * 100) / 100 : null,
     };
-    const res = resolveLive(rec, W);
-    if (res) S.done.unshift({ ...rec, ...res }); else S.open.push(rec);
+    const res = resolveLive(rec, W), r1 = resolveLive({ ...rec, tp: rec.tp1 }, W);
+    if (res) Object.assign(rec, res);
+    if (r1) Object.assign(rec, { out1: r1.out, r1: r1.r, endT1: r1.endT });
+    if (res && r1) S.done.unshift(rec); else S.open.push(rec);
     S.dirty = true;
   }
 }

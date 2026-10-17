@@ -191,7 +191,10 @@ export async function runCoachAuto(env, { candidates = [], executorCall, postDis
     }
     // open：持倉不見了＝停損或目標打到了（或使用者手動平倉）
     if (!op) {
-      const pnl = st.closedPnl.filter((p) => p.symbol === t.sym && p.updatedTime >= (t.fillAt || t.placedAt) - 60e3).reduce((a, p) => a + p.closedPnl, 0);
+      // 同一個幣 Demo 帳戶可能還有順勢策略的單：數量對得上的平倉紀錄優先，避免把別人的損益算成這筆（10/16 ARB 顯示 -26.67R 的原因）
+      const cands = st.closedPnl.filter((p) => p.symbol === t.sym && p.updatedTime >= (t.fillAt || t.placedAt) - 60e3);
+      const mine = cands.filter((p) => t.qty > 0 && p.qty > 0 && Math.abs(p.qty - t.qty) / t.qty < 0.02);
+      const pnl = (mine.length ? mine : cands).reduce((a, p) => a + p.closedPnl, 0);
       const r = t.riskU > 0 ? pnl / t.riskU : 0;
       Object.assign(t, { state: 'closed', closedAt: now, pnl: Math.round(pnl * 100) / 100, r: Math.round(r * 100) / 100 });
       await say(`${r >= 0 ? '✅' : '⛔'} ${tag}：平倉 ${r >= 0 ? '+' : ''}${r.toFixed(2)}R（${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}U）`);
