@@ -45,7 +45,7 @@ test('自動下單：關的時候不下；開 Demo → 掛單 → 成交 → 平
   assert.equal((await runCoachAuto(env, { ...deps, candidates: [cand()] })).mode, 'off');
   assert.equal(ex.calls.length, 0);
   const tok = (b) => new Request('https://w/coach-auto', { method: 'POST', body: JSON.stringify(b) });
-  assert.equal((await handleCoachAuto(tok({ mode: 'demo' }), env)).status, 200);
+  assert.equal((await handleCoachAuto(tok({ mode: 'demo', plan: 'legacy' }), env)).status, 200);
   let r = await runCoachAuto(env, { ...deps, candidates: [cand()] });
   assert.deepEqual(r.placed, ['cc:SOL:15m:L:1']);
   assert.match(msgs.at(-1), /教練自動下單（Demo）｜SOL 15m 多單/);
@@ -69,7 +69,7 @@ test('自動下單：關的時候不下；開 Demo → 掛單 → 成交 → 平
 test('條件：真錢只做順勢＋≥2R；Demo 有訊號就進', async () => {
   for (const [mode, want] of [['live', 0], ['demo', 1]]) {
     const env = { SMC_KV: makeKv(), EXECUTOR_URL: 'x' }, ex = fakeExecutor();
-    await env.SMC_KV.put('coachauto:cfg', JSON.stringify({ mode }));
+    await env.SMC_KV.put('coachauto:cfg', JSON.stringify({ plan: 'legacy', mode }));
     const r = await runCoachAuto(env, { executorCall: ex.call, postDiscord: async () => {}, fetchKlines: async () => [], now: Date.UTC(2026, 9, 15, 5), candidates: [cand({ bias: 0, rr: 1.6 })] });
     assert.equal(r.placed.length, want, mode);
   }
@@ -79,7 +79,7 @@ test('煞車：當天虧 5 筆就暫停（虧 4 筆還會繼續下）；同時�
   const env = { SMC_KV: makeKv(), EXECUTOR_URL: 'x' }, ex = fakeExecutor(), msgs = [];
   const now = Date.UTC(2026, 9, 15, 5);
   const deps = { executorCall: ex.call, postDiscord: async (e, p) => msgs.push(p.content), fetchKlines: async () => [], now };
-  await env.SMC_KV.put('coachauto:cfg', JSON.stringify({ mode: 'demo' }));
+  await env.SMC_KV.put('coachauto:cfg', JSON.stringify({ plan: 'legacy', mode: 'demo' }));
   // 最多 5 筆
   const many = ['A', 'B', 'C', 'D', 'E', 'F', 'G'].map((s, i) => cand({ id: `cc:${s}:15m:L:${i}`, sym: `${s}USDT`, sl: 147 }));
   const r = await runCoachAuto(env, { ...deps, candidates: many });
@@ -102,7 +102,7 @@ test('煞車：當天虧 5 筆就暫停（虧 4 筆還會繼續下）；同時�
 test('每筆風險＝權益 9%：Demo 當成 220U → 約 19.8U', async () => {
   const env = { SMC_KV: makeKv(), EXECUTOR_URL: 'x' }, ex = fakeExecutor();
   ex.equity = 1600;
-  await env.SMC_KV.put('coachauto:cfg', JSON.stringify({ mode: 'demo' }));
+  await env.SMC_KV.put('coachauto:cfg', JSON.stringify({ plan: 'legacy', mode: 'demo' }));
   await runCoachAuto(env, { executorCall: ex.call, postDiscord: async () => {}, fetchKlines: async () => [], now: Date.UTC(2026, 9, 15, 5), candidates: [cand({ en: 100, sl: 99, tp: 103 })] });
   const o = ex.calls.find((c) => c.path === '/coach/order').body;
   assert.ok(Math.abs(o.qty * 1 - 19.8) < 0.01, `風險 ${o.qty}U`);
@@ -110,7 +110,7 @@ test('每筆風險＝權益 9%：Demo 當成 220U → 約 19.8U', async () => {
 
 test('兩個都開（both）：Demo 有訊號就進、真錢只做順勢＋≥2R，各下各的帳戶', async () => {
   const env = { SMC_KV: makeKv(), EXECUTOR_URL: 'x' }, ex = fakeExecutor();
-  await env.SMC_KV.put('coachauto:cfg', JSON.stringify({ mode: 'both' }));
+  await env.SMC_KV.put('coachauto:cfg', JSON.stringify({ plan: 'legacy', mode: 'both' }));
   const deps = { executorCall: ex.call, postDiscord: async () => {}, fetchKlines: async () => [], now: Date.UTC(2026, 9, 15, 5) };
   const r = await runCoachAuto(env, { ...deps, candidates: [cand({ id: 'cc:a', sym: 'AUSDT', bias: 2, rr: 2.5 }), cand({ id: 'cc:b', sym: 'BUSDT', bias: 1, rr: 1.6 })] });
   const orders = ex.calls.filter((c) => c.path === '/coach/order').map((c) => `${c.body.account}:${c.body.orderLinkId}`);
@@ -120,7 +120,7 @@ test('兩個都開（both）：Demo 有訊號就進、真錢只做順勢＋≥2R
 
 test('真錢條件可以一鍵切換：liveLoose 打開後逆勢、不到 2R 的也下真錢', async () => {
   const env = { SMC_KV: makeKv(), EXECUTOR_URL: 'x' }, ex = fakeExecutor();
-  await env.SMC_KV.put('coachauto:cfg', JSON.stringify({ mode: 'live' }));
+  await env.SMC_KV.put('coachauto:cfg', JSON.stringify({ plan: 'legacy', mode: 'live' }));
   const deps = { executorCall: ex.call, postDiscord: async () => {}, fetchKlines: async () => [], now: Date.UTC(2026, 9, 15, 5) };
   await runCoachAuto(env, { ...deps, candidates: [cand({ id: 'cc:x', sym: 'XUSDT', bias: 0, rr: 1.5 })] });
   assert.equal(ex.calls.filter((c) => c.path === '/coach/order').length, 0, '嚴格時不下');
@@ -135,7 +135,7 @@ test('強平價太靠近停損：判斷正確，開著的教練倉位會自動�
   assert.equal(liqSafe({ side: 'L', en: 100, sl: 99, liq: 98.4 }), true);
   assert.equal(liqSafe({ side: 'L', en: 100, sl: 99, liq: 98.9 }), false);
   const env = { SMC_KV: makeKv(), EXECUTOR_URL: 'x' }, ex = fakeExecutor(), msgs = [];
-  await env.SMC_KV.put('coachauto:cfg', JSON.stringify({ mode: 'live' }));
+  await env.SMC_KV.put('coachauto:cfg', JSON.stringify({ plan: 'legacy', mode: 'live' }));
   await env.SMC_KV.put('coachauto:trades', JSON.stringify([{ id: 'cc:SOL:15m:S:1', account: 'live', sym: 'SOLUSDT', iv: '15m', ms: 9e5, side: 'S', en: 103.02, sl: 105.07, tp: 101.4, state: 'open', qty: 10.2, riskU: 20.9, lev: 40, placedAt: 1, fillAt: 1 }]));
   ex.positions = [{ symbol: 'SOLUSDT', side: 'Sell', size: 10.2, avgPrice: 103.02, leverage: 40, liqPrice: 105.07, positionIM: 26.3 }];
   const base = ex.call;
@@ -248,7 +248,26 @@ test('教練幫超級趨勢找進場點：訊號先等，同方向教練劇本�
 
 test('寬鬆也要 ≥1.5R：0.6R 的逆勢單（像 PYTH 那筆）不下，1.5R 以上照下', async () => {
   const env = { SMC_KV: makeKv(), EXECUTOR_URL: 'x' }, ex = fakeExecutor();
-  await env.SMC_KV.put('coachauto:cfg', JSON.stringify({ mode: 'both', liveLoose: true }));
+  await env.SMC_KV.put('coachauto:cfg', JSON.stringify({ plan: 'legacy', mode: 'both', liveLoose: true }));
   const r = await runCoachAuto(env, { executorCall: ex.call, postDiscord: async () => {}, fetchKlines: async () => [], now: Date.UTC(2026, 9, 15, 14), candidates: [cand({ id: 'cc:p', sym: 'PUSDT', bias: 0, rr: 0.61 }), cand({ id: 'cc:z', sym: 'ZUSDT', bias: 0, rr: 0.74 }), cand({ id: 'cc:q', sym: 'QUSDT', bias: 0, rr: 1.5 })] });
   assert.deepEqual(r.placed.sort(), ['demo:cc:q', 'live:cc:q']);
+});
+
+test('方案 B：只做 1h、停損至少 1.5 ATR、交易所止盈掛 1R；沒成交前先到結構目標才取消', async () => {
+  const env = { SMC_KV: makeKv(), EXECUTOR_URL: 'x' }, ex = fakeExecutor(), msgs = [];
+  await env.SMC_KV.put('coachauto:cfg', JSON.stringify({ mode: 'demo' }));
+  const now = Date.UTC(2026, 9, 17, 3);
+  const deps = { executorCall: ex.call, postDiscord: async (e, p) => msgs.push(p.content), now };
+  const r = await runCoachAuto(env, { ...deps, fetchKlines: async () => [], candidates: [
+    cand({ id: 'cc:a', sym: 'AUSDT', iv: '15m', stopAtr: 2 }),
+    cand({ id: 'cc:b', sym: 'BUSDT', iv: '1h', ms: 36e5, stopAtr: 1.2 }),
+    cand({ id: 'cc:c', sym: 'CUSDT', iv: '1h', ms: 36e5, stopAtr: 1.8, bias: 0, rr: 0.7, en: 150, sl: 148.5, tp: 151 }),
+  ] });
+  assert.deepEqual(r.placed, ['cc:c'], '15m 不做、停損太近不做；逆勢、0.7R 也照做');
+  const o = ex.calls.find((x) => x.path === '/coach/order').body;
+  assert.equal(o.takeProfit, 151.5, '止盈＝進場 + 1R');
+  assert.match(msgs.at(-1), /1R，方案 B・停損 1\.8 ATR/);
+  // 結構目標 151 先到 → 取消（不是用 1R 的 151.5）
+  await runCoachAuto(env, { ...deps, now: now + 60e3, fetchKlines: async () => [{ time: now, high: 151.1, low: 150.5 }] });
+  assert.ok(msgs.some((m) => /取消掛單（沒回到進場點就先到目標）/.test(m)));
 });

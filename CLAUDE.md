@@ -25,7 +25,7 @@
   教練 App 的戰績（`/coach-live`）、盯這單（`/watch`）、交易日誌（`/journal`）後端在 `worker/coach-extras.js`；
   日誌經 Executor 的 `GET /journal` 讀使用者真實帳戶（唯讀金鑰 `BYBIT_READ_API_KEY/SECRET`，用 executor-deploy.yml 同步到 Fly）。
   2026-10-15 起有「教練自動下單」（`worker/coach-auto.js`＋Executor `/coach/*`）：App 開關 關／Demo／真錢（預設關），
-  只做順 4h＋≥2R（寬鬆模式也要 ≥1.5R，`minRR`）、每筆風險權益 9%、同時最多 5 筆、當天虧 5 筆停；真錢單走使用者自己的帳戶（COACH_LIVE），跟 6 個順勢策略的主帳戶分開。
+  2026-10-17 起用方案 B（`plan: 'B'`，使用者看完回測選的）：只做 1h、停損至少 1.5 ATR、固定 1R 止盈（回測 `scripts/research/coach-improve2*.mjs`：勝率 55%、+0.06～0.08R，15m／30m 怎麼改都虧）；`plan: 'legacy'` 是原本的順 4h＋≥2R／寬鬆 ≥1.5R、每筆風險權益 9%、同時最多 5 筆、當天虧 5 筆停；真錢單走使用者自己的帳戶（COACH_LIVE），跟 6 個順勢策略的主帳戶分開。
   2026-10-15 起「超級趨勢」另外上真錢（`placeTrendLive`／`manageTrendLive`，Executor `/coach/market`、`/coach/set-stop`，orderLinkId `ct:`）：
   Demo 照跑，真錢每單風險 9%、最多 5 張、跟教練共用真錢帳戶，App／coach-auto.yml 可以關（KV `trendlive:cfg`）。
   2026-10-15 起真錢的超級趨勢改成「教練找進場點」（`entry: 'coach'`，沒回測、使用者決定直接上）：翻多／翻空先記成 waiting，

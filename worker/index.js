@@ -1386,7 +1386,7 @@ async function runCoach(env, { dry = false } = {}) {
         const r0 = st[side];
         if (r0.stage >= 4 && r0.sweep) {
           const sess = sessionOf(W[r0.sweep.u].t * 1000);
-          const c = autoCandidate({ job, side, r: r0, f: coachFollow(W, A, r0), W, sessKz: !!sess && sess.id !== 'asia' });
+          const c = autoCandidate({ job, side, r: r0, f: coachFollow(W, A, r0), W, sessKz: !!sess && sess.id !== 'asia', atr: A.atr[W.length - 1] });
           if (c) autoCandidates.push(c);
         }
       }
