@@ -129,6 +129,30 @@ tfoot td { font-weight: 700; border-bottom: 0 }
 .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-size: 14px; margin-bottom: 14px }
 .kv dt { color: var(--muted) }
 .kv dd { margin: 0; text-align: right }
+.row .pk { grid-column: 2; text-align: right; color: var(--muted); font-size: 12px; margin-top: -4px }
+.row .desc { grid-column: 1 / -1; color: var(--muted); font-size: 12px; min-width: 0 }
+.desc-box { background: var(--bg); border-radius: 8px; padding: 8px 12px; color: var(--muted); font-size: 13px; margin: -4px 0 14px }
+.seg { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; background: var(--bg); border-radius: 10px; padding: 4px; margin-bottom: 14px }
+.seg button { border: 0; background: none; border-radius: 8px; padding: 8px; font-weight: 700; color: var(--muted) }
+.seg button[aria-pressed="true"] { background: var(--panel); color: var(--ink); box-shadow: 0 1px 2px rgba(0, 0, 0, .12) }
+.cat-list { border: 1px solid var(--line); border-radius: 10px; max-height: 46vh; overflow-y: auto; margin: 10px 0 12px }
+.cat-item { display: grid; grid-template-columns: 26px 1fr; gap: 0 8px; width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px solid var(--line); padding: 10px 12px }
+.cat-item:last-child { border-bottom: 0 }
+.cat-item .box { width: 20px; height: 20px; border: 2px solid var(--line); border-radius: 5px; margin-top: 2px; display: grid; place-items: center; font-size: 13px; font-weight: 900; color: var(--accent-ink) }
+.cat-item[aria-pressed="true"] .box { background: var(--accent); border-color: var(--accent) }
+.cat-item .n { font-weight: 700 }
+.cat-item .s { grid-column: 2; color: var(--muted); font-size: 12px }
+.cat-item:disabled { opacity: .5 }
+.line { display: grid; grid-template-columns: 1fr 110px 36px; gap: 6px; align-items: center; padding: 10px 0; border-bottom: 1px dashed var(--line) }
+.line select, .line input { width: 100%; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); min-width: 0 }
+.line .qwrap { display: flex; align-items: center; gap: 4px }
+.line .qwrap span { font-size: 13px; color: var(--muted); white-space: nowrap }
+.line .del { border: 1px solid var(--line); background: none; border-radius: 8px; height: 40px; color: var(--muted) }
+.line .have { grid-column: 1 / -1; font-size: 12px; color: var(--muted); margin: 0 }
+.addline { border: 1px dashed var(--accent); color: var(--accent); background: none; border-radius: 8px; padding: 10px; width: 100%; font-weight: 700; margin: 10px 0 }
+.sum { display: flex; justify-content: space-between; font-weight: 700; margin: 4px 0 12px }
+.check { display: flex; gap: 8px; align-items: center; font-size: 14px; margin: 0 0 12px }
+.check input { width: 20px; height: 20px }
 
 @media (prefers-reduced-motion: no-preference) { .sheet { animation: up .18s ease-out } @keyframes up { from { transform: translateY(24px); opacity: .6 } } }
 </style>
@@ -210,55 +234,119 @@ tfoot td { font-weight: 700; border-bottom: 0 }
   var $ = function (id) { return document.getElementById(id); };
   var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
   var money = function (n) { return 'NT$' + Math.round(n || 0).toLocaleString('zh-TW'); };
-  var unitPrice = function (n) { var r = Math.round(n * 10) / 10; return 'NT$' + r.toLocaleString('zh-TW', { maximumFractionDigits: 1 }); };
+  var unitPrice = function (n) { var r = Math.round((n || 0) * 100) / 100; return 'NT$' + r.toLocaleString('zh-TW', { maximumFractionDigits: 2 }); };
   var qtyFmt = function (n) { return (Math.round(n * 100) / 100).toLocaleString('zh-TW', { maximumFractionDigits: 2 }); };
   var uid = function () { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); };
   var today = function () { var d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
 
+  // 常用水電材料：[分類, 名稱, 規格, 領用單位, 說明, 整包單位, 每包多少, 安全量]
+  var CATALOG = [
+    ['電', '電線 2.0mm 單芯', 'PVC 絕緣', '米', '一般插座、照明迴路最常用', '卷', 100, 100],
+    ['電', '電線 1.6mm 單芯', 'PVC 絕緣', '米', '較細的線，燈具、開關回路配線', '卷', 100, 50],
+    ['電', '電線 3.5mm² 絞線', '', '米', '烘碗機、電熱器等較耗電的電器迴路', '卷', 100, 50],
+    ['電', '電線 5.5mm² 絞線', '', '米', '冷氣、電熱水器等 220V 專用迴路', '卷', 100, 50],
+    ['電', '電線 8mm² 絞線', '', '米', '大型電器專用迴路、分電盤幹線', '卷', 100, 30],
+    ['電', '電線 14mm² 絞線', '', '米', '總開關到分電盤的主幹線', '卷', 100, 20],
+    ['電', '接地線 2.0mm（綠色）', '', '米', '插座、電器接地用', '卷', 100, 50],
+    ['電', '網路線 Cat6', '', '米', '網路、監視器等弱電', '箱', 305, 50],
+    ['電', 'PVC 電管 4分', '4m／支', '支', '牆內、天花板穿線保護', '', 0, 10],
+    ['電', 'PVC 電管 6分', '4m／支', '支', '線多或粗線時穿線用', '', 0, 10],
+    ['電', '可撓管（軟管）16mm', '', '米', '轉彎多的地方、天花板內穿線', '卷', 50, 20],
+    ['電', '開關盒（埋入式 單連）', '', '個', '牆內裝一個開關或插座的盒子', '', 0, 10],
+    ['電', '單切開關', '', '個', '一個開關控制一組燈', '', 0, 10],
+    ['電', '雙切開關（三路）', '', '個', '兩個地方控制同一組燈，例如樓梯上下', '', 0, 4],
+    ['電', '雙聯接地插座', '15A 125V', '個', '一般 110V 插座', '', 0, 10],
+    ['電', '冷氣專用插座', '20A 250V', '個', '220V 冷氣用', '', 0, 2],
+    ['電', '無熔絲開關 1P 20A', '', '個', '110V 分路保護', '', 0, 4],
+    ['電', '無熔絲開關 2P 20A', '', '個', '220V 分路保護（冷氣等）', '', 0, 4],
+    ['電', '漏電斷路器 2P 20A', '', '個', '浴室、廚房、戶外等潮濕的地方防觸電', '', 0, 2],
+    ['電', '絕緣膠帶（電火布）', '', '卷', '電線接頭包覆絕緣', '', 0, 10],
+    ['電', '壓接端子', '', '包', '電線接頭、接到開關端子', '', 0, 2],
+    ['水', 'PVC 水管 4分（1/2"）', '4m／支', '支', '冷水給水管', '', 0, 10],
+    ['水', 'PVC 水管 6分（3/4"）', '4m／支', '支', '給水主管、進水管', '', 0, 10],
+    ['水', 'PVC 水管 1吋', '4m／支', '支', '總進水、大流量給水', '', 0, 4],
+    ['水', 'PVC 排水管 2吋', '4m／支', '支', '洗手台、浴室地板排水', '', 0, 4],
+    ['水', 'PVC 排水管 3吋', '4m／支', '支', '廚房、多處合流的排水', '', 0, 2],
+    ['水', 'PVC 排水管 4吋', '4m／支', '支', '馬桶排水', '', 0, 2],
+    ['水', '不鏽鋼熱水管 4分', '', '支', '熱水給水管', '', 0, 4],
+    ['水', 'PVC 彎頭 4分', '90°', '個', '水管轉彎的接頭', '', 0, 20],
+    ['水', 'PVC 三通 4分', '', '個', '一條水管分成兩路', '', 0, 10],
+    ['水', 'PVC 由任 4分', '', '個', '以後要拆修方便的活接頭', '', 0, 5],
+    ['水', '止水閥 4分', '', '個', '水龍頭、馬桶進水前的開關', '', 0, 5],
+    ['水', '球塞閥（凡而）6分', '', '個', '總開關、分區關水用', '', 0, 2],
+    ['水', '給水軟管（蛇管）', '40cm', '條', '止水閥接到水龍頭、馬桶', '', 0, 5],
+    ['水', '止洩帶', '', '卷', '牙口纏一圈防漏水', '', 0, 10],
+    ['水', 'PVC 膠水', '', '罐', 'PVC 管和接頭黏合', '', 0, 2],
+    ['水', '地板落水頭', '2吋', '個', '浴室、陽台地板排水口', '', 0, 2],
+    ['水', '存水彎', '', '個', '洗手台下方防臭', '', 0, 2],
+    ['其他', '矽利康', '', '支', '防水收邊、填縫', '', 0, 5],
+    ['其他', '塑膠壁虎（膨脹螺絲）', '', '包', '牆上固定管線、盒子', '', 0, 2],
+    ['其他', '束帶', '', '包', '整理、固定電線', '', 0, 2],
+    ['其他', '管夾（固定扣）', '', '包', '把管子固定在牆上', '', 0, 2]
+  ];
+  function fromCatalog(r) {
+    var it = { name: r[1], cat: r[0], spec: r[2], unit: r[3], desc: r[4], min: r[7] };
+    if (r[5]) it.pack = { unit: r[5], size: r[6] };
+    return it;
+  }
+  function catalogByName(name) { for (var i = 0; i < CATALOG.length; i++) if (CATALOG[i][1] === name) return CATALOG[i]; return null; }
+
   function sampleData() {
-    var items = [
-      ['PVC 水管 4分（1/2"）', '水', 'B管 4m', '支', 10, 40, 45],
-      ['PVC 彎頭 4分', '水', '90° 接頭', '個', 20, 100, 6],
-      ['止水閥 4分', '水', '銅製', '個', 5, 12, 160],
-      ['止洩帶', '水', '12mm', '卷', 10, 40, 15],
-      ['電線 2.0mm 單芯', '電', '100m／卷', '卷', 3, 8, 1350],
-      ['電線 5.5mm² 絞線', '電', '100m／卷', '卷', 2, 3, 3600],
-      ['PVC 電管 4分', '電', '4m', '支', 10, 50, 28],
-      ['單切開關', '電', '埋入式', '個', 10, 30, 85],
-      ['雙聯接地插座', '電', '15A 125V', '個', 10, 25, 120],
-      ['無熔絲開關 2P 20A', '電', 'NFB', '個', 4, 6, 380]
+    // [名稱, 期初數量（領用單位）, 期初單價（每領用單位）]
+    var stock = [
+      ['電線 2.0mm 單芯', 800, 13.5], ['電線 5.5mm² 絞線', 300, 36], ['PVC 電管 4分', 50, 28],
+      ['單切開關', 30, 85], ['雙聯接地插座', 25, 120], ['無熔絲開關 2P 20A', 6, 380],
+      ['PVC 水管 4分（1/2"）', 40, 45], ['PVC 彎頭 4分', 100, 6], ['止水閥 4分', 12, 160], ['止洩帶', 40, 15]
     ];
     var s = { sample: true, items: [], logs: [] };
     var t = Date.parse('2026-10-01T08:00:00');
     var ids = {};
-    items.forEach(function (r, i) {
+    stock.forEach(function (r, i) {
       var id = 'ex' + i; ids[r[0]] = id;
-      s.items.push({ id: id, name: r[0], cat: r[1], spec: r[2], unit: r[3], min: r[4] });
-      s.logs.push({ id: 'exl' + i, t: t + i, date: '2026-10-01', type: 'in', itemId: id, qty: r[5], price: r[6], job: '', note: '期初庫存' });
+      s.items.push(Object.assign({ id: id }, fromCatalog(catalogByName(r[0]))));
+      s.logs.push({ id: 'exl' + i, t: t + i, date: '2026-10-01', type: 'in', itemId: id, qty: r[1], price: r[2], job: '', note: '期初庫存' });
     });
     var n = 100;
-    function add(date, type, name, qty, price, job) {
-      s.logs.push({ id: 'exl' + (n++), t: Date.parse(date + 'T10:00:00') + n, date: date, type: type, itemId: ids[name], qty: qty, price: price || 0, job: job || '', note: '' });
+    function add(date, type, name, qty, price, job, pk) {
+      var l = { id: 'exl' + (n++), t: Date.parse(date + 'T10:00:00') + n, date: date, type: type, itemId: ids[name], qty: qty, price: price || 0, job: job || '', note: '' };
+      if (pk) l.pk = pk;
+      s.logs.push(l);
     }
     add('2026-10-06', 'out', 'PVC 水管 4分（1/2"）', 12, 0, '王公館 浴室翻修');
     add('2026-10-06', 'out', 'PVC 彎頭 4分', 30, 0, '王公館 浴室翻修');
     add('2026-10-06', 'out', '止水閥 4分', 3, 0, '王公館 浴室翻修');
     add('2026-10-06', 'out', '止洩帶', 4, 0, '王公館 浴室翻修');
-    add('2026-10-09', 'in', '電線 2.0mm 單芯', 2, 1400);
-    add('2026-10-11', 'out', '電線 2.0mm 單芯', 3, 0, '林小姐 套房配電');
+    add('2026-10-09', 'in', '電線 2.0mm 單芯', 200, 14, '', { n: 2, unit: '卷' });
+    add('2026-10-11', 'out', '電線 2.0mm 單芯', 230, 0, '林小姐 套房配電');
+    add('2026-10-11', 'out', '電線 5.5mm² 絞線', 35, 0, '林小姐 套房配電');
     add('2026-10-11', 'out', '單切開關', 8, 0, '林小姐 套房配電');
     add('2026-10-11', 'out', '雙聯接地插座', 18, 0, '林小姐 套房配電');
     add('2026-10-11', 'out', '無熔絲開關 2P 20A', 3, 0, '林小姐 套房配電');
     add('2026-10-11', 'out', 'PVC 電管 4分', 20, 0, '林小姐 套房配電');
     add('2026-10-15', 'out', 'PVC 水管 4分（1/2"）', 20, 0, '陳記餐廳 廚房給水');
     add('2026-10-15', 'out', '止水閥 4分', 5, 0, '陳記餐廳 廚房給水');
+    add('2026-10-16', 'out', '電線 2.0mm 單芯', 440, 0, '張先生 透天全室換線');
+    add('2026-10-16', 'out', '單切開關', 12, 0, '張先生 透天全室換線');
     return s;
   }
 
   var state;
   try { state = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) { state = null; }
-  if (!state || !Array.isArray(state.items) || !Array.isArray(state.logs)) state = sampleData();
+  // 沒動過的範例資料直接換成最新版範例
+  if (!state || !Array.isArray(state.items) || !Array.isArray(state.logs) || state.sample) state = sampleData();
   function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} }
+
+  // ---------- 數量、價錢顯示 ----------
+  function hasPack(it) { return !!(it.pack && it.pack.size > 0); }
+  // 「165 米（1 卷又 65 米）」
+  function packText(it, q) {
+    if (!hasPack(it) || q <= 0) return '';
+    var size = it.pack.size, n = Math.floor(q / size + 1e-9), r = q - n * size;
+    if (n === 0) return '不到 1 ' + it.pack.unit;
+    return n + ' ' + it.pack.unit + (r > 1e-6 ? '又 ' + qtyFmt(r) + ' ' + it.unit : '整');
+  }
+  function fq(it, q) { var p = packText(it, q); return qtyFmt(q) + ' ' + it.unit + (p ? '（' + p + '）' : ''); }
+  function fp(it, avg) { return '每' + it.unit + ' ' + unitPrice(avg) + (hasPack(it) ? '・每' + it.pack.unit + ' ' + money(avg * it.pack.size) : ''); }
 
   // 用進出紀錄重算每項材料的數量和加權平均成本，以及每筆領用的成本
   var calc;
@@ -306,18 +394,20 @@ tfoot td { font-weight: 700; border-bottom: 0 }
     var q = $('q').value.trim().toLowerCase();
     var rows = state.items.filter(function (it) {
       if (cat === '不足') { if (!isLow(it)) return false; } else if (cat !== '全部' && it.cat !== cat) return false;
-      return !q || (it.name + ' ' + it.spec).toLowerCase().indexOf(q) >= 0;
+      return !q || (it.name + ' ' + it.spec + ' ' + (it.desc || '')).toLowerCase().indexOf(q) >= 0;
     });
     rows.sort(function (a, b) { return (isLow(b) - isLow(a)) || a.cat.localeCompare(b.cat) || a.name.localeCompare(b.name, 'zh-Hant'); });
-    if (!state.items.length) { $('stockList').innerHTML = '<div class="empty">還沒有材料。按下方「新增材料」加第一項，可以順便填期初庫存。</div>'; return; }
+    if (!state.items.length) { $('stockList').innerHTML = '<div class="empty">還沒有材料。按下方「新增材料」，從常用清單勾一勾就能加好。</div>'; return; }
     if (!rows.length) { $('stockList').innerHTML = '<div class="empty">沒有符合的材料。</div>'; return; }
     $('stockList').innerHTML = rows.map(function (it) {
-      var c = calc.by[it.id], lo = isLow(it);
+      var c = calc.by[it.id], lo = isLow(it), pk = packText(it, c.qty);
       return '<button class="row' + (lo ? ' low' : '') + '" type="button" data-item="' + it.id + '">' +
-        '<span class="name"><span class="tag' + (lo ? ' low' : '') + '">' + (lo ? '不足' : esc(it.cat)) + '</span>' + esc(it.name) + '</span>' +
+        '<span class="name"><span class="tag' + (lo ? ' low' : '') + '">' + (lo ? '不足' : esc(it.cat)) + '</span>' + esc(it.name) + (it.spec ? ' <small style="color:var(--muted);font-weight:500">' + esc(it.spec) + '</small>' : '') + '</span>' +
         '<span class="qty num">' + qtyFmt(c.qty) + ' <small>' + esc(it.unit) + '</small></span>' +
-        '<span class="meta">' + esc(it.spec) + (it.spec ? '・' : '') + '安全量 ' + qtyFmt(it.min || 0) + '</span>' +
-        '<span class="val num">均價 ' + unitPrice(c.avg) + '／值 ' + money(Math.max(c.qty, 0) * c.avg) + '</span></button>';
+        (pk ? '<span></span><span class="pk">' + esc(pk) + '</span>' : '') +
+        (it.desc ? '<span class="desc">' + esc(it.desc) + '</span>' : '') +
+        '<span class="meta">安全量 ' + qtyFmt(it.min || 0) + ' ' + esc(it.unit) + '</span>' +
+        '<span class="val num">' + esc(fp(it, c.avg)) + '・值 ' + money(Math.max(c.qty, 0) * c.avg) + '</span></button>';
     }).join('');
   }
 
@@ -334,19 +424,21 @@ tfoot td { font-weight: 700; border-bottom: 0 }
     });
     return Object.keys(jobs).map(function (k) { return jobs[k]; }).sort(function (a, b) { return b.last.localeCompare(a.last); });
   }
+  var ghost = { name: '（已刪除材料）', unit: '', spec: '' };
 
   function renderJobs() {
     var js = jobsData();
     if (!js.length) { $('jobList').innerHTML = '<div class="empty">還沒有工地領料。按「工地領用」記一筆，這裡會自動算出每個工地的材料成本。</div>'; return; }
     $('jobList').innerHTML = js.map(function (j, idx) {
       var lines = Object.keys(j.lines).map(function (id) {
-        var it = itemById(id) || { name: '（已刪除材料）', unit: '' }, ln = j.lines[id];
-        return '<tr><td>' + esc(it.name) + '</td><td class="r num">' + qtyFmt(ln.qty) + ' ' + esc(it.unit) + '</td><td class="r num">' + money(ln.cost) + '</td></tr>';
+        var it = itemById(id) || ghost, ln = j.lines[id];
+        return '<tr><td>' + esc(it.name) + (it.spec ? '<br><small style="color:var(--muted)">' + esc(it.spec) + '</small>' : '') + '</td><td class="r num">' + qtyFmt(ln.qty) + ' ' + esc(it.unit) +
+          '</td><td class="r num">' + (ln.qty ? unitPrice(ln.cost / ln.qty) : '—') + '</td><td class="r num">' + money(ln.cost) + '</td></tr>';
       }).join('');
       return '<details class="job"' + (idx === 0 ? ' open' : '') + '><summary><span class="name" style="font-weight:700">' + esc(j.name) + '</span><span class="num" style="font-weight:600">' + money(j.total) + '</span>' +
-        '<span class="meta" style="color:var(--muted);font-size:12px">最近領料 ' + esc(j.last) + '</span><span></span></summary>' +
-        '<div class="lines"><table><thead><tr><th>材料</th><th class="r">數量</th><th class="r">成本</th></tr></thead><tbody>' + lines +
-        '</tbody><tfoot><tr><td>合計</td><td></td><td class="r num">' + money(j.total) + '</td></tr></tfoot></table>' +
+        '<span class="meta" style="color:var(--muted);font-size:12px">最近領料 ' + esc(j.last) + '・' + Object.keys(j.lines).length + ' 樣材料</span><span></span></summary>' +
+        '<div class="lines"><table><thead><tr><th>材料</th><th class="r">數量</th><th class="r">單價</th><th class="r">成本</th></tr></thead><tbody>' + lines +
+        '</tbody><tfoot><tr><td>合計</td><td></td><td></td><td class="r num">' + money(j.total) + '</td></tr></tfoot></table>' +
         '<button class="linkbtn" type="button" data-copyjob="' + esc(j.name) + '">複製成本單（貼到 LINE）</button></div></details>';
     }).join('');
   }
@@ -355,87 +447,237 @@ tfoot td { font-weight: 700; border-bottom: 0 }
     var ls = state.logs.slice().sort(function (a, b) { return b.t - a.t; });
     if (!ls.length) { $('logList').innerHTML = '<div class="empty">還沒有任何進出紀錄。</div>'; return; }
     $('logList').innerHTML = ls.map(function (l) {
-      var it = itemById(l.itemId) || { name: '（已刪除材料）', unit: '' };
+      var it = itemById(l.itemId) || ghost;
       var right = l.type === 'in' ? money(l.qty * l.price) : money(calc.outCost[l.id]);
-      var desc = l.type === 'in' ? ('單價 ' + unitPrice(l.price) + (l.note ? '・' + esc(l.note) : '')) : esc(l.job || '（未填工地）');
+      var amount = qtyFmt(l.qty) + ' ' + esc(it.unit) + (l.pk ? '（' + l.pk.n + ' ' + esc(l.pk.unit) + '）' : '');
+      var desc = l.type === 'in' ? (esc(fp(it, l.price)) + (l.note ? '・' + esc(l.note) : '')) : esc(l.job || '（未填工地）');
       return '<div class="log"><span class="kind ' + l.type + '">' + (l.type === 'in' ? '進貨' : '領用') + '</span>' +
-        '<span style="min-width:0"><b>' + esc(it.name) + '</b> <span class="num">' + qtyFmt(l.qty) + ' ' + esc(it.unit) + '</span><br><span class="d">' + esc(l.date) + '・' + desc + '</span></span>' +
+        '<span style="min-width:0"><b>' + esc(it.name) + '</b> <span class="num">' + amount + '</span><br><span class="d">' + esc(l.date) + '・' + desc + '</span></span>' +
         '<span style="text-align:right"><span class="num">' + right + '</span><br><button class="x" type="button" data-dellog="' + l.id + '">刪除</button></span></div>';
     }).join('');
   }
 
   // ---------- 下方滑出表單 ----------
-  function open(html, onReady) { $('sheet').innerHTML = html; $('scrim').hidden = false; if (onReady) onReady(); var f = $('sheet').querySelector('input,select'); if (f) f.focus(); }
+  function open(html, onReady) { $('sheet').innerHTML = html; $('scrim').hidden = false; $('sheet').scrollTop = 0; if (onReady) onReady(); }
   function close() { $('scrim').hidden = true; $('sheet').innerHTML = ''; }
   $('scrim').addEventListener('click', function (e) { if (e.target === $('scrim')) close(); });
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !$('scrim').hidden) close(); });
 
   var toastTimer;
-  function toast(msg) { var t = $('toast'); t.textContent = msg; t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.hidden = true; }, 2200); }
+  function toast(msg) { var t = $('toast'); t.textContent = msg; t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.hidden = true; }, 2600); }
   function leaveSample() { if (state.sample) { state = { items: [], logs: [] }; } }
   function commit(msg) { delete state.sample; save(); render(); close(); if (msg) toast(msg); }
+  function showErr(m) { $('fErr').textContent = m; $('fErr').hidden = false; }
 
   function itemOptions(sel) {
     return state.items.slice().sort(function (a, b) { return a.cat.localeCompare(b.cat) || a.name.localeCompare(b.name, 'zh-Hant'); })
-      .map(function (it) { return '<option value="' + it.id + '"' + (it.id === sel ? ' selected' : '') + '>' + esc(it.cat + '｜' + it.name + (it.spec ? '（' + it.spec + '）' : '')) + '</option>'; }).join('');
+      .map(function (it) { return '<option value="' + it.id + '"' + (it.id === sel ? ' selected' : '') + '>' + esc(it.cat + '｜' + it.name + (it.spec ? ' ' + it.spec : '')) + '</option>'; }).join('');
   }
   function jobList() { var s = {}; state.logs.forEach(function (l) { if (l.job) s[l.job] = 1; }); return Object.keys(s); }
+  function stamp(date, i) { return Date.parse(date + 'T12:00:00') + (Date.now() % 86400000) / 1000 + (i || 0); }
 
-  function moveForm(type, itemId) {
+  // 進貨：有整包單位的材料可以用「整卷」或「米」填
+  function inForm(itemId) {
     if (!state.items.length) { itemForm(); return; }
-    var isIn = type === 'in';
-    open('<h2>' + (isIn ? '進貨' : '工地領用') + '</h2><form id="f">' +
+    var mode = 'pack';
+    open('<h2>進貨</h2><form id="f">' +
       '<div class="field"><label for="fItem">材料</label><select id="fItem">' + itemOptions(itemId) + '</select></div>' +
-      '<p class="hint" id="fHave"></p>' +
-      '<div class="grid2"><div class="field"><label for="fQty">數量</label><input id="fQty" type="number" inputmode="decimal" step="any" min="0" required></div>' +
-      (isIn ? '<div class="field"><label for="fPrice">進貨單價（NT$）</label><input id="fPrice" type="number" inputmode="decimal" step="any" min="0" required></div>'
-            : '<div class="field"><label for="fDate">日期</label><input id="fDate" type="date" value="' + today() + '"></div>') + '</div>' +
-      (isIn ? '<div class="grid2"><div class="field"><label for="fDate">日期</label><input id="fDate" type="date" value="' + today() + '"></div><div class="field"><label for="fNote">廠商／備註</label><input id="fNote" type="text" placeholder="例：大同水電行"></div></div>'
-            : '<div class="field"><label for="fJob">工地／案件</label><input id="fJob" type="text" list="jobsDl" placeholder="例：王公館 浴室翻修" required><datalist id="jobsDl">' + jobList().map(function (j) { return '<option value="' + esc(j) + '">'; }).join('') + '</datalist></div>') +
+      '<div class="desc-box" id="fHave"></div>' +
+      '<div class="seg" id="fMode"><button type="button" data-m="pack"></button><button type="button" data-m="unit"></button></div>' +
+      '<div class="grid2"><div class="field"><label for="fQty" id="fQtyL">數量</label><input id="fQty" type="number" inputmode="decimal" step="any" min="0"></div>' +
+      '<div class="field"><label for="fPrice" id="fPriceL">單價</label><input id="fPrice" type="number" inputmode="decimal" step="any" min="0"></div></div>' +
+      '<div class="sum"><span id="fConv"></span><span id="fTotal" class="num"></span></div>' +
+      '<div class="grid2"><div class="field"><label for="fDate">日期</label><input id="fDate" type="date" value="' + today() + '"></div><div class="field"><label for="fNote">廠商／備註</label><input id="fNote" type="text" placeholder="例：大同水電行"></div></div>' +
       '<p class="err" id="fErr" hidden></p>' +
-      '<div class="btnrow"><button class="btn" type="submit" style="flex:1">' + (isIn ? '記錄進貨' : '記錄領用') + '</button><button class="btn ghost" type="button" id="fCancel">取消</button></div></form>', function () {
-      function showHave() { var it = itemById($('fItem').value), c = calc.by[it.id]; $('fHave').textContent = '目前庫存 ' + qtyFmt(c.qty) + ' ' + it.unit + '・平均成本 ' + unitPrice(c.avg) + '／' + it.unit; if (isIn && !$('fPrice').value && c.avg) $('fPrice').placeholder = '上次均價 ' + (Math.round(c.avg * 10) / 10); }
-      $('fItem').addEventListener('change', showHave); showHave();
+      '<div class="btnrow"><button class="btn" type="submit" style="flex:1">記錄進貨</button><button class="btn ghost" type="button" id="fCancel">取消</button></div></form>', function () {
+      function cur() { return itemById($('fItem').value); }
+      function usePack() { return hasPack(cur()) && mode === 'pack'; }
+      function sync() {
+        var it = cur(), c = calc.by[it.id];
+        $('fHave').textContent = (it.desc ? it.desc + '。' : '') + '目前庫存 ' + fq(it, c.qty) + (c.avg ? '，平均' + fp(it, c.avg) : '');
+        $('fMode').hidden = !hasPack(it);
+        if (hasPack(it)) {
+          var b = $('fMode').children;
+          b[0].textContent = '整' + it.pack.unit + '進（每' + it.pack.unit + ' ' + qtyFmt(it.pack.size) + ' ' + it.unit + '）';
+          b[1].textContent = '用' + it.unit + '算';
+          b[0].setAttribute('aria-pressed', String(mode === 'pack')); b[1].setAttribute('aria-pressed', String(mode !== 'pack'));
+        }
+        var u = usePack() ? it.pack.unit : it.unit;
+        $('fQtyL').textContent = '買了幾' + u;
+        $('fPriceL').textContent = '每' + u + '多少錢';
+        var ref = usePack() ? c.avg * it.pack.size : c.avg;
+        $('fPrice').placeholder = ref ? '上次約 ' + (Math.round(ref * 10) / 10) : '例：' + (usePack() ? '1350' : '45');
+        var q = parseFloat($('fQty').value) || 0, p = parseFloat($('fPrice').value) || 0;
+        $('fConv').textContent = usePack() && q ? '＝ ' + qtyFmt(q * it.pack.size) + ' ' + it.unit : '小計';
+        $('fTotal').textContent = money(q * p);
+      }
+      $('fItem').addEventListener('change', sync);
+      $('fMode').addEventListener('click', function (e) { var b = e.target.closest('[data-m]'); if (b) { mode = b.dataset.m; sync(); } });
+      $('fQty').addEventListener('input', sync); $('fPrice').addEventListener('input', sync);
+      sync(); $('fQty').focus();
       $('fCancel').addEventListener('click', close);
       $('f').addEventListener('submit', function (e) {
         e.preventDefault();
-        var it = itemById($('fItem').value), qty = parseFloat($('fQty').value), c = calc.by[it.id];
-        var err = function (m) { $('fErr').textContent = m; $('fErr').hidden = false; };
-        if (!(qty > 0)) return err('數量要大於 0。');
+        var it = cur(), q = parseFloat($('fQty').value), p = parseFloat($('fPrice').value);
+        if (!(q > 0)) return showErr('數量要大於 0。');
+        if (!(p >= 0)) return showErr('請填單價，才能算成本。');
         var date = $('fDate').value || today();
-        var log = { id: uid(), t: Date.parse(date + 'T12:00:00') + (Date.now() % 86400000) / 1000, date: date, type: type, itemId: it.id, qty: qty, price: 0, job: '', note: '' };
-        if (isIn) { var p = parseFloat($('fPrice').value); if (!(p >= 0)) return err('請填進貨單價。'); log.price = p; log.note = $('fNote').value.trim(); }
-        else { var j = $('fJob').value.trim(); if (!j) return err('請填工地或案件名稱，才能算成本。'); if (qty > c.qty + 1e-9) return err('庫存只剩 ' + qtyFmt(c.qty) + ' ' + it.unit + '，不夠領 ' + qtyFmt(qty) + '。先記進貨再領。'); log.job = j; }
+        var log = { id: uid(), t: stamp(date), date: date, type: 'in', itemId: it.id, qty: q, price: p, job: '', note: $('fNote').value.trim() };
+        if (usePack()) { log.qty = q * it.pack.size; log.price = p / it.pack.size; log.pk = { n: q, unit: it.pack.unit }; }
         state.logs.push(log);
-        var after = calc.by[it.id].qty + (isIn ? qty : -qty);
-        commit((isIn ? '已進貨 ' : '已領用 ') + it.name + '，剩 ' + qtyFmt(after) + ' ' + it.unit);
+        commit('已進貨 ' + it.name + '，現在有 ' + fq(it, calc.by[it.id].qty + log.qty));
       });
     });
   }
 
+  // 工地領用：一次可以填好幾樣材料
+  function outForm(itemId) {
+    if (!state.items.length) { itemForm(); return; }
+    var jobs = jobList();
+    open('<h2>工地領用</h2><form id="f">' +
+      '<div class="field"><label for="fJob">工地／案件</label><input id="fJob" type="text" list="jobsDl" placeholder="例：王公館 浴室翻修"><datalist id="jobsDl">' + jobs.map(function (j) { return '<option value="' + esc(j) + '">'; }).join('') + '</datalist></div>' +
+      '<div class="field"><label for="fDate">日期</label><input id="fDate" type="date" value="' + today() + '"></div>' +
+      '<div class="field" style="margin-bottom:0"><label>領了哪些材料</label></div><div id="lines"></div>' +
+      '<button class="addline" type="button" id="addLine">＋ 再加一樣材料</button>' +
+      '<div class="sum"><span>這次材料成本</span><span id="fTotal" class="num">NT$0</span></div>' +
+      '<p class="err" id="fErr" hidden></p>' +
+      '<div class="btnrow"><button class="btn" type="submit" style="flex:1">記錄領用</button><button class="btn ghost" type="button" id="fCancel">取消</button></div></form>', function () {
+      var n = 0;
+      function addLine(sel) {
+        var i = n++, d = document.createElement('div');
+        d.className = 'line';
+        d.innerHTML = '<select id="lItem' + i + '" aria-label="材料">' + itemOptions(sel) + '</select>' +
+          '<div class="qwrap"><input id="lQty' + i + '" type="number" inputmode="decimal" step="any" min="0" placeholder="數量" aria-label="數量"><span></span></div>' +
+          '<button class="del" type="button" aria-label="移除這一樣">✕</button><p class="have"></p>';
+        $('lines').appendChild(d);
+        d.querySelector('select').addEventListener('change', sync);
+        d.querySelector('input').addEventListener('input', sync);
+        d.querySelector('.del').addEventListener('click', function () { if ($('lines').children.length > 1) { d.remove(); sync(); } });
+        sync();
+        return d;
+      }
+      function lines() {
+        return Array.prototype.map.call($('lines').children, function (d) {
+          return { el: d, it: itemById(d.querySelector('select').value), qty: parseFloat(d.querySelector('input').value) || 0 };
+        });
+      }
+      function sync() {
+        var total = 0;
+        lines().forEach(function (l) {
+          var c = calc.by[l.it.id];
+          l.el.querySelector('.qwrap span').textContent = l.it.unit;
+          l.el.querySelector('.have').textContent = (l.it.desc ? l.it.desc + '・' : '') + '剩 ' + fq(l.it, c.qty);
+          total += l.qty * c.avg;
+        });
+        $('fTotal').textContent = money(total);
+      }
+      $('addLine').addEventListener('click', function () { addLine().querySelector('select').focus(); });
+      addLine(itemId);
+      if (jobs.length && !itemId) $('fJob').value = '';
+      $('fJob').focus();
+      $('fCancel').addEventListener('click', close);
+      $('f').addEventListener('submit', function (e) {
+        e.preventDefault();
+        var job = $('fJob').value.trim();
+        if (!job) return showErr('請填工地或案件名稱，才能算這個工地的成本。');
+        var ls = lines().filter(function (l) { return l.qty > 0; });
+        if (!ls.length) return showErr('至少填一樣材料的數量。');
+        var need = {};
+        ls.forEach(function (l) { need[l.it.id] = (need[l.it.id] || 0) + l.qty; });
+        for (var id in need) {
+          var it = itemById(id), have = calc.by[id].qty;
+          if (need[id] > have + 1e-9) return showErr(it.name + ' 只剩 ' + fq(it, have) + '，不夠領 ' + qtyFmt(need[id]) + ' ' + it.unit + '。先記進貨再領。');
+        }
+        var date = $('fDate').value || today();
+        ls.forEach(function (l, i) { state.logs.push({ id: uid(), t: stamp(date, i), date: date, type: 'out', itemId: l.it.id, qty: l.qty, price: 0, job: job, note: '' }); });
+        commit('已記錄 ' + job + ' 領用 ' + ls.length + ' 樣材料');
+      });
+    });
+  }
+
+  // 新增材料：從常用清單勾選，或自己填
   function itemForm(item) {
-    var ed = !!item; item = item || { name: '', cat: '水', spec: '', unit: '個', min: 0 };
-    open('<h2>' + (ed ? '修改材料' : '新增材料') + '</h2><form id="f">' +
-      '<div class="field"><label for="iName">材料名稱</label><input id="iName" type="text" required value="' + esc(item.name) + '" placeholder="例：PVC 水管 6分"></div>' +
+    var ed = !!item;
+    if (!ed) return pickCatalog();
+    customForm(item);
+  }
+
+  function pickCatalog() {
+    var have = {}, picked = {}, ccat = '電';
+    if (!state.sample) state.items.forEach(function (it) { have[it.name] = 1; });
+    open('<h2>新增材料</h2><div class="seg"><button type="button" aria-pressed="true">從常用清單選</button><button type="button" id="toCustom" aria-pressed="false">自己填</button></div>' +
+      '<input id="cq" type="search" placeholder="搜尋，例如：電線、4分、開關" style="width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg)">' +
+      '<div class="chips" id="cChips"></div><div class="cat-list" id="cList"></div>' +
+      '<p class="hint" style="margin:0 0 12px">加好之後按「＋ 進貨」填數量和價錢。名稱、單位、安全量之後都可以改。</p>' +
+      '<div class="btnrow"><button class="btn" type="button" id="cAdd" style="flex:1" disabled>勾選要加的材料</button><button class="btn ghost" type="button" id="fCancel">取消</button></div>', function () {
+      function draw() {
+        $('cChips').innerHTML = CATS.map(function (c) { return '<button class="chip" type="button" data-c="' + c + '" aria-pressed="' + (c === ccat) + '">' + c + '</button>'; }).join('');
+        var q = $('cq').value.trim().toLowerCase();
+        var rows = CATALOG.filter(function (r) { return q ? (r[1] + r[2] + r[4]).toLowerCase().indexOf(q) >= 0 : r[0] === ccat; });
+        $('cList').innerHTML = rows.length ? rows.map(function (r) {
+          var dis = have[r[1]], on = !!picked[r[1]];
+          return '<button class="cat-item" type="button" data-n="' + esc(r[1]) + '" aria-pressed="' + on + '"' + (dis ? ' disabled' : '') + '><span class="box">' + (on ? '✓' : '') + '</span>' +
+            '<span class="n">' + esc(r[1]) + (r[2] ? ' <small style="font-weight:500;color:var(--muted)">' + esc(r[2]) + '</small>' : '') + '</span>' +
+            '<span class="s">' + (dis ? '已經加過了' : esc(r[4]) + '・用「' + esc(r[3]) + '」算' + (r[5] ? '，整' + esc(r[5]) + '進（每' + esc(r[5]) + ' ' + r[6] + ' ' + esc(r[3]) + '）' : '')) + '</span></button>';
+        }).join('') : '<div class="empty">清單裡沒有，按上面「自己填」。</div>';
+        var cnt = Object.keys(picked).length;
+        $('cAdd').disabled = !cnt; $('cAdd').textContent = cnt ? '加入 ' + cnt + ' 樣材料' : '勾選要加的材料';
+      }
+      $('cChips').addEventListener('click', function (e) { var b = e.target.closest('[data-c]'); if (b) { ccat = b.dataset.c; $('cq').value = ''; draw(); } });
+      $('cList').addEventListener('click', function (e) { var b = e.target.closest('[data-n]'); if (!b || b.disabled) return; var k = b.dataset.n; if (picked[k]) delete picked[k]; else picked[k] = 1; draw(); });
+      $('cq').addEventListener('input', draw);
+      $('toCustom').addEventListener('click', function () { customForm(); });
+      $('fCancel').addEventListener('click', close);
+      $('cAdd').addEventListener('click', function () {
+        leaveSample();
+        var names = Object.keys(picked);
+        names.forEach(function (nm) { state.items.push(Object.assign({ id: uid() }, fromCatalog(catalogByName(nm)))); });
+        commit('已加入 ' + names.length + ' 樣材料，接著按「＋ 進貨」填數量');
+      });
+      draw();
+    });
+  }
+
+  function customForm(item) {
+    var ed = !!item; item = item || { name: '', cat: '水', spec: '', unit: '個', min: 0, desc: '' };
+    var pk = item.pack || { unit: '卷', size: 100 };
+    open('<h2>' + (ed ? '修改材料' : '新增材料') + '</h2>' +
+      (ed ? '' : '<div class="seg"><button type="button" id="toCat" aria-pressed="false">從常用清單選</button><button type="button" aria-pressed="true">自己填</button></div>') +
+      '<form id="f"><div class="field"><label for="iName">材料名稱</label><input id="iName" type="text" value="' + esc(item.name) + '" placeholder="例：PVC 水管 6分"></div>' +
       '<div class="grid2"><div class="field"><label for="iCat">分類</label><select id="iCat">' + CATS.map(function (c) { return '<option' + (c === item.cat ? ' selected' : '') + '>' + c + '</option>'; }).join('') + '</select></div>' +
-      '<div class="field"><label for="iUnit">單位</label><input id="iUnit" type="text" list="unitDl" required value="' + esc(item.unit) + '"><datalist id="unitDl"><option value="支"><option value="個"><option value="卷"><option value="米"><option value="包"><option value="箱"><option value="組"></datalist></div></div>' +
-      '<div class="grid2"><div class="field"><label for="iSpec">規格（可空白）</label><input id="iSpec" type="text" value="' + esc(item.spec) + '" placeholder="例：B管 4m"></div>' +
-      '<div class="field"><label for="iMin">安全庫存量</label><input id="iMin" type="number" inputmode="decimal" step="any" min="0" value="' + (item.min || 0) + '"></div></div>' +
-      (ed ? '' : '<div class="grid2"><div class="field"><label for="iQty">期初數量（可空白）</label><input id="iQty" type="number" inputmode="decimal" step="any" min="0"></div><div class="field"><label for="iPrice">期初單價 NT$</label><input id="iPrice" type="number" inputmode="decimal" step="any" min="0"></div></div>') +
+      '<div class="field"><label for="iSpec">規格（可空白）</label><input id="iSpec" type="text" value="' + esc(item.spec) + '" placeholder="例：4m／支"></div></div>' +
+      '<div class="field"><label for="iDesc">說明：用在哪裡（可空白）</label><input id="iDesc" type="text" value="' + esc(item.desc || '') + '" placeholder="例：冷氣 220V 專用迴路"></div>' +
+      '<div class="grid2"><div class="field"><label for="iUnit">領用時用什麼單位</label><input id="iUnit" type="text" list="unitDl" value="' + esc(item.unit) + '"><datalist id="unitDl"><option value="米"><option value="支"><option value="個"><option value="卷"><option value="條"><option value="包"><option value="罐"><option value="組"></datalist></div>' +
+      '<div class="field"><label for="iMin" id="iMinL">安全庫存量</label><input id="iMin" type="number" inputmode="decimal" step="any" min="0" value="' + (item.min || 0) + '"></div></div>' +
+      '<label class="check"><input id="iPackOn" type="checkbox"' + (item.pack ? ' checked' : '') + '>進貨是整卷／整箱買（例如電線一卷 100 米）</label>' +
+      '<div class="grid2" id="iPackBox"><div class="field"><label for="iPackUnit">整包單位</label><input id="iPackUnit" type="text" list="packDl" value="' + esc(pk.unit) + '"><datalist id="packDl"><option value="卷"><option value="箱"><option value="捆"><option value="包"></datalist></div>' +
+      '<div class="field"><label for="iPackSize" id="iPackSizeL">每包多少</label><input id="iPackSize" type="number" inputmode="decimal" step="any" min="0" value="' + pk.size + '"></div></div>' +
       '<p class="hint">低於安全庫存量會標黃色「不足」，提醒要補貨。</p><p class="err" id="fErr" hidden></p>' +
       '<div class="btnrow"><button class="btn" type="submit" style="flex:1">' + (ed ? '儲存' : '新增') + '</button><button class="btn ghost" type="button" id="fCancel">取消</button></div></form>', function () {
+      function sync() {
+        var u = $('iUnit').value.trim() || '單位', pu = $('iPackUnit').value.trim() || '包';
+        $('iPackBox').hidden = !$('iPackOn').checked;
+        $('iMinL').textContent = '安全庫存量（' + u + '）';
+        $('iPackSizeL').textContent = '每' + pu + '幾' + u;
+      }
+      ['iUnit', 'iPackUnit', 'iPackOn'].forEach(function (k) { $(k).addEventListener('input', sync); $(k).addEventListener('change', sync); });
+      sync(); $('iName').focus();
+      if (!ed) $('toCat').addEventListener('click', pickCatalog);
       $('fCancel').addEventListener('click', close);
       $('f').addEventListener('submit', function (e) {
         e.preventDefault();
         var name = $('iName').value.trim(), unit = $('iUnit').value.trim();
-        if (!name || !unit) { $('fErr').textContent = '名稱和單位都要填。'; $('fErr').hidden = false; return; }
-        var data = { name: name, cat: $('iCat').value, spec: $('iSpec').value.trim(), unit: unit, min: parseFloat($('iMin').value) || 0 };
-        if (ed) { Object.assign(item, data); commit('已儲存'); return; }
+        if (!name || !unit) return showErr('名稱和單位都要填。');
+        var data = { name: name, cat: $('iCat').value, spec: $('iSpec').value.trim(), desc: $('iDesc').value.trim(), unit: unit, min: parseFloat($('iMin').value) || 0 };
+        if ($('iPackOn').checked) {
+          var size = parseFloat($('iPackSize').value), pu = $('iPackUnit').value.trim();
+          if (!(size > 0) || !pu) return showErr('整包單位和每包數量都要填。');
+          data.pack = { unit: pu, size: size };
+        }
+        if (ed) { delete item.pack; Object.assign(item, data); commit('已儲存'); return; }
         leaveSample();
-        var it = Object.assign({ id: uid() }, data); state.items.push(it);
-        var q = parseFloat($('iQty').value);
-        if (q > 0) state.logs.push({ id: uid(), t: Date.now(), date: today(), type: 'in', itemId: it.id, qty: q, price: parseFloat($('iPrice').value) || 0, job: '', note: '期初庫存' });
-        commit('已新增 ' + name);
+        state.items.push(Object.assign({ id: uid() }, data));
+        commit('已新增 ' + name + '，接著按「＋ 進貨」填數量');
       });
     });
   }
@@ -443,19 +685,20 @@ tfoot td { font-weight: 700; border-bottom: 0 }
   function itemSheet(id) {
     var it = itemById(id), c = calc.by[id];
     var used = state.logs.filter(function (l) { return l.itemId === id; }).length;
-    open('<h2>' + esc(it.name) + '</h2><dl class="kv">' +
+    open('<h2>' + esc(it.name) + '</h2>' + (it.desc ? '<div class="desc-box">' + esc(it.desc) + '</div>' : '') + '<dl class="kv">' +
       '<dt>分類／規格</dt><dd>' + esc(it.cat) + (it.spec ? '・' + esc(it.spec) : '') + '</dd>' +
-      '<dt>目前庫存</dt><dd class="num"><b>' + qtyFmt(c.qty) + ' ' + esc(it.unit) + '</b>' + (isLow(it) ? '　<span class="tag low">不足</span>' : '') + '</dd>' +
+      '<dt>目前庫存</dt><dd class="num"><b>' + esc(fq(it, c.qty)) + '</b>' + (isLow(it) ? '　<span class="tag low">不足</span>' : '') + '</dd>' +
       '<dt>安全庫存量</dt><dd class="num">' + qtyFmt(it.min || 0) + ' ' + esc(it.unit) + '</dd>' +
-      '<dt>平均成本</dt><dd class="num">' + unitPrice(c.avg) + '／' + esc(it.unit) + '</dd>' +
+      (hasPack(it) ? '<dt>整包</dt><dd>每' + esc(it.pack.unit) + ' ' + qtyFmt(it.pack.size) + ' ' + esc(it.unit) + '</dd>' : '') +
+      '<dt>平均成本</dt><dd class="num">' + esc(fp(it, c.avg)) + '</dd>' +
       '<dt>庫存價值</dt><dd class="num">' + money(Math.max(c.qty, 0) * c.avg) + '</dd>' +
       '<dt>累計進貨金額</dt><dd class="num">' + money(c.inCost) + '</dd>' +
       '<dt>累計用到工地</dt><dd class="num">' + money(c.outCost) + '</dd></dl>' +
       '<div class="btnrow"><button class="btn" type="button" id="aIn" style="background:var(--in);color:var(--panel)">＋ 進貨</button><button class="btn" type="button" id="aOut" style="background:var(--out);color:var(--panel)">－ 領用</button><button class="btn ghost" type="button" id="aEdit">修改</button><button class="btn ghost" type="button" id="aDel">刪除</button></div>' +
       '<div id="delConfirm" hidden><p class="err" style="margin-top:12px">確定刪除「' + esc(it.name) + '」？連同 ' + used + ' 筆進出紀錄一起刪掉，工地成本單也會少掉這項。</p><div class="btnrow"><button class="btn danger" type="button" id="aDelYes">確定刪除</button><button class="btn ghost" type="button" id="aDelNo">不要刪</button></div></div>', function () {
-      $('aIn').onclick = function () { moveForm('in', id); };
-      $('aOut').onclick = function () { moveForm('out', id); };
-      $('aEdit').onclick = function () { itemForm(it); };
+      $('aIn').onclick = function () { inForm(id); };
+      $('aOut').onclick = function () { outForm(id); };
+      $('aEdit').onclick = function () { customForm(it); };
       $('aDel').onclick = function () { $('delConfirm').hidden = false; };
       $('aDelNo').onclick = function () { $('delConfirm').hidden = true; };
       $('aDelYes').onclick = function () {
@@ -485,7 +728,10 @@ tfoot td { font-weight: 700; border-bottom: 0 }
   function jobText(name) {
     var j = jobsData().filter(function (x) { return x.name === name; })[0]; if (!j) return '';
     var out = ['【材料成本單】' + j.name, '日期：' + j.last, ''];
-    Object.keys(j.lines).forEach(function (id) { var it = itemById(id) || { name: '（已刪除材料）', unit: '' }, ln = j.lines[id]; out.push(it.name + ' × ' + qtyFmt(ln.qty) + ' ' + it.unit + '　' + money(ln.cost)); });
+    Object.keys(j.lines).forEach(function (id) {
+      var it = itemById(id) || ghost, ln = j.lines[id];
+      out.push(it.name + (it.spec ? '（' + it.spec + '）' : '') + ' × ' + qtyFmt(ln.qty) + ' ' + it.unit + (ln.qty ? ' @' + unitPrice(ln.cost / ln.qty) : '') + '　' + money(ln.cost));
+    });
     out.push('', '材料合計：' + money(j.total));
     return out.join('\n');
   }
@@ -506,15 +752,15 @@ tfoot td { font-weight: 700; border-bottom: 0 }
       state.logs = state.logs.filter(function (l) { return l.id !== id; }); commit('已刪除紀錄');
     });
   });
-  $('dockIn').onclick = function () { moveForm('in'); };
-  $('dockOut').onclick = function () { moveForm('out'); };
+  $('dockIn').onclick = function () { inForm(); };
+  $('dockOut').onclick = function () { outForm(); };
   $('dockNew').onclick = function () { itemForm(); };
   $('clearSample').onclick = function () { state = { items: [], logs: [] }; save(); tab = 'stock'; render(); toast('範例已清空，按「新增材料」開始'); };
 
   $('copyBackup').onclick = function () { var s = JSON.parse(JSON.stringify(state)); delete s.sample; copyText(JSON.stringify(s), '已複製備份碼'); };
   $('copyCsv').onclick = function () {
-    var rows = [['分類', '材料', '規格', '單位', '庫存數量', '安全量', '平均成本', '庫存價值']];
-    state.items.forEach(function (it) { var c = calc.by[it.id]; rows.push([it.cat, it.name, it.spec, it.unit, qtyFmt(c.qty), it.min || 0, Math.round(c.avg * 10) / 10, Math.round(Math.max(c.qty, 0) * c.avg)]); });
+    var rows = [['分類', '材料', '規格', '說明', '單位', '庫存數量', '換算', '安全量', '平均單價', '庫存價值']];
+    state.items.forEach(function (it) { var c = calc.by[it.id]; rows.push([it.cat, it.name, it.spec, it.desc || '', it.unit, qtyFmt(c.qty), packText(it, c.qty), it.min || 0, Math.round(c.avg * 100) / 100, Math.round(Math.max(c.qty, 0) * c.avg)]); });
     copyText(rows.map(function (r) { return r.join('\t'); }).join('\n'), '已複製，貼到 Excel 就會分欄');
   };
   $('restoreBtn').onclick = function () {
