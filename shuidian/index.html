@@ -1,0 +1,538 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#eef1f0">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="水電庫存">
+<title>水電材料庫存</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&family=IBM+Plex+Mono:wght@500;600&display=swap">
+<style>
+html { color-scheme: light } body { margin: 0; padding-top: env(safe-area-inset-top, 0px) } img { max-width: 100% } [hidden] { display: none !important }
+/* 版面：頂部摘要＋分頁，底部固定的「進貨／領用」大按鈕，表單從下方滑出（單手操作） */
+:root {
+  --bg: #eef1f0;
+  --panel: #ffffff;
+  --ink: #18262b;
+  --muted: #5d6d72;
+  --line: #d5dcdb;
+  --accent: #1f5e8c;      /* 管線藍 */
+  --accent-ink: #ffffff;
+  --tape: #e3b12a;        /* 電火布黃：庫存不足 */
+  --tape-soft: #fbf1d3;
+  --out: #b4452f;
+  --in: #2c7a4b;
+  --font-body: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --font-num: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #101719; --panel: #182226; --ink: #e5ecec; --muted: #93a3a6; --line: #2a3a3f;
+  --accent: #5aa3d6; --accent-ink: #0b1a24; --tape: #e8bd45; --tape-soft: #3a3118;
+  --out: #e07a62; --in: #5fbf86; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #101719; --panel: #182226; --ink: #e5ecec; --muted: #93a3a6; --line: #2a3a3f;
+  --accent: #5aa3d6; --accent-ink: #0b1a24; --tape: #e8bd45; --tape-soft: #3a3118;
+  --out: #e07a62; --in: #5fbf86; color-scheme: dark }
+
+* { box-sizing: border-box }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.5 }
+.wrap { max-width: 720px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 16px 120px }
+.num { font-family: var(--font-num); font-variant-numeric: tabular-nums }
+h1 { font-size: 22px; font-weight: 900; margin: 0; letter-spacing: .02em; text-wrap: balance }
+.sub { color: var(--muted); font-size: 13px; margin: 2px 0 0 }
+button, input, select, textarea { font: inherit; color: inherit }
+button { cursor: pointer }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px }
+
+.sample { margin-top: 12px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; background: var(--tape-soft); border: 1px dashed var(--tape); border-radius: 8px; padding: 10px 12px; font-size: 13px }
+.sample b { font-weight: 700 }
+.sample button { margin-left: auto; border: 0; background: var(--ink); color: var(--bg); border-radius: 6px; padding: 6px 10px; font-size: 13px }
+
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 14px }
+.stat { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; min-width: 0 }
+.stat small { display: block; color: var(--muted); font-size: 12px }
+.stat .v { font-size: clamp(13px, 3.8vw, 18px); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.stat.warn .v { color: var(--out) }
+
+.tabs { display: flex; gap: 4px; margin-top: 16px; border-bottom: 2px solid var(--line); overflow-x: auto }
+.tabs button { border: 0; background: none; padding: 10px 12px; font-weight: 700; color: var(--muted); border-bottom: 3px solid transparent; margin-bottom: -2px; white-space: nowrap }
+.tabs button[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent) }
+
+.tools { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap }
+.tools input { flex: 1 1 180px; min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel) }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px }
+.chip { border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 4px 12px; font-size: 13px }
+.chip[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink) }
+
+.list { margin-top: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden }
+.row { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; padding: 12px 14px; border-bottom: 1px solid var(--line); width: 100%; text-align: left; background: none; border-left: 0; border-right: 0; border-top: 0 }
+.row:last-child { border-bottom: 0 }
+.row .name { font-weight: 700; min-width: 0 }
+.row .meta { color: var(--muted); font-size: 12px; min-width: 0 }
+.row .qty { text-align: right; font-size: 17px; font-weight: 600 }
+.row .val { text-align: right; color: var(--muted); font-size: 12px }
+.row.low { box-shadow: inset 4px 0 0 var(--tape) }
+.tag { display: inline-block; font-size: 11px; font-weight: 700; padding: 0 6px; border-radius: 4px; margin-right: 6px; vertical-align: 1px; border: 1px solid var(--line); color: var(--muted) }
+.tag.low { background: var(--tape); border-color: var(--tape); color: #2a2205 }
+.empty { padding: 28px 16px; text-align: center; color: var(--muted) }
+
+.job { border-bottom: 1px solid var(--line) }
+.job:last-child { border-bottom: 0 }
+.job summary { list-style: none; display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 12px 14px; cursor: pointer }
+.job summary::-webkit-details-marker { display: none }
+.job summary .name::before { content: "▸ "; color: var(--muted) }
+.job[open] summary .name::before { content: "▾ " }
+.job .lines { padding: 0 14px 12px; overflow-x: auto }
+table { width: 100%; border-collapse: collapse; font-size: 13px }
+th, td { padding: 6px 4px; text-align: left; border-bottom: 1px dashed var(--line) }
+th { color: var(--muted); font-weight: 500; font-size: 12px }
+td.r, th.r { text-align: right }
+tfoot td { font-weight: 700; border-bottom: 0 }
+.linkbtn { border: 1px solid var(--accent); color: var(--accent); background: none; border-radius: 6px; padding: 6px 10px; font-size: 13px; margin-top: 8px }
+
+.log { display: grid; grid-template-columns: auto 1fr auto; gap: 2px 10px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line) }
+.log:last-child { border-bottom: 0 }
+.log .kind { font-weight: 700; font-size: 12px; padding: 2px 8px; border-radius: 4px; color: var(--panel) }
+.log .kind.in { background: var(--in) }
+.log .kind.out { background: var(--out) }
+.log .d { color: var(--muted); font-size: 12px }
+.log .x { border: 0; background: none; color: var(--muted); font-size: 13px; padding: 4px 6px }
+
+.card { margin-top: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px }
+.card h3 { margin: 0 0 4px; font-size: 15px }
+.card p { margin: 0 0 10px; color: var(--muted); font-size: 13px }
+.card textarea { width: 100%; min-height: 90px; border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: var(--bg); font-family: var(--font-num); font-size: 12px }
+.btnrow { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px }
+.btn { border: 0; border-radius: 8px; padding: 10px 14px; font-weight: 700; background: var(--accent); color: var(--accent-ink) }
+.btn.ghost { background: none; border: 1px solid var(--line); color: var(--ink) }
+.btn.danger { background: var(--out); color: var(--panel) }
+
+.dock { position: fixed; left: 0; right: 0; bottom: 0; background: var(--panel); border-top: 1px solid var(--line); padding-top: 10px; padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)); padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); z-index: 5 }
+.dock .in-row { max-width: 720px; margin: 0 auto; display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px }
+.dock button { border: 0; border-radius: 10px; padding: 12px 8px; font-weight: 900; font-size: 16px }
+.dock .b-in { background: var(--in); color: var(--panel) }
+.dock .b-out { background: var(--out); color: var(--panel) }
+.dock .b-new { background: var(--bg); color: var(--ink); border: 1px solid var(--line); padding-inline: 14px }
+
+.scrim { position: fixed; inset: 0; background: rgba(10, 18, 20, .45); z-index: 20; display: flex; align-items: flex-end; justify-content: center }
+.sheet { background: var(--panel); width: 100%; max-width: 560px; max-height: 90%; overflow-y: auto; border-radius: 16px 16px 0 0; padding-top: 18px; padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px)); padding-left: max(18px, env(safe-area-inset-left, 0px)); padding-right: max(18px, env(safe-area-inset-right, 0px)) }
+.sheet h2 { margin: 0 0 12px; font-size: 18px }
+.field { display: grid; gap: 4px; margin-bottom: 12px }
+.field label { font-size: 13px; color: var(--muted); font-weight: 500 }
+.field input, .field select { width: 100%; padding: 11px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg) }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px }
+.hint { font-size: 12px; color: var(--muted); margin: -6px 0 12px }
+.err { color: var(--out); font-size: 13px; margin: 0 0 10px }
+.toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(86px + env(safe-area-inset-bottom, 0px)); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 14px; z-index: 30 }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-size: 14px; margin-bottom: 14px }
+.kv dt { color: var(--muted) }
+.kv dd { margin: 0; text-align: right }
+
+@media (prefers-reduced-motion: no-preference) { .sheet { animation: up .18s ease-out } @keyframes up { from { transform: translateY(24px); opacity: .6 } } }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <h1>水電材料庫存</h1>
+  <p class="sub">進貨、工地領用、各工地材料成本、還剩多少，一次看。</p>
+
+  <div class="sample" id="sampleBar" hidden>
+    <span>現在顯示的是<b>範例資料</b>，可以先點點看怎麼用。</span>
+    <button id="clearSample" type="button">清空範例，開始用</button>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><small>庫存總值</small><div class="v num" id="sValue">—</div></div>
+    <div class="stat"><small>材料品項</small><div class="v num" id="sCount">—</div></div>
+    <div class="stat" id="sLowBox"><small>低於安全量</small><div class="v num" id="sLow">—</div></div>
+  </div>
+
+  <div class="tabs" role="tablist">
+    <button role="tab" data-tab="stock" aria-selected="true">庫存</button>
+    <button role="tab" data-tab="jobs" aria-selected="false">工地成本單</button>
+    <button role="tab" data-tab="logs" aria-selected="false">進出紀錄</button>
+    <button role="tab" data-tab="backup" aria-selected="false">備份</button>
+  </div>
+
+  <section id="tab-stock">
+    <div class="tools"><input id="q" type="search" placeholder="搜尋材料名稱、規格…"></div>
+    <div class="chips" id="catChips"></div>
+    <div class="list" id="stockList"></div>
+  </section>
+
+  <section id="tab-jobs" hidden>
+    <div class="list" id="jobList"></div>
+  </section>
+
+  <section id="tab-logs" hidden>
+    <div class="list" id="logList"></div>
+  </section>
+
+  <section id="tab-backup" hidden>
+    <div class="card">
+      <h3>資料存在哪裡</h3>
+      <p>資料只存在這支手機的這個瀏覽器裡。換手機、清除瀏覽器資料前，先把下面的備份碼複製起來（貼到 LINE 給自己就行）。</p>
+      <div class="btnrow"><button class="btn" id="copyBackup" type="button">複製備份碼</button><button class="btn ghost" id="copyCsv" type="button">複製庫存表（可貼到 Excel）</button></div>
+    </div>
+    <div class="card">
+      <h3>還原備份</h3>
+      <p>把之前複製的備份碼貼進來，按還原。會蓋掉目前的資料。</p>
+      <textarea id="restoreText" placeholder="貼上備份碼"></textarea>
+      <div class="btnrow"><button class="btn" id="restoreBtn" type="button">還原</button></div>
+      <p class="err" id="restoreErr" hidden></p>
+    </div>
+    <div class="card">
+      <h3>全部清空</h3>
+      <p>刪掉所有材料和紀錄，無法復原。</p>
+      <div class="btnrow"><button class="btn danger" id="wipeBtn" type="button">全部清空</button></div>
+    </div>
+  </section>
+</div>
+
+<div class="dock">
+  <div class="in-row">
+    <button class="b-in" id="dockIn" type="button">＋ 進貨</button>
+    <button class="b-out" id="dockOut" type="button">－ 工地領用</button>
+    <button class="b-new" id="dockNew" type="button">新增材料</button>
+  </div>
+</div>
+
+<div class="scrim" id="scrim" hidden><div class="sheet" id="sheet" role="dialog" aria-modal="true"></div></div>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+(function () {
+  var KEY = 'shuidian-inventory-v1';
+  var CATS = ['水', '電', '其他'];
+  var $ = function (id) { return document.getElementById(id); };
+  var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
+  var money = function (n) { return 'NT$' + Math.round(n || 0).toLocaleString('zh-TW'); };
+  var unitPrice = function (n) { var r = Math.round(n * 10) / 10; return 'NT$' + r.toLocaleString('zh-TW', { maximumFractionDigits: 1 }); };
+  var qtyFmt = function (n) { return (Math.round(n * 100) / 100).toLocaleString('zh-TW', { maximumFractionDigits: 2 }); };
+  var uid = function () { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); };
+  var today = function () { var d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+
+  function sampleData() {
+    var items = [
+      ['PVC 水管 4分（1/2"）', '水', 'B管 4m', '支', 10, 40, 45],
+      ['PVC 彎頭 4分', '水', '90° 接頭', '個', 20, 100, 6],
+      ['止水閥 4分', '水', '銅製', '個', 5, 12, 160],
+      ['止洩帶', '水', '12mm', '卷', 10, 40, 15],
+      ['電線 2.0mm 單芯', '電', '100m／卷', '卷', 3, 8, 1350],
+      ['電線 5.5mm² 絞線', '電', '100m／卷', '卷', 2, 3, 3600],
+      ['PVC 電管 4分', '電', '4m', '支', 10, 50, 28],
+      ['單切開關', '電', '埋入式', '個', 10, 30, 85],
+      ['雙聯接地插座', '電', '15A 125V', '個', 10, 25, 120],
+      ['無熔絲開關 2P 20A', '電', 'NFB', '個', 4, 6, 380]
+    ];
+    var s = { sample: true, items: [], logs: [] };
+    var t = Date.parse('2026-10-01T08:00:00');
+    var ids = {};
+    items.forEach(function (r, i) {
+      var id = 'ex' + i; ids[r[0]] = id;
+      s.items.push({ id: id, name: r[0], cat: r[1], spec: r[2], unit: r[3], min: r[4] });
+      s.logs.push({ id: 'exl' + i, t: t + i, date: '2026-10-01', type: 'in', itemId: id, qty: r[5], price: r[6], job: '', note: '期初庫存' });
+    });
+    var n = 100;
+    function add(date, type, name, qty, price, job) {
+      s.logs.push({ id: 'exl' + (n++), t: Date.parse(date + 'T10:00:00') + n, date: date, type: type, itemId: ids[name], qty: qty, price: price || 0, job: job || '', note: '' });
+    }
+    add('2026-10-06', 'out', 'PVC 水管 4分（1/2"）', 12, 0, '王公館 浴室翻修');
+    add('2026-10-06', 'out', 'PVC 彎頭 4分', 30, 0, '王公館 浴室翻修');
+    add('2026-10-06', 'out', '止水閥 4分', 3, 0, '王公館 浴室翻修');
+    add('2026-10-06', 'out', '止洩帶', 4, 0, '王公館 浴室翻修');
+    add('2026-10-09', 'in', '電線 2.0mm 單芯', 2, 1400);
+    add('2026-10-11', 'out', '電線 2.0mm 單芯', 3, 0, '林小姐 套房配電');
+    add('2026-10-11', 'out', '單切開關', 8, 0, '林小姐 套房配電');
+    add('2026-10-11', 'out', '雙聯接地插座', 18, 0, '林小姐 套房配電');
+    add('2026-10-11', 'out', '無熔絲開關 2P 20A', 3, 0, '林小姐 套房配電');
+    add('2026-10-11', 'out', 'PVC 電管 4分', 20, 0, '林小姐 套房配電');
+    add('2026-10-15', 'out', 'PVC 水管 4分（1/2"）', 20, 0, '陳記餐廳 廚房給水');
+    add('2026-10-15', 'out', '止水閥 4分', 5, 0, '陳記餐廳 廚房給水');
+    return s;
+  }
+
+  var state;
+  try { state = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) { state = null; }
+  if (!state || !Array.isArray(state.items) || !Array.isArray(state.logs)) state = sampleData();
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} }
+
+  // 用進出紀錄重算每項材料的數量和加權平均成本，以及每筆領用的成本
+  var calc;
+  function compute() {
+    var by = {}, outCost = {};
+    state.items.forEach(function (it) { by[it.id] = { qty: 0, avg: 0, inCost: 0, outCost: 0 }; });
+    state.logs.slice().sort(function (a, b) { return a.t - b.t; }).forEach(function (l) {
+      var c = by[l.itemId]; if (!c) return;
+      if (l.type === 'in') {
+        var total = c.qty * c.avg + l.qty * l.price;
+        c.qty += l.qty;
+        c.avg = c.qty > 0 ? total / c.qty : l.price;
+        c.inCost += l.qty * l.price;
+      } else {
+        var cost = l.qty * c.avg;
+        outCost[l.id] = cost; c.outCost += cost;
+        c.qty -= l.qty;
+      }
+    });
+    calc = { by: by, outCost: outCost };
+  }
+  function itemById(id) { for (var i = 0; i < state.items.length; i++) if (state.items[i].id === id) return state.items[i]; return null; }
+  function isLow(it) { var c = calc.by[it.id]; return c.qty <= (it.min || 0); }
+
+  var tab = 'stock', cat = '全部';
+  try { tab = localStorage.getItem(KEY + ':tab') || 'stock'; } catch (e) {}
+
+  function render() {
+    compute();
+    $('sampleBar').hidden = !state.sample;
+    var value = 0, low = 0;
+    state.items.forEach(function (it) { var c = calc.by[it.id]; value += Math.max(c.qty, 0) * c.avg; if (isLow(it)) low++; });
+    $('sValue').textContent = money(value);
+    $('sCount').textContent = state.items.length;
+    $('sLow').textContent = low;
+    $('sLowBox').classList.toggle('warn', low > 0);
+    document.querySelectorAll('.tabs button').forEach(function (b) { b.setAttribute('aria-selected', String(b.dataset.tab === tab)); });
+    ['stock', 'jobs', 'logs', 'backup'].forEach(function (t) { $('tab-' + t).hidden = t !== tab; });
+    renderStock(); renderJobs(); renderLogs();
+  }
+
+  function renderStock() {
+    var opts = ['全部'].concat(CATS, ['不足']);
+    $('catChips').innerHTML = opts.map(function (o) { return '<button class="chip" type="button" data-cat="' + o + '" aria-pressed="' + (o === cat) + '">' + (o === '不足' ? '庫存不足' : o) + '</button>'; }).join('');
+    var q = $('q').value.trim().toLowerCase();
+    var rows = state.items.filter(function (it) {
+      if (cat === '不足') { if (!isLow(it)) return false; } else if (cat !== '全部' && it.cat !== cat) return false;
+      return !q || (it.name + ' ' + it.spec).toLowerCase().indexOf(q) >= 0;
+    });
+    rows.sort(function (a, b) { return (isLow(b) - isLow(a)) || a.cat.localeCompare(b.cat) || a.name.localeCompare(b.name, 'zh-Hant'); });
+    if (!state.items.length) { $('stockList').innerHTML = '<div class="empty">還沒有材料。按下方「新增材料」加第一項，可以順便填期初庫存。</div>'; return; }
+    if (!rows.length) { $('stockList').innerHTML = '<div class="empty">沒有符合的材料。</div>'; return; }
+    $('stockList').innerHTML = rows.map(function (it) {
+      var c = calc.by[it.id], lo = isLow(it);
+      return '<button class="row' + (lo ? ' low' : '') + '" type="button" data-item="' + it.id + '">' +
+        '<span class="name"><span class="tag' + (lo ? ' low' : '') + '">' + (lo ? '不足' : esc(it.cat)) + '</span>' + esc(it.name) + '</span>' +
+        '<span class="qty num">' + qtyFmt(c.qty) + ' <small>' + esc(it.unit) + '</small></span>' +
+        '<span class="meta">' + esc(it.spec) + (it.spec ? '・' : '') + '安全量 ' + qtyFmt(it.min || 0) + '</span>' +
+        '<span class="val num">均價 ' + unitPrice(c.avg) + '／值 ' + money(Math.max(c.qty, 0) * c.avg) + '</span></button>';
+    }).join('');
+  }
+
+  function jobsData() {
+    var jobs = {};
+    state.logs.forEach(function (l) {
+      if (l.type !== 'out') return;
+      var name = l.job || '（未填工地）';
+      var j = jobs[name] || (jobs[name] = { name: name, total: 0, last: '', lines: {} });
+      var cost = calc.outCost[l.id] || 0;
+      j.total += cost; if (l.date > j.last) j.last = l.date;
+      var ln = j.lines[l.itemId] || (j.lines[l.itemId] = { qty: 0, cost: 0 });
+      ln.qty += l.qty; ln.cost += cost;
+    });
+    return Object.keys(jobs).map(function (k) { return jobs[k]; }).sort(function (a, b) { return b.last.localeCompare(a.last); });
+  }
+
+  function renderJobs() {
+    var js = jobsData();
+    if (!js.length) { $('jobList').innerHTML = '<div class="empty">還沒有工地領料。按「工地領用」記一筆，這裡會自動算出每個工地的材料成本。</div>'; return; }
+    $('jobList').innerHTML = js.map(function (j, idx) {
+      var lines = Object.keys(j.lines).map(function (id) {
+        var it = itemById(id) || { name: '（已刪除材料）', unit: '' }, ln = j.lines[id];
+        return '<tr><td>' + esc(it.name) + '</td><td class="r num">' + qtyFmt(ln.qty) + ' ' + esc(it.unit) + '</td><td class="r num">' + money(ln.cost) + '</td></tr>';
+      }).join('');
+      return '<details class="job"' + (idx === 0 ? ' open' : '') + '><summary><span class="name" style="font-weight:700">' + esc(j.name) + '</span><span class="num" style="font-weight:600">' + money(j.total) + '</span>' +
+        '<span class="meta" style="color:var(--muted);font-size:12px">最近領料 ' + esc(j.last) + '</span><span></span></summary>' +
+        '<div class="lines"><table><thead><tr><th>材料</th><th class="r">數量</th><th class="r">成本</th></tr></thead><tbody>' + lines +
+        '</tbody><tfoot><tr><td>合計</td><td></td><td class="r num">' + money(j.total) + '</td></tr></tfoot></table>' +
+        '<button class="linkbtn" type="button" data-copyjob="' + esc(j.name) + '">複製成本單（貼到 LINE）</button></div></details>';
+    }).join('');
+  }
+
+  function renderLogs() {
+    var ls = state.logs.slice().sort(function (a, b) { return b.t - a.t; });
+    if (!ls.length) { $('logList').innerHTML = '<div class="empty">還沒有任何進出紀錄。</div>'; return; }
+    $('logList').innerHTML = ls.map(function (l) {
+      var it = itemById(l.itemId) || { name: '（已刪除材料）', unit: '' };
+      var right = l.type === 'in' ? money(l.qty * l.price) : money(calc.outCost[l.id]);
+      var desc = l.type === 'in' ? ('單價 ' + unitPrice(l.price) + (l.note ? '・' + esc(l.note) : '')) : esc(l.job || '（未填工地）');
+      return '<div class="log"><span class="kind ' + l.type + '">' + (l.type === 'in' ? '進貨' : '領用') + '</span>' +
+        '<span style="min-width:0"><b>' + esc(it.name) + '</b> <span class="num">' + qtyFmt(l.qty) + ' ' + esc(it.unit) + '</span><br><span class="d">' + esc(l.date) + '・' + desc + '</span></span>' +
+        '<span style="text-align:right"><span class="num">' + right + '</span><br><button class="x" type="button" data-dellog="' + l.id + '">刪除</button></span></div>';
+    }).join('');
+  }
+
+  // ---------- 下方滑出表單 ----------
+  function open(html, onReady) { $('sheet').innerHTML = html; $('scrim').hidden = false; if (onReady) onReady(); var f = $('sheet').querySelector('input,select'); if (f) f.focus(); }
+  function close() { $('scrim').hidden = true; $('sheet').innerHTML = ''; }
+  $('scrim').addEventListener('click', function (e) { if (e.target === $('scrim')) close(); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !$('scrim').hidden) close(); });
+
+  var toastTimer;
+  function toast(msg) { var t = $('toast'); t.textContent = msg; t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.hidden = true; }, 2200); }
+  function leaveSample() { if (state.sample) { state = { items: [], logs: [] }; } }
+  function commit(msg) { delete state.sample; save(); render(); close(); if (msg) toast(msg); }
+
+  function itemOptions(sel) {
+    return state.items.slice().sort(function (a, b) { return a.cat.localeCompare(b.cat) || a.name.localeCompare(b.name, 'zh-Hant'); })
+      .map(function (it) { return '<option value="' + it.id + '"' + (it.id === sel ? ' selected' : '') + '>' + esc(it.cat + '｜' + it.name + (it.spec ? '（' + it.spec + '）' : '')) + '</option>'; }).join('');
+  }
+  function jobList() { var s = {}; state.logs.forEach(function (l) { if (l.job) s[l.job] = 1; }); return Object.keys(s); }
+
+  function moveForm(type, itemId) {
+    if (!state.items.length) { itemForm(); return; }
+    var isIn = type === 'in';
+    open('<h2>' + (isIn ? '進貨' : '工地領用') + '</h2><form id="f">' +
+      '<div class="field"><label for="fItem">材料</label><select id="fItem">' + itemOptions(itemId) + '</select></div>' +
+      '<p class="hint" id="fHave"></p>' +
+      '<div class="grid2"><div class="field"><label for="fQty">數量</label><input id="fQty" type="number" inputmode="decimal" step="any" min="0" required></div>' +
+      (isIn ? '<div class="field"><label for="fPrice">進貨單價（NT$）</label><input id="fPrice" type="number" inputmode="decimal" step="any" min="0" required></div>'
+            : '<div class="field"><label for="fDate">日期</label><input id="fDate" type="date" value="' + today() + '"></div>') + '</div>' +
+      (isIn ? '<div class="grid2"><div class="field"><label for="fDate">日期</label><input id="fDate" type="date" value="' + today() + '"></div><div class="field"><label for="fNote">廠商／備註</label><input id="fNote" type="text" placeholder="例：大同水電行"></div></div>'
+            : '<div class="field"><label for="fJob">工地／案件</label><input id="fJob" type="text" list="jobsDl" placeholder="例：王公館 浴室翻修" required><datalist id="jobsDl">' + jobList().map(function (j) { return '<option value="' + esc(j) + '">'; }).join('') + '</datalist></div>') +
+      '<p class="err" id="fErr" hidden></p>' +
+      '<div class="btnrow"><button class="btn" type="submit" style="flex:1">' + (isIn ? '記錄進貨' : '記錄領用') + '</button><button class="btn ghost" type="button" id="fCancel">取消</button></div></form>', function () {
+      function showHave() { var it = itemById($('fItem').value), c = calc.by[it.id]; $('fHave').textContent = '目前庫存 ' + qtyFmt(c.qty) + ' ' + it.unit + '・平均成本 ' + unitPrice(c.avg) + '／' + it.unit; if (isIn && !$('fPrice').value && c.avg) $('fPrice').placeholder = '上次均價 ' + (Math.round(c.avg * 10) / 10); }
+      $('fItem').addEventListener('change', showHave); showHave();
+      $('fCancel').addEventListener('click', close);
+      $('f').addEventListener('submit', function (e) {
+        e.preventDefault();
+        var it = itemById($('fItem').value), qty = parseFloat($('fQty').value), c = calc.by[it.id];
+        var err = function (m) { $('fErr').textContent = m; $('fErr').hidden = false; };
+        if (!(qty > 0)) return err('數量要大於 0。');
+        var date = $('fDate').value || today();
+        var log = { id: uid(), t: Date.parse(date + 'T12:00:00') + (Date.now() % 86400000) / 1000, date: date, type: type, itemId: it.id, qty: qty, price: 0, job: '', note: '' };
+        if (isIn) { var p = parseFloat($('fPrice').value); if (!(p >= 0)) return err('請填進貨單價。'); log.price = p; log.note = $('fNote').value.trim(); }
+        else { var j = $('fJob').value.trim(); if (!j) return err('請填工地或案件名稱，才能算成本。'); if (qty > c.qty + 1e-9) return err('庫存只剩 ' + qtyFmt(c.qty) + ' ' + it.unit + '，不夠領 ' + qtyFmt(qty) + '。先記進貨再領。'); log.job = j; }
+        state.logs.push(log);
+        var after = calc.by[it.id].qty + (isIn ? qty : -qty);
+        commit((isIn ? '已進貨 ' : '已領用 ') + it.name + '，剩 ' + qtyFmt(after) + ' ' + it.unit);
+      });
+    });
+  }
+
+  function itemForm(item) {
+    var ed = !!item; item = item || { name: '', cat: '水', spec: '', unit: '個', min: 0 };
+    open('<h2>' + (ed ? '修改材料' : '新增材料') + '</h2><form id="f">' +
+      '<div class="field"><label for="iName">材料名稱</label><input id="iName" type="text" required value="' + esc(item.name) + '" placeholder="例：PVC 水管 6分"></div>' +
+      '<div class="grid2"><div class="field"><label for="iCat">分類</label><select id="iCat">' + CATS.map(function (c) { return '<option' + (c === item.cat ? ' selected' : '') + '>' + c + '</option>'; }).join('') + '</select></div>' +
+      '<div class="field"><label for="iUnit">單位</label><input id="iUnit" type="text" list="unitDl" required value="' + esc(item.unit) + '"><datalist id="unitDl"><option value="支"><option value="個"><option value="卷"><option value="米"><option value="包"><option value="箱"><option value="組"></datalist></div></div>' +
+      '<div class="grid2"><div class="field"><label for="iSpec">規格（可空白）</label><input id="iSpec" type="text" value="' + esc(item.spec) + '" placeholder="例：B管 4m"></div>' +
+      '<div class="field"><label for="iMin">安全庫存量</label><input id="iMin" type="number" inputmode="decimal" step="any" min="0" value="' + (item.min || 0) + '"></div></div>' +
+      (ed ? '' : '<div class="grid2"><div class="field"><label for="iQty">期初數量（可空白）</label><input id="iQty" type="number" inputmode="decimal" step="any" min="0"></div><div class="field"><label for="iPrice">期初單價 NT$</label><input id="iPrice" type="number" inputmode="decimal" step="any" min="0"></div></div>') +
+      '<p class="hint">低於安全庫存量會標黃色「不足」，提醒要補貨。</p><p class="err" id="fErr" hidden></p>' +
+      '<div class="btnrow"><button class="btn" type="submit" style="flex:1">' + (ed ? '儲存' : '新增') + '</button><button class="btn ghost" type="button" id="fCancel">取消</button></div></form>', function () {
+      $('fCancel').addEventListener('click', close);
+      $('f').addEventListener('submit', function (e) {
+        e.preventDefault();
+        var name = $('iName').value.trim(), unit = $('iUnit').value.trim();
+        if (!name || !unit) { $('fErr').textContent = '名稱和單位都要填。'; $('fErr').hidden = false; return; }
+        var data = { name: name, cat: $('iCat').value, spec: $('iSpec').value.trim(), unit: unit, min: parseFloat($('iMin').value) || 0 };
+        if (ed) { Object.assign(item, data); commit('已儲存'); return; }
+        leaveSample();
+        var it = Object.assign({ id: uid() }, data); state.items.push(it);
+        var q = parseFloat($('iQty').value);
+        if (q > 0) state.logs.push({ id: uid(), t: Date.now(), date: today(), type: 'in', itemId: it.id, qty: q, price: parseFloat($('iPrice').value) || 0, job: '', note: '期初庫存' });
+        commit('已新增 ' + name);
+      });
+    });
+  }
+
+  function itemSheet(id) {
+    var it = itemById(id), c = calc.by[id];
+    var used = state.logs.filter(function (l) { return l.itemId === id; }).length;
+    open('<h2>' + esc(it.name) + '</h2><dl class="kv">' +
+      '<dt>分類／規格</dt><dd>' + esc(it.cat) + (it.spec ? '・' + esc(it.spec) : '') + '</dd>' +
+      '<dt>目前庫存</dt><dd class="num"><b>' + qtyFmt(c.qty) + ' ' + esc(it.unit) + '</b>' + (isLow(it) ? '　<span class="tag low">不足</span>' : '') + '</dd>' +
+      '<dt>安全庫存量</dt><dd class="num">' + qtyFmt(it.min || 0) + ' ' + esc(it.unit) + '</dd>' +
+      '<dt>平均成本</dt><dd class="num">' + unitPrice(c.avg) + '／' + esc(it.unit) + '</dd>' +
+      '<dt>庫存價值</dt><dd class="num">' + money(Math.max(c.qty, 0) * c.avg) + '</dd>' +
+      '<dt>累計進貨金額</dt><dd class="num">' + money(c.inCost) + '</dd>' +
+      '<dt>累計用到工地</dt><dd class="num">' + money(c.outCost) + '</dd></dl>' +
+      '<div class="btnrow"><button class="btn" type="button" id="aIn" style="background:var(--in);color:var(--panel)">＋ 進貨</button><button class="btn" type="button" id="aOut" style="background:var(--out);color:var(--panel)">－ 領用</button><button class="btn ghost" type="button" id="aEdit">修改</button><button class="btn ghost" type="button" id="aDel">刪除</button></div>' +
+      '<div id="delConfirm" hidden><p class="err" style="margin-top:12px">確定刪除「' + esc(it.name) + '」？連同 ' + used + ' 筆進出紀錄一起刪掉，工地成本單也會少掉這項。</p><div class="btnrow"><button class="btn danger" type="button" id="aDelYes">確定刪除</button><button class="btn ghost" type="button" id="aDelNo">不要刪</button></div></div>', function () {
+      $('aIn').onclick = function () { moveForm('in', id); };
+      $('aOut').onclick = function () { moveForm('out', id); };
+      $('aEdit').onclick = function () { itemForm(it); };
+      $('aDel').onclick = function () { $('delConfirm').hidden = false; };
+      $('aDelNo').onclick = function () { $('delConfirm').hidden = true; };
+      $('aDelYes').onclick = function () {
+        state.items = state.items.filter(function (x) { return x.id !== id; });
+        state.logs = state.logs.filter(function (l) { return l.itemId !== id; });
+        commit('已刪除 ' + it.name);
+      };
+    });
+  }
+
+  function confirmSheet(title, body, yes, fn) {
+    open('<h2>' + title + '</h2><p style="margin:0 0 14px;color:var(--muted)">' + body + '</p><div class="btnrow"><button class="btn danger" type="button" id="cYes">' + yes + '</button><button class="btn ghost" type="button" id="cNo">取消</button></div>', function () {
+      $('cNo').onclick = close; $('cYes').onclick = fn;
+    });
+  }
+
+  function copyText(text, okMsg) {
+    var done = function () { toast(okMsg); };
+    var fallback = function () {
+      open('<h2>請手動複製</h2><p class="hint" style="margin:0 0 8px">這個畫面不能自動複製，長按下面文字全選後複製。</p><textarea id="cpy" style="width:100%;min-height:200px;border:1px solid var(--line);border-radius:8px;padding:8px;background:var(--bg);font-family:var(--font-num);font-size:12px" readonly></textarea><div class="btnrow"><button class="btn ghost" type="button" id="cpyClose">關閉</button></div>', function () {
+        $('cpy').value = text; $('cpy').select(); $('cpyClose').onclick = close;
+      });
+    };
+    try { navigator.clipboard.writeText(text).then(done, fallback); } catch (e) { fallback(); }
+  }
+
+  function jobText(name) {
+    var j = jobsData().filter(function (x) { return x.name === name; })[0]; if (!j) return '';
+    var out = ['【材料成本單】' + j.name, '日期：' + j.last, ''];
+    Object.keys(j.lines).forEach(function (id) { var it = itemById(id) || { name: '（已刪除材料）', unit: '' }, ln = j.lines[id]; out.push(it.name + ' × ' + qtyFmt(ln.qty) + ' ' + it.unit + '　' + money(ln.cost)); });
+    out.push('', '材料合計：' + money(j.total));
+    return out.join('\n');
+  }
+
+  // ---------- 事件 ----------
+  document.querySelector('.tabs').addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-tab]'); if (!b) return;
+    tab = b.dataset.tab; try { localStorage.setItem(KEY + ':tab', tab); } catch (er) {} render();
+  });
+  $('catChips').addEventListener('click', function (e) { var b = e.target.closest('[data-cat]'); if (b) { cat = b.dataset.cat; renderStock(); } });
+  $('q').addEventListener('input', renderStock);
+  $('stockList').addEventListener('click', function (e) { var b = e.target.closest('[data-item]'); if (b) itemSheet(b.dataset.item); });
+  $('jobList').addEventListener('click', function (e) { var b = e.target.closest('[data-copyjob]'); if (b) copyText(jobText(b.dataset.copyjob), '已複製成本單'); });
+  $('logList').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-dellog]'); if (!b) return;
+    var id = b.dataset.dellog;
+    confirmSheet('刪除這筆紀錄？', '刪掉後庫存數量和平均成本會重新計算。', '刪除', function () {
+      state.logs = state.logs.filter(function (l) { return l.id !== id; }); commit('已刪除紀錄');
+    });
+  });
+  $('dockIn').onclick = function () { moveForm('in'); };
+  $('dockOut').onclick = function () { moveForm('out'); };
+  $('dockNew').onclick = function () { itemForm(); };
+  $('clearSample').onclick = function () { state = { items: [], logs: [] }; save(); tab = 'stock'; render(); toast('範例已清空，按「新增材料」開始'); };
+
+  $('copyBackup').onclick = function () { var s = JSON.parse(JSON.stringify(state)); delete s.sample; copyText(JSON.stringify(s), '已複製備份碼'); };
+  $('copyCsv').onclick = function () {
+    var rows = [['分類', '材料', '規格', '單位', '庫存數量', '安全量', '平均成本', '庫存價值']];
+    state.items.forEach(function (it) { var c = calc.by[it.id]; rows.push([it.cat, it.name, it.spec, it.unit, qtyFmt(c.qty), it.min || 0, Math.round(c.avg * 10) / 10, Math.round(Math.max(c.qty, 0) * c.avg)]); });
+    copyText(rows.map(function (r) { return r.join('\t'); }).join('\n'), '已複製，貼到 Excel 就會分欄');
+  };
+  $('restoreBtn').onclick = function () {
+    var err = $('restoreErr');
+    try {
+      var s = JSON.parse($('restoreText').value);
+      if (!s || !Array.isArray(s.items) || !Array.isArray(s.logs)) throw 0;
+      confirmSheet('還原備份？', '目前的資料會被備份裡的 ' + s.items.length + ' 項材料、' + s.logs.length + ' 筆紀錄取代。', '還原', function () {
+        state = s; $('restoreText').value = ''; err.hidden = true; commit('已還原');
+      });
+    } catch (e) { err.textContent = '這不是有效的備份碼，請確認整段都有貼上。'; err.hidden = false; }
+  };
+  $('wipeBtn').onclick = function () {
+    confirmSheet('全部清空？', '所有材料和進出紀錄都會刪除，無法復原。建議先複製備份碼。', '全部清空', function () { state = { items: [], logs: [] }; commit('已全部清空'); });
+  };
+
+  render();
+})();
+</script>
+</body>
+</html>
