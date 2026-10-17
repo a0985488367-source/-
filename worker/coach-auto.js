@@ -22,7 +22,8 @@ const VALID_BARS = 12;
 // plan 'B'（2026-10-17 使用者選）：只做 1h、停損至少 1.5 ATR、固定 1R 止盈（不看順逆勢、不看盈虧比、寬鬆／嚴格不管）。
 //   回測 150 天 5m 精算、兩組 15 幣：勝率 55%、每筆 +0.06～0.08R，兩組前後半段四格都賺（scripts/research/coach-improve2*.mjs）；
 //   原本的做法（全部週期、結構目標、≥1.5R）兩組都虧（-0.07～-0.19R）。plan 'legacy' 回到原本的寬鬆／嚴格規則
-const DEFAULT_CFG = { mode: 'off', riskPct: 0.09, maxPos: 5, dailyLosses: 5, maxLev: 50, maxNotional: 6000, demoEquity: 220, demoLoose: true, liveLoose: false, minRR: 1.5, plan: 'B', planIvs: ['1h'], minStopAtr: 1.5, tpR: 1 };
+const DEFAULT_CFG = { mode: 'off', riskPct: 0.09, maxPos: 5, dailyLosses: 5, maxLev: 50, maxNotional: 6000, demoEquity: 220, demoLoose: true, liveLoose: false, minRR: 1.5, plan: 'B', planIvs: ['1h'], minStopAtr: 1.5, tpR: 1, demoBoost: 3 };
+// demoBoost（2026-10-17 使用者要在 Demo 試）：方案 B 的單如果順 4h＋跟 BTC 4h 同方向（回測勝率 58～62% 那組），Demo 每單風險放大這麼多倍；真錢不加碼
 const ACCT_NAME = { demo: 'Demo', live: '真錢' };
 export const accountsOf = (mode) => (mode === 'both' ? ['demo', 'live'] : mode === 'demo' || mode === 'live' ? [mode] : []);
 const pausedOf = (cfg, a) => (cfg.paused && cfg.paused[a]) || 0;
@@ -66,7 +67,7 @@ export function sizeCoachOrder({ equity, en, sl, riskU = 20, maxLev = 50, maxNot
 }
 
 /** runCoach 每根收盤找出來的「可以自動下單」的劇本 */
-export function autoCandidate({ job, side, r, f, W, sessKz, atr }) {
+export function autoCandidate({ job, side, r, f, W, sessKz, atr, btc = 0 }) {
   const j = W.length - 1;
   if (r.stage < 4 || r.rt == null || !f.plan || f.status !== 'near') return null;
   if (!(f.plan.rr > 0)) return null;
@@ -75,6 +76,7 @@ export function autoCandidate({ job, side, r, f, W, sessKz, atr }) {
     id: `cc:${coin(job.sym)}:${job.iv}:${side}:${W[r.sweep.u].t}`.slice(0, 36), sym: job.sym, iv: job.iv, ms: job.ms, side,
     en: f.plan.en, sl: f.plan.sl, tp: f.plan.tp, rr: f.plan.rr, bias: r.bias, disc: r.disc, sessKz, rtT: W[r.rt].t,
     stopAtr: atr > 0 ? Math.round(Math.abs(f.plan.en - f.plan.sl) / atr * 100) / 100 : null,
+    btc: btc ? btc * r.d : 0, // 1＝跟 BTC 4h 同方向、-1＝相反
   };
 }
 
@@ -89,6 +91,7 @@ export async function handleCoachAuto(request, env, { executorCall } = {}) {
     if (typeof b.liveLoose === 'boolean') next.liveLoose = b.liveLoose;
     if (typeof b.demoLoose === 'boolean') next.demoLoose = b.demoLoose;
     if (['B', 'legacy'].includes(b.plan)) next.plan = b.plan;
+    if (b.demoBoost !== undefined) next.demoBoost = Math.max(1, Math.min(5, Number(b.demoBoost) || 1));
     if (typeof b.trendLive === 'boolean' || ['coach', 'market'].includes(b.trendEntry)) {
       const tc = await kvJson(env, TL_CFG_KEY, {});
       if (typeof b.trendLive === 'boolean') tc.enabled = b.trendLive;
@@ -228,7 +231,8 @@ export async function runCoachAuto(env, { candidates = [], executorCall, postDis
         ? (st.positions || []).reduce((a, p) => a + (p.positionIM || 0), 0) + live.filter((t) => t.state === 'pending').reduce((a, t) => a + (t.margin || 0), 0)
         : live.reduce((a, t) => a + (t.margin || 0), 0);
       const eq = acct === 'demo' ? Math.min(st.equity, cfg.demoEquity) : st.equity;
-      const sz = sizeCoachOrder({ equity: eq, en: c.en, sl: c.sl, riskU: eq * (cfg.riskPct ?? 0.09), maxLev: cfg.maxLev, maxNotional: cfg.maxNotional, usedMargin });
+      const boost = cfg.plan === 'B' && acct === 'demo' && c.bias === 2 && c.btc === 1 ? (cfg.demoBoost || 1) : 1;
+      const sz = sizeCoachOrder({ equity: eq, en: c.en, sl: c.sl, riskU: eq * (cfg.riskPct ?? 0.09) * boost, maxLev: cfg.maxLev, maxNotional: cfg.maxNotional, usedMargin });
       if (sz.skip) { out.errors.push(`${ACCT_NAME[acct]} ${c.id}：${sz.skip}`); continue; }
       // 方案 B：交易所上的止盈掛 1R；結構目標只拿來判斷「還沒成交就先到目標」要取消
       const tpOrder = cfg.plan === 'B' ? c.en + (c.side === 'L' ? 1 : -1) * Math.abs(c.en - c.sl) * (cfg.tpR || 1) : c.tp;
@@ -238,12 +242,12 @@ export async function runCoachAuto(env, { candidates = [], executorCall, postDis
       try { r = await executorCall(env, 'POST', '/coach/order', { body }); } catch (e) { out.errors.push(`${ACCT_NAME[acct]} ${c.id}：${e.message}`); continue; }
       if (!r.ok) { out.errors.push(`${ACCT_NAME[acct]} ${c.id}：${r.skipped || r.error}`); continue; }
       const t = {
-        id: c.id, account: acct, sym: c.sym, iv: c.iv, ms: c.ms, side: c.side, en: r.price, sl: r.stopLoss ?? c.sl, tp: r.takeProfit ?? tpOrder, tpS: c.tp, plan: cfg.plan || 'legacy', stopAtr: c.stopAtr, rr: Math.round(c.rr * 100) / 100,
+        id: c.id, account: acct, sym: c.sym, iv: c.iv, ms: c.ms, side: c.side, en: r.price, sl: r.stopLoss ?? c.sl, tp: r.takeProfit ?? tpOrder, tpS: c.tp, plan: cfg.plan || 'legacy', stopAtr: c.stopAtr, boost, btc: c.btc, rr: Math.round(c.rr * 100) / 100,
         qty: r.qty, lev: r.leverage, riskU: r.qty * Math.abs(r.price - (r.stopLoss ?? c.sl)), riskPct: sz.riskPct, margin: r.qty * r.price / r.leverage, equity: st.equity, bias: c.bias, disc: c.disc, sessKz: c.sessKz,
         placedAt: now, validUntil: now + VALID_BARS * c.ms, state: 'pending',
       };
       trades.unshift(t); dirty = true; out.placed.push(accts.length > 1 ? `${acct}:${t.id}` : t.id);
-      await say(`🤖 教練自動下單（${ACCT_NAME[acct]}）｜${coin(c.sym)} ${c.iv} ${c.side === 'L' ? '多單' : '空單'}：掛 ${fmtP(t.en)} 限價・停損 ${fmtP(t.sl)}・目標 ${fmtP(t.tp)}（${cfg.plan === 'B' ? `1R，方案 B・停損 ${c.stopAtr} ATR` : `${c.rr.toFixed(1)}R`}）・${t.lev}x・保證金 ${t.margin.toFixed(0)}U・1R＝${t.riskU.toFixed(2)}U${c.bias === 2 ? '・順勢' : c.bias === 0 ? '・逆勢' : ''}`);
+      await say(`🤖 教練自動下單（${ACCT_NAME[acct]}）｜${coin(c.sym)} ${c.iv} ${c.side === 'L' ? '多單' : '空單'}：掛 ${fmtP(t.en)} 限價・停損 ${fmtP(t.sl)}・目標 ${fmtP(t.tp)}（${cfg.plan === 'B' ? `1R，方案 B・停損 ${c.stopAtr} ATR` : `${c.rr.toFixed(1)}R`}）・${t.lev}x・保證金 ${t.margin.toFixed(0)}U・1R＝${t.riskU.toFixed(2)}U${c.bias === 2 ? '・順勢' : c.bias === 0 ? '・逆勢' : ''}${boost > 1 ? `・🔥 順 4h＋跟 BTC 同向，加碼 ${boost} 倍` : ''}`);
     }
   }
   if (dirty && !dry) await env.SMC_KV.put(TRADES_KEY, JSON.stringify(trades.slice(0, TRADES_MAX)));

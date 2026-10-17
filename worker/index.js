@@ -1368,6 +1368,8 @@ async function runCoach(env, { dry = false } = {}) {
   const live = batch.length ? await loadCoachLive(env) : null; // 教練即時戰績（App 的「戰績」分頁）
   const autoCandidates = []; // 教練自動下單的候選（runCoachAuto 決定要不要下）
   const closedOnly = (list, ms) => list.filter((c) => c.time + ms <= now).map((c) => ({ t: c.time / 1000, o: +c.open, h: +c.high, l: +c.low, c: +c.close }));
+  // BTC 4h 方向（給教練自動下單判斷「穩的單」用：順 4h＋跟 BTC 同方向，Demo 加碼）
+  const btcTrend = batch.length ? await fetchKlinesAny(env, 'BTCUSDT', biasTf, 300).then((list) => { const H = closedOnly(list, intervalToMs(biasTf)); return coachStructure(H, 3, coachAtr(H)).trend[H.length - 1] || 0; }).catch(() => 0) : 0;
   await mapLimit(batch, 5, async (job) => {
     try {
       if (!biasCache.has(job.sym)) {
@@ -1386,7 +1388,7 @@ async function runCoach(env, { dry = false } = {}) {
         const r0 = st[side];
         if (r0.stage >= 4 && r0.sweep) {
           const sess = sessionOf(W[r0.sweep.u].t * 1000);
-          const c = autoCandidate({ job, side, r: r0, f: coachFollow(W, A, r0), W, sessKz: !!sess && sess.id !== 'asia', atr: A.atr[W.length - 1] });
+          const c = autoCandidate({ job, side, r: r0, f: coachFollow(W, A, r0), W, sessKz: !!sess && sess.id !== 'asia', atr: A.atr[W.length - 1], btc: btcTrend });
           if (c) autoCandidates.push(c);
         }
       }

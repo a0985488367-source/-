@@ -271,3 +271,19 @@ test('方案 B：只做 1h、停損至少 1.5 ATR、交易所止盈掛 1R；沒�
   await runCoachAuto(env, { ...deps, now: now + 60e3, fetchKlines: async () => [{ time: now, high: 151.1, low: 150.5 }] });
   assert.ok(msgs.some((m) => /取消掛單（沒回到進場點就先到目標）/.test(m)));
 });
+
+test('Demo 加碼：方案 B 的單順 4h＋跟 BTC 同向，風險 3 倍；真錢不加碼', async () => {
+  const env = { SMC_KV: makeKv(), EXECUTOR_URL: 'x' }, ex = fakeExecutor(), msgs = [];
+  ex.equity = 1600;
+  await env.SMC_KV.put('coachauto:cfg', JSON.stringify({ mode: 'both' }));
+  const deps = { executorCall: ex.call, postDiscord: async (e, p) => msgs.push(p.content), fetchKlines: async () => [], now: Date.UTC(2026, 9, 17, 3) };
+  await runCoachAuto(env, { ...deps, candidates: [
+    cand({ id: 'cc:a', sym: 'AUSDT', iv: '1h', ms: 36e5, stopAtr: 2, bias: 2, btc: 1, en: 100, sl: 90, tp: 120 }),
+    cand({ id: 'cc:b', sym: 'BUSDT', iv: '1h', ms: 36e5, stopAtr: 2, bias: 2, btc: -1, en: 100, sl: 90, tp: 120 }),
+  ] });
+  const risk = (acct, sym) => { const o = ex.calls.find((c) => c.path === '/coach/order' && c.body.account === acct && c.body.symbol === sym).body; return o.qty * 10; };
+  assert.ok(Math.abs(risk('demo', 'AUSDT') - 220 * 0.09 * 3) < 1e-6, 'Demo 加碼 3 倍＝59.4U');
+  assert.ok(Math.abs(risk('demo', 'BUSDT') - 220 * 0.09) < 1e-6, '跟 BTC 相反不加碼');
+  assert.ok(Math.abs(risk('live', 'AUSDT') - 1600 * 0.09) < 1e-6, '真錢不加碼');
+  assert.ok(msgs.some((m) => /🔥 順 4h＋跟 BTC 同向，加碼 3 倍/.test(m)));
+});
