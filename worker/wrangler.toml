@@ -95,6 +95,12 @@ SUPERTREND_TF = "4h"
 #   黃金／死亡交叉 SMA50／200（src/strategies/trend-extra.js）6h：停損 3 ATR、保本＋追蹤
 GOLDEN_CROSS_ENABLED = "true"
 GOLDEN_CROSS_TF = "6h"
+#   RSI 回歸（2026-10-18 使用者選上 Demo 試跑，src/strategies/trend-extra.js）1h：EMA200 之上 RSI14 回到 30 以上做多、
+#   之下跌回 70 以下做空；停損 2 ATR、1R 保本＋1.5R 後追蹤 1.5R。回測（30 檔、5 分鐘精準版、150 天）勝率 45～56%、
+#   每筆 +0.26R，兩組前後半都賺，但每格只有 40～50 筆。張數另外算（最多 3 張），不佔上面 6 個策略的 5 張
+RSI_REVERT_ENABLED = "true"
+RSI_REVERT_TF = "1h"
+RSI_REVERT_MAX_OPEN = "3"
 # 2026-09-30 使用者要考自營商兩步挑戰：6 個策略「只推播、不下單」（ALT_SIGNAL_ONLY="true" 時完全不碰 Executor），
 # 推播附考試帳戶的建議數量。2026-10-01 使用者不考了：Executor 切回 Bybit Demo（正式網模擬資金），
 # 6 個策略恢復自動下單（每單 3%、最多 5 張），推播改回自動下單的結果
@@ -105,7 +111,8 @@ PROP_RISK_PCT = "2"
 PROP_MAX_LEVERAGE = "5"
 # 假突破反手（src/strategies/fakeout.js）：組合模擬最近 75 天虧，2026-09-28 關掉
 FAKEOUT_ENABLED = "false"
-BREAKOUT_INTERVALS = "4h,6h"
+# 1h 只給 RSI 回歸用；放最後，4h／6h 同時收盤時先掃順勢策略
+BREAKOUT_INTERVALS = "4h,6h,1h"
 # 上面所有策略加起來同時最多 5 張，不限方向（使用者選的；3 張回撤小一半但慢一些）
 BREAKOUT_MAX_OPEN = "5"
 BREAKOUT_MAX_SAME_DIR = "0"

@@ -395,7 +395,7 @@ function serveKlines(symbol, w) {
 
 const onlyStrategy = (s, over = {}) => ({
   BREAKOUT_ENABLED: 'false', EMA_CROSS_ENABLED: 'false', MACD_ZERO_ENABLED: 'false', FAKEOUT_ENABLED: 'false',
-  VOL_BREAK_ENABLED: 'false', SUPERTREND_ENABLED: 'false', GOLDEN_CROSS_ENABLED: 'false', [`${s}_ENABLED`]: 'true', ...over,
+  VOL_BREAK_ENABLED: 'false', SUPERTREND_ENABLED: 'false', GOLDEN_CROSS_ENABLED: 'false', RSI_REVERT_ENABLED: 'false', [`${s}_ENABLED`]: 'true', ...over,
 });
 
 test('Worker 放量突破：止盈 2R（VOL_BREAK_TP_R）、停損 2 ATR、signal_id 用 vb 開頭、停損不移動', async () => {
@@ -419,7 +419,7 @@ test('Worker 放量突破：止盈 2R（VOL_BREAK_TP_R）、停損 2 ATR、signa
   assert.equal(pos.targets[0].rr, 2);
 });
 
-for (const [key, prefix, stopAtr] of [['st', 'SUPERTREND', 2], ['gc', 'GOLDEN_CROSS', 3]]) {
+for (const [key, prefix, stopAtr] of [['st', 'SUPERTREND', 2], ['gc', 'GOLDEN_CROSS', 3], ['rsi', 'RSI_REVERT', 2]]) {
   test(`Worker ${prefix}：停損 ${stopAtr} ATR、不掛止盈、部位存保本／追蹤參數`, async () => {
     const { sig, w } = windowWith(key);
     const executor = { calls: [] };
@@ -438,6 +438,28 @@ for (const [key, prefix, stopAtr] of [['st', 'SUPERTREND', 2], ['gc', 'GOLDEN_CR
     assert.equal(pos.management.trailFromR, 1.5);
   });
 }
+
+test('Worker RSI 回歸：張數另外算——6 個順勢策略滿 5 張照樣下；RSI 自己滿 3 張才不下', async () => {
+  const { sig, w } = windowWith('rsi');
+  const executor = { calls: [] };
+  stub({ executor });
+  serveKlines('RSIUSDT', w);
+  const side = sig.dir === 'long' ? 'Buy' : 'Sell';
+  const five = Object.fromEntries(['AAAUSDT', 'BBBUSDT', 'CCCUSDT', 'DDDUSDT', 'EEEUSDT'].map((s) => altPos(s, sig.dir, 'ema')));
+  executor.positions = Object.keys(five).map((k) => ({ symbol: k.split(':')[1], side, size: '1' }));
+  const ok = await runWorker(makeEnv(five, onlyStrategy('RSI_REVERT', { BREAKOUT_SYMBOLS: 'RSIUSDT' })));
+  assert.equal(ok.breakout.orders[0]?.strategy, 'rsi', JSON.stringify(ok.breakout));
+  assert.ok(!ok.breakout.orders[0].skipped, JSON.stringify(ok.breakout.orders[0]));
+
+  const executor2 = { calls: [] };
+  stub({ executor: executor2 });
+  serveKlines('RSIUSDT', w);
+  const three = Object.fromEntries(['AAAUSDT', 'BBBUSDT', 'CCCUSDT'].map((s, i) => altPos(s, i ? 'long' : 'short', 'rsi')));
+  executor2.positions = Object.keys(three).map((k, i) => ({ symbol: k.split(':')[1], side: i ? 'Buy' : 'Sell', size: '1' }));
+  const full = await runWorker(makeEnv(three, onlyStrategy('RSI_REVERT', { BREAKOUT_SYMBOLS: 'RSIUSDT' })));
+  assert.equal(full.breakout.orders[0].skipped, 'max-open', JSON.stringify(full.breakout));
+  assert.equal(executor2.calls.filter((c) => c.url.endsWith('/trade')).length, 0);
+});
 
 test('Worker：每個策略只在自己的週期判斷（<前綴>_TF），沒有策略要跑的週期不抓 K 棒', async () => {
   const executor = { calls: [] };
