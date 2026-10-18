@@ -103,6 +103,8 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
+          # 文字輸出也存一份（這個環境抓不到 Actions 日誌，靠這份讀結果）
+          mkdir -p data/research/output && cp ab-output.txt "data/research/output/${{ inputs.study }}-${{ github.run_id }}.txt" || true
           git add data/research/ || true
           git diff --cached --quiet || git commit -m "chore(research): 更新 ${{ inputs.study }} 研究結果 [skip ci]"
           # 跑的期間 main 可能有新的 commit（例如模擬盤帳本）：先接上再推，最多試 3 次
