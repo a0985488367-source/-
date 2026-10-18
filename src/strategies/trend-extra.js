@@ -6,12 +6,14 @@
  *   放量突破 VOL_BREAK   這根量 > 前 20 根均量 2 倍，收盤突破前 20 根最高（低）點，而且在 EMA200 同側；停損 2 ATR
  *   超級趨勢 SUPERTREND  Supertrend(ATR14, 3 倍) 翻多／翻空的那一根；停損 2 ATR
  *   黃金交叉 GOLDEN_CROSS SMA50 上穿（下穿）SMA200；停損 3 ATR
+ *   RSI 回歸 RSI_30_70   （2026-10-18 使用者選上 Demo 試跑）收在 EMA200 之上 RSI(14) 從 30 以下回到 30 以上做多，
+ *                        之下從 70 以上跌回 70 以下做空；停損 2 ATR、1R 保本＋追蹤（1h，回測勝率 45～56%、+0.26R）
  * 都是第 i 根收盤判斷、下一根開盤市價進場，只用第 i 根以前的資料。
  */
 
-import { ema, sma, atr } from '../core/indicators.js';
+import { ema, sma, atr, rsi } from '../core/indicators.js';
 
-export const TREND_EXTRA_STOP_ATR = { vol: 2, st: 2, gc: 3 };
+export const TREND_EXTRA_STOP_ATR = { vol: 2, st: 2, gc: 3, rsi: 2 };
 
 const ok = (...v) => v.every((x) => x != null && Number.isFinite(x));
 const hh = (arr, i, n) => { let m = -Infinity; for (let j = i - n + 1; j <= i; j++) m = Math.max(m, arr[j]); return m; };
@@ -52,8 +54,12 @@ export function trendExtraIndicators(candles) {
     s200: sma(close, 200),
     a,
     st: supertrendDir(candles, a, 3),
+    r14: rsi(candles, 14),
   };
 }
+
+const lvlUp = (a, lv, i) => ok(a[i], a[i - 1]) && a[i] > lv && a[i - 1] <= lv;
+const lvlDn = (a, lv, i) => ok(a[i], a[i - 1]) && a[i] < lv && a[i - 1] >= lv;
 
 const RULES = {
   vol: (x, i) => {
@@ -63,6 +69,12 @@ const RULES = {
     return null;
   },
   st: (x, i) => (x.st[i] === 1 && x.st[i - 1] === -1 ? 'long' : x.st[i] === -1 && x.st[i - 1] === 1 ? 'short' : null),
+  rsi: (x, i) => {
+    if (!ok(x.e200[i])) return null;
+    if (lvlUp(x.r14, 30, i) && x.close[i] > x.e200[i]) return 'long';
+    if (lvlDn(x.r14, 70, i) && x.close[i] < x.e200[i]) return 'short';
+    return null;
+  },
   gc: (x, i) => {
     const f = x.s50, s = x.s200;
     if (!ok(f[i], s[i], f[i - 1], s[i - 1])) return null;
@@ -73,7 +85,7 @@ const RULES = {
 };
 
 /**
- * 第 i 根收盤時 strategy（'vol'／'st'／'gc'）有沒有訊號。
+ * 第 i 根收盤時 strategy（'vol'／'st'／'gc'／'rsi'）有沒有訊號。
  * 回傳 { dir, stopDistance, atr, close, time } 或 null；pre 可傳 trendExtraIndicators() 的結果。
  */
 export function trendExtraSignal(strategy, candles, i = candles.length - 1, pre = null) {

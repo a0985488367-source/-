@@ -18,7 +18,7 @@ function randomWalk(n, seed = 7) {
   });
 }
 
-const ZOO_NAME = { vol: 'VOL_BREAK', st: 'SUPERTREND', gc: 'GOLDEN_CROSS' };
+const ZOO_NAME = { vol: 'VOL_BREAK', st: 'SUPERTREND', gc: 'GOLDEN_CROSS', rsi: 'RSI_30_70' };
 
 for (const [key, zooName] of Object.entries(ZOO_NAME)) {
   test(`${zooName}：線上判斷（trend-extra.js）跟回測（strategy-zoo）每一根都一樣`, () => {
@@ -43,7 +43,7 @@ for (const [key, zooName] of Object.entries(ZOO_NAME)) {
 test('trendExtraSignal：只給到第 i 根（線上的情況）跟整段算出來的一樣', () => {
   const c = randomWalk(1200, 3);
   const pre = trendExtraIndicators(c);
-  for (const key of ['vol', 'st', 'gc']) {
+  for (const key of ['vol', 'st', 'gc', 'rsi']) {
     for (let i = 300; i < c.length; i += 7) {
       assert.equal(trendExtraSignal(key, c.slice(0, i + 1))?.dir ?? null, trendExtraSignal(key, c, i, pre)?.dir ?? null, `${key} 第 ${i} 根`);
     }

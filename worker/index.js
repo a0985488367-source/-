@@ -282,6 +282,10 @@ const DEFAULTS = {
   VOL_BREAK_TP_R: '2',
   SUPERTREND_ENABLED: 'false',
   GOLDEN_CROSS_ENABLED: 'false',
+  // RSI 回歸（2026-10-18 使用者選上 Demo 試跑，見 src/strategies/trend-extra.js）：保本＋追蹤、不設止盈；
+  // 張數另外算（RSI_REVERT_MAX_OPEN），不佔上面 6 個順勢策略的 BREAKOUT_MAX_OPEN；預設關閉
+  RSI_REVERT_ENABLED: 'false',
+  RSI_REVERT_MAX_OPEN: '3',
   // 每個策略只在這些週期判斷（逗號分隔，要包含在 BREAKOUT_INTERVALS 裡）；留空＝BREAKOUT_INTERVALS 全部
   BREAKOUT_TF: '',
   EMA_CROSS_TF: '',
@@ -290,6 +294,7 @@ const DEFAULTS = {
   VOL_BREAK_TF: '',
   SUPERTREND_TF: '',
   GOLDEN_CROSS_TF: '',
+  RSI_REVERT_TF: '',
   // SMC 進場區的自動下單（false＝只推播不下單；突破／假突破這些另外的策略不受影響）
   SMC_AUTO_TRADE_ENABLED: 'true',
   // SMC 推播的「統整週期」過濾：上面兩層大結構同向＋上一層小結構同向（沒在回調）才推（src/smc/mtf-gate.js）
@@ -308,23 +313,23 @@ const DEFAULTS = {
 };
 
 /** 突破單、EMA 交叉單這類「另外的策略」（不是 SMC） */
-const ALT_STRATEGIES = ['breakout', 'ema', 'macd', 'fakeout', 'vol', 'st', 'gc'];
+const ALT_STRATEGIES = ['breakout', 'ema', 'macd', 'fakeout', 'vol', 'st', 'gc', 'rsi'];
 const STRATEGY_LABEL = {
   breakout: '突破單', ema: 'EMA 交叉單', macd: 'MACD 零軸單', fakeout: '假突破反手單',
-  vol: '放量突破單', st: '超級趨勢單', gc: '黃金交叉單',
+  vol: '放量突破單', st: '超級趨勢單', gc: '黃金交叉單', rsi: 'RSI 回歸單',
 };
 const STRATEGY_NAME = {
   breakout: '突破', ema: 'EMA 交叉', macd: 'MACD 零軸', fakeout: '假突破反手',
-  vol: '放量突破', st: '超級趨勢', gc: '黃金交叉',
+  vol: '放量突破', st: '超級趨勢', gc: '黃金交叉', rsi: 'RSI 回歸',
 };
-const SIGNAL_PREFIX = { breakout: 'bo', ema: 'ema', macd: 'macd', fakeout: 'fo', vol: 'vb', st: 'st', gc: 'gc' };
+const SIGNAL_PREFIX = { breakout: 'bo', ema: 'ema', macd: 'macd', fakeout: 'fo', vol: 'vb', st: 'st', gc: 'gc', rsi: 'rsi' };
 /** 每個策略的設定前綴（<前綴>_ENABLED 開關、<前綴>_TF 週期） */
 const STRATEGY_CFG = {
   breakout: 'BREAKOUT', ema: 'EMA_CROSS', macd: 'MACD_ZERO', fakeout: 'FAKEOUT',
-  vol: 'VOL_BREAK', st: 'SUPERTREND', gc: 'GOLDEN_CROSS',
+  vol: 'VOL_BREAK', st: 'SUPERTREND', gc: 'GOLDEN_CROSS', rsi: 'RSI_REVERT',
 };
 /** 不設止盈、靠保本＋追蹤停損出場的策略（其他是固定止盈、停損不動） */
-const TRAIL_STRATEGIES = new Set(['ema', 'macd', 'st', 'gc']);
+const TRAIL_STRATEGIES = new Set(['ema', 'macd', 'st', 'gc', 'rsi']);
 /**
  * 下單用的 signal_id（也是 Bybit 的 orderLinkId，最長 36 字；止盈單還會再加「:leg:0」）。
  * 例：macd:PENDLE:s:6h:anrc（K 棒開盤時間用「第幾個小時」的 36 進位表示）
@@ -2115,9 +2120,9 @@ async function runBreakoutInterval(env, interval, { dry, use, budget }) {
     if (mz) found.push({ symbol, strategy: 'macd', ...mz });
     const fo = use.fakeout && fakeoutSignal(closed);
     if (fo) found.push({ symbol, strategy: 'fakeout', ...fo });
-    if (use.vol || use.st || use.gc) {
+    if (use.vol || use.st || use.gc || use.rsi) {
       const pre = trendExtraIndicators(closed);
-      for (const s of ['vol', 'st', 'gc']) {
+      for (const s of ['vol', 'st', 'gc', 'rsi']) {
         const t = use[s] && trendExtraSignal(s, closed, closed.length - 1, pre);
         if (t) found.push({ symbol, strategy: s, ...t });
       }
@@ -2192,9 +2197,10 @@ async function breakoutOrder(env, sig, interval, barOpen) {
   if (!env.EXECUTOR_URL || !env.EXECUTOR_HMAC_SECRET) return { skipped: 'no-keys' };
   const tracked = await trackedPositions(env);
   if (tracked.some((p) => p.symbol === sig.symbol)) return { skipped: 'has-position' };
-  // 突破單跟 EMA 交叉單共用張數上限（回測的組合模擬就是這樣算的）
-  const alt = tracked.filter((p) => ALT_STRATEGIES.includes(p.strategy));
-  const maxOpen = Number(cfg(env, 'BREAKOUT_MAX_OPEN'));
+  // 突破單跟 EMA 交叉單共用張數上限（回測的組合模擬就是這樣算的）；RSI 回歸是試跑，張數另外算、不佔 6 個順勢策略的名額
+  const isRsi = sig.strategy === 'rsi';
+  const alt = tracked.filter((p) => ALT_STRATEGIES.includes(p.strategy) && (p.strategy === 'rsi') === isRsi);
+  const maxOpen = Number(cfg(env, isRsi ? 'RSI_REVERT_MAX_OPEN' : 'BREAKOUT_MAX_OPEN'));
   if (maxOpen > 0 && alt.length >= maxOpen) return { skipped: 'max-open', open: alt.length, maxOpen };
   const maxSameDir = Number(cfg(env, 'BREAKOUT_MAX_SAME_DIR'));
   const sameDir = alt.filter((p) => p.dir === sig.dir).length;
@@ -2354,6 +2360,7 @@ function buildBreakoutEmbed(sig, res, interval, mode = null) {
     macd: `MACD ${long ? '由負轉正' : '由正轉負'}、收在 EMA200 ${side}`,
     st: `超級趨勢翻${long ? '多' : '空'}`,
     gc: `SMA50 ${long ? '上穿' : '下穿'} SMA200（${long ? '黃金' : '死亡'}交叉）`,
+    rsi: `RSI(14) ${long ? '從 30 以下回到 30 以上' : '從 70 以上跌回 70 以下'}、收在 EMA200 ${side}`,
   }[sig.strategy] ?? `EMA20 ${long ? '上穿' : '下穿'} EMA50、收在 EMA200 ${side}`;
   const stopAtr = TREND_EXTRA_STOP_ATR[sig.strategy] ?? 2;
   const tpR = res.tp != null && res.entry != null && res.stop != null ? Math.round(Math.abs(res.tp - res.entry) / Math.abs(res.entry - res.stop) * 10) / 10 : 1;
