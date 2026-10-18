@@ -138,6 +138,9 @@ STRATEGIES.FAKEOUT = (x, i) => {
 
 /** 出場規則（stepTrade 的設定＋止盈 R） */
 const EXITS = {
+  // 高勝率對照（2026-10-18 使用者想找勝率高的）：止盈拉近，勝率高但每筆賺得少
+  '固定 0.5R': { tpR: 0.5, cfg: { breakevenAtR: 0, trailFromR: 0 } },
+  '固定 0.75R': { tpR: 0.75, cfg: { breakevenAtR: 0, trailFromR: 0 } },
   '固定 1R': { tpR: 1, cfg: { breakevenAtR: 0, trailFromR: 0 } },
   '固定 1.5R': { tpR: 1.5, cfg: { breakevenAtR: 0, trailFromR: 0 } },
   '固定 2R': { tpR: 2, cfg: { breakevenAtR: 0, trailFromR: 0 } },
