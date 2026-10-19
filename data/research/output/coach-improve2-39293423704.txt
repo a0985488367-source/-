@@ -1,0 +1,10 @@
+SOLUSDT 1h：4 個訊號
+ETHUSDT 1h：1 個訊號
+LTCUSDT 1h：3 個訊號
+NEARUSDT 1h：1 個訊號
+WLDUSDT 1h：1 個訊號
+FILUSDT 1h：2 個訊號
+LITUSDT 1h：0 個訊號
+HBARUSDT 1h：2 個訊號
+ARBUSDT 1h：1 個訊號
+結果存到 data/research/coach-replay-1020.json，15 個訊號
