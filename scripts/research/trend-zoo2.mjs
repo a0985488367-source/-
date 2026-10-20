@@ -13,7 +13,7 @@
  *   ST_LINE           停損放在超級趨勢線上（不是固定 2 ATR）
  *   ST_PB             已經翻多（空）至少 5 根後，回踩到線附近（0.5 ATR 內）又收回去才進——趨勢中途的回檔單
  * 其他沒測過的順勢做法：
- *   HMA_FLIP          Hull MA(55) 斜率翻上／翻下，在 EMA200 同側
+ *   HMA_FLIP          Hull MA(55) 斜率翻上／翻下，在 EMA200 同側（_35／_45／_70／_90 換長度、_NOE 不看 EMA200）
  *   AROON             Aroon(25) 上線穿過下線而且 > 70，在 EMA200 同側
  *   ROC_MOM           50 根漲跌幅（ROC）穿過 0，在 EMA200 同側（時間序列動能）
  *   CHANDELIER        吊燈停損（22 根、3 ATR）翻多／翻空
@@ -107,6 +107,13 @@ const toSig = (d, stopAtr = 2) => (d > 0 ? sig(L, stopAtr) : d < 0 ? sig(S, stop
 export function makeTrend2({ BTC_TREND, TF_MIN }) {
   const st = (x, mult, period = 14) => lazy(x, `st_${period}_${mult}`, () => supertrendLine(x.c, period === 14 ? x.a : atr(x.c, period), mult));
   const base = (x, i) => flip(st(x, 3).dir, i);
+  const hmaFlip = (x, i, n, use200 = true) => {
+    const h = lazy(x, `hma${n}`, () => hma(x.close, n));
+    if (!ok(h[i], h[i - 1], h[i - 2])) return null;
+    const now = Math.sign(h[i] - h[i - 1]), prev = Math.sign(h[i - 1] - h[i - 2]);
+    const d = now !== 0 && now !== prev && prev !== 0 ? now : 0;
+    return d && (!use200 || side200(x, i, d)) ? toSig(d) : null;
+  };
   return {
     ST_M2: (x, i) => toSig(flip(st(x, 2).dir, i)),
     ST_M4: (x, i) => toSig(flip(st(x, 4).dir, i)),
@@ -138,13 +145,13 @@ export function makeTrend2({ BTC_TREND, TF_MIN }) {
       const back = d > 0 ? k.close > line[i] && k.close > k.open : k.close < line[i] && k.close < k.open;
       return near(i) && back && !near(i - 1) ? toSig(d) : null;
     },
-    HMA_FLIP: (x, i) => {
-      const h = lazy(x, 'hma55', () => hma(x.close, 55));
-      if (!ok(h[i], h[i - 1], h[i - 2])) return null;
-      const now = Math.sign(h[i] - h[i - 1]), prev = Math.sign(h[i - 1] - h[i - 2]);
-      const d = now !== 0 && now !== prev && prev !== 0 ? now : 0;
-      return d && side200(x, i, d) ? toSig(d) : null;
-    },
+    HMA_FLIP: (x, i) => hmaFlip(x, i, 55),
+    // 長度敏感度（2026-10-20）：55 換成別的長度還賺不賺；NOE＝不看 EMA200
+    HMA_FLIP_35: (x, i) => hmaFlip(x, i, 35),
+    HMA_FLIP_45: (x, i) => hmaFlip(x, i, 45),
+    HMA_FLIP_70: (x, i) => hmaFlip(x, i, 70),
+    HMA_FLIP_90: (x, i) => hmaFlip(x, i, 90),
+    HMA_FLIP_NOE: (x, i) => hmaFlip(x, i, 55, false),
     AROON: (x, i) => {
       const { up, dn } = lazy(x, 'aroon25', () => aroon(x.c, 25));
       if (!ok(up[i], dn[i], up[i - 1], dn[i - 1])) return null;
