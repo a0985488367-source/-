@@ -17,6 +17,7 @@ import { ema, atr, rsi } from '../../src/core/indicators.js';
 import { breakoutSignal } from '../../src/strategies/breakout.js';
 import { fakeoutEvents, FAKEOUT_DEFAULTS } from '../../src/strategies/fakeout.js';
 import { prepare, ZOO } from './strategy-zoo.mjs';
+import { makeTrend2 } from './trend-zoo2.mjs';
 
 const ARGS = process.argv.slice(2);
 const opt = (n, d) => optFrom(ARGS, n, d);
@@ -74,8 +75,6 @@ const STRATEGIES = {
 Object.assign(STRATEGIES, ZOO);
 // 工作流程的「variants」欄位會變成 --only：裡面是出場名稱的當出場篩選，其他的當策略篩選
 const ONLY = opt('only', '').split(',').map((x) => x.trim()).filter(Boolean);
-const ONLY_STRATS = [...opt('strategies', '').split(',').filter(Boolean), ...ONLY.filter((x) => x in STRATEGIES)];
-if (ONLY_STRATS.length) for (const k of Object.keys(STRATEGIES)) if (!ONLY_STRATS.includes(k)) delete STRATEGIES[k];
 
 /** 唐奇安突破：跟線上自動下單共用 src/strategies/breakout.js 的判斷 */
 function donchian(x, i, n) {
@@ -135,6 +134,12 @@ STRATEGIES.FAKEOUT = (x, i) => {
   const e = x.fo.get(i);
   return e ? { dir: e.rdir, stopPrice: e.stop } : null;
 };
+
+// 第二批順勢策略（超級趨勢變化版等，trend-zoo2.mjs）
+Object.assign(STRATEGIES, makeTrend2({ BTC_TREND, TF_MIN }));
+// 篩選放在所有策略都加進來之後（原本放在前面，DONCH55_F*／FAKEOUT 篩不掉）
+const ONLY_STRATS = [...opt('strategies', '').split(',').filter(Boolean), ...ONLY.filter((x) => x in STRATEGIES)];
+if (ONLY_STRATS.length) for (const k of Object.keys(STRATEGIES)) if (!ONLY_STRATS.includes(k)) delete STRATEGIES[k];
 
 /** 出場規則（stepTrade 的設定＋止盈 R） */
 const EXITS = {
@@ -494,7 +499,7 @@ const withTargets = (sigs, tpR) => sigs.map((s) => ({
     log(`  ${symbol} 資料完成`);
   }
   // F5 要用 BTC 的趨勢：BTC 不在幣種清單裡就另外抓
-  if (Object.keys(STRATEGIES).some((k) => k.endsWith('_F5'))) {
+  if (Object.keys(STRATEGIES).some((k) => k.endsWith('_F5') || k === 'ST_BTC')) {
     for (const iv of INTERVALS) {
       const b = candlesBy.get(`BTCUSDT|${iv}`) ?? await klines('BTCUSDT', iv, LIMIT).catch(() => null);
       if (!b) { log(`  BTC ${iv} 抓不到，F5 不會有訊號`); continue; }
