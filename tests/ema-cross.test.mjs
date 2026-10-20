@@ -395,7 +395,7 @@ function serveKlines(symbol, w) {
 
 const onlyStrategy = (s, over = {}) => ({
   BREAKOUT_ENABLED: 'false', EMA_CROSS_ENABLED: 'false', MACD_ZERO_ENABLED: 'false', FAKEOUT_ENABLED: 'false',
-  VOL_BREAK_ENABLED: 'false', SUPERTREND_ENABLED: 'false', GOLDEN_CROSS_ENABLED: 'false', RSI_REVERT_ENABLED: 'false', [`${s}_ENABLED`]: 'true', ...over,
+  VOL_BREAK_ENABLED: 'false', SUPERTREND_ENABLED: 'false', GOLDEN_CROSS_ENABLED: 'false', RSI_REVERT_ENABLED: 'false', HMA_FLIP_ENABLED: 'false', [`${s}_ENABLED`]: 'true', ...over,
 });
 
 test('Worker 放量突破：止盈 2R（VOL_BREAK_TP_R）、停損 2 ATR、signal_id 用 vb 開頭、停損不移動', async () => {
@@ -438,6 +438,50 @@ for (const [key, prefix, stopAtr] of [['st', 'SUPERTREND', 2], ['gc', 'GOLDEN_CR
     assert.equal(pos.management.trailFromR, 1.5);
   });
 }
+
+test('Worker HMA 翻轉：停損 2 ATR、不掛止盈、不移到成本、1.5R 後追蹤 1.5R，signal_id 用 hma 開頭', async () => {
+  const { sig, w } = windowWith('hma');
+  const executor = { calls: [] };
+  stub({ executor });
+  serveKlines('HMAUSDT', w);
+  const env = makeEnv({}, onlyStrategy('HMA_FLIP', { BREAKOUT_SYMBOLS: 'HMAUSDT' }));
+  const out = await runWorker(env);
+  const order = out.breakout.orders[0];
+  assert.equal(order?.strategy, 'hma', JSON.stringify(out.breakout));
+  const trade = executor.calls.find((c) => c.url.endsWith('/trade')).body;
+  assert.deepEqual(trade.ladder, []);
+  assert.match(trade.signal_id, /^hma:HMA:[ls]:4h:/);
+  assert.ok(Math.abs(sig.stopDistance - 2 * sig.atr) < 1e-9);
+  const pos = JSON.parse(await env.SMC_KV.get(`open-pos:HMAUSDT:${sig.dir}`));
+  assert.ok(pos.management.breakevenAtR >= 1e9, '不移到成本');
+  assert.equal(pos.management.trailFromR, 1.5);
+  assert.equal(pos.management.trailGapR, 1.5);
+});
+
+test('Worker HMA 翻轉：張數另外算——6 個順勢策略滿 5 張、RSI 滿 3 張照樣下；HMA 自己滿 3 張才不下', async () => {
+  const { sig, w } = windowWith('hma');
+  const executor = { calls: [] };
+  stub({ executor });
+  serveKlines('HMAUSDT', w);
+  const side = sig.dir === 'long' ? 'Buy' : 'Sell';
+  const others = {
+    ...Object.fromEntries(['AAAUSDT', 'BBBUSDT', 'CCCUSDT', 'DDDUSDT', 'EEEUSDT'].map((s) => altPos(s, sig.dir, 'ema'))),
+    ...Object.fromEntries(['FFFUSDT', 'GGGUSDT', 'HHHUSDT'].map((s) => altPos(s, sig.dir, 'rsi'))),
+  };
+  executor.positions = Object.keys(others).map((k) => ({ symbol: k.split(':')[1], side, size: '1' }));
+  const ok = await runWorker(makeEnv(others, onlyStrategy('HMA_FLIP', { BREAKOUT_SYMBOLS: 'HMAUSDT' })));
+  assert.equal(ok.breakout.orders[0]?.strategy, 'hma', JSON.stringify(ok.breakout));
+  assert.ok(!ok.breakout.orders[0].skipped, JSON.stringify(ok.breakout.orders[0]));
+
+  const executor2 = { calls: [] };
+  stub({ executor: executor2 });
+  serveKlines('HMAUSDT', w);
+  const three = Object.fromEntries(['AAAUSDT', 'BBBUSDT', 'CCCUSDT'].map((s, i) => altPos(s, i ? 'long' : 'short', 'hma')));
+  executor2.positions = Object.keys(three).map((k, i) => ({ symbol: k.split(':')[1], side: i ? 'Buy' : 'Sell', size: '1' }));
+  const full = await runWorker(makeEnv(three, onlyStrategy('HMA_FLIP', { BREAKOUT_SYMBOLS: 'HMAUSDT' })));
+  assert.equal(full.breakout.orders[0].skipped, 'max-open', JSON.stringify(full.breakout));
+  assert.equal(executor2.calls.filter((c) => c.url.endsWith('/trade')).length, 0);
+});
 
 test('Worker RSI 回歸：張數另外算——6 個順勢策略滿 5 張照樣下；RSI 自己滿 3 張才不下', async () => {
   const { sig, w } = windowWith('rsi');
