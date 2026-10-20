@@ -286,6 +286,13 @@ const DEFAULTS = {
   // 張數另外算（RSI_REVERT_MAX_OPEN），不佔上面 6 個順勢策略的 BREAKOUT_MAX_OPEN；預設關閉
   RSI_REVERT_ENABLED: 'false',
   RSI_REVERT_MAX_OPEN: '3',
+  // HMA 翻轉（2026-10-20 使用者選上 Demo 試跑，見 src/strategies/trend-extra.js）：不設止盈、不移到成本，
+  // 賺 HMA_FLIP_TRAIL_FROM_R 之後追蹤（距離 HMA_FLIP_TRAIL_GAP_R）；張數另外算（HMA_FLIP_MAX_OPEN）；預設關閉
+  HMA_FLIP_ENABLED: 'false',
+  HMA_FLIP_MAX_OPEN: '3',
+  HMA_FLIP_BE_R: '0',            // 0＝不移到成本（回測的「1.5R 後追蹤 1.5R」）
+  HMA_FLIP_TRAIL_FROM_R: '1.5',
+  HMA_FLIP_TRAIL_GAP_R: '1.5',
   // 每個策略只在這些週期判斷（逗號分隔，要包含在 BREAKOUT_INTERVALS 裡）；留空＝BREAKOUT_INTERVALS 全部
   BREAKOUT_TF: '',
   EMA_CROSS_TF: '',
@@ -295,6 +302,7 @@ const DEFAULTS = {
   SUPERTREND_TF: '',
   GOLDEN_CROSS_TF: '',
   RSI_REVERT_TF: '',
+  HMA_FLIP_TF: '',
   // SMC 進場區的自動下單（false＝只推播不下單；突破／假突破這些另外的策略不受影響）
   SMC_AUTO_TRADE_ENABLED: 'true',
   // SMC 推播的「統整週期」過濾：上面兩層大結構同向＋上一層小結構同向（沒在回調）才推（src/smc/mtf-gate.js）
@@ -313,23 +321,26 @@ const DEFAULTS = {
 };
 
 /** 突破單、EMA 交叉單這類「另外的策略」（不是 SMC） */
-const ALT_STRATEGIES = ['breakout', 'ema', 'macd', 'fakeout', 'vol', 'st', 'gc', 'rsi'];
+const ALT_STRATEGIES = ['breakout', 'ema', 'macd', 'fakeout', 'vol', 'st', 'gc', 'rsi', 'hma'];
 const STRATEGY_LABEL = {
   breakout: '突破單', ema: 'EMA 交叉單', macd: 'MACD 零軸單', fakeout: '假突破反手單',
-  vol: '放量突破單', st: '超級趨勢單', gc: '黃金交叉單', rsi: 'RSI 回歸單',
+  vol: '放量突破單', st: '超級趨勢單', gc: '黃金交叉單', rsi: 'RSI 回歸單', hma: 'HMA 翻轉單',
 };
 const STRATEGY_NAME = {
   breakout: '突破', ema: 'EMA 交叉', macd: 'MACD 零軸', fakeout: '假突破反手',
-  vol: '放量突破', st: '超級趨勢', gc: '黃金交叉', rsi: 'RSI 回歸',
+  vol: '放量突破', st: '超級趨勢', gc: '黃金交叉', rsi: 'RSI 回歸', hma: 'HMA 翻轉',
 };
-const SIGNAL_PREFIX = { breakout: 'bo', ema: 'ema', macd: 'macd', fakeout: 'fo', vol: 'vb', st: 'st', gc: 'gc', rsi: 'rsi' };
+const SIGNAL_PREFIX = { breakout: 'bo', ema: 'ema', macd: 'macd', fakeout: 'fo', vol: 'vb', st: 'st', gc: 'gc', rsi: 'rsi', hma: 'hma' };
 /** 每個策略的設定前綴（<前綴>_ENABLED 開關、<前綴>_TF 週期） */
 const STRATEGY_CFG = {
   breakout: 'BREAKOUT', ema: 'EMA_CROSS', macd: 'MACD_ZERO', fakeout: 'FAKEOUT',
-  vol: 'VOL_BREAK', st: 'SUPERTREND', gc: 'GOLDEN_CROSS', rsi: 'RSI_REVERT',
+  vol: 'VOL_BREAK', st: 'SUPERTREND', gc: 'GOLDEN_CROSS', rsi: 'RSI_REVERT', hma: 'HMA_FLIP',
 };
 /** 不設止盈、靠保本＋追蹤停損出場的策略（其他是固定止盈、停損不動） */
-const TRAIL_STRATEGIES = new Set(['ema', 'macd', 'st', 'gc', 'rsi']);
+const TRAIL_STRATEGIES = new Set(['ema', 'macd', 'st', 'gc', 'rsi', 'hma']);
+/** 試跑的策略張數另外算（設定名＝張數上限），不佔 6 個順勢策略共用的 BREAKOUT_MAX_OPEN；其他策略都在 'main' 這一池 */
+const SEPARATE_POOLS = { rsi: 'RSI_REVERT_MAX_OPEN', hma: 'HMA_FLIP_MAX_OPEN' };
+const poolOf = (strategy) => (SEPARATE_POOLS[strategy] ? strategy : 'main');
 /**
  * 下單用的 signal_id（也是 Bybit 的 orderLinkId，最長 36 字；止盈單還會再加「:leg:0」）。
  * 例：macd:PENDLE:s:6h:anrc（K 棒開盤時間用「第幾個小時」的 36 進位表示）
@@ -1906,7 +1917,7 @@ function buildCloseEmbed(pos, exitPrice) {
         { name: '槓桿', value: `${pos.leverage}x`, inline: true },
         { name: '當初風險', value: `${fmt(pos.riskAmount)} USDT`, inline: true },
         TRAIL_STRATEGIES.has(pos.strategy)
-          ? { name: '策略', value: `${pos.interval ?? '4h'} ${STRATEGY_NAME[pos.strategy]}（保本＋追蹤）`, inline: true }
+          ? { name: '策略', value: `${pos.interval ?? '4h'} ${STRATEGY_NAME[pos.strategy]}（${pos.strategy === 'hma' ? '追蹤停損' : '保本＋追蹤'}）`, inline: true }
           : ALT_STRATEGIES.includes(pos.strategy)
             ? { name: '策略', value: `${pos.interval ?? '4h'} ${STRATEGY_NAME[pos.strategy]}（止盈 ${pos.targets?.[0]?.rr ?? 1}R）`, inline: true }
             : { name: '等級', value: `${pos.grade}（${pos.score} 分）`, inline: true },
@@ -2035,8 +2046,17 @@ async function fetchKlinesAny(env, symbol, interval, limit) {
   throw new Error(errors.join('；') || '沒有可用的資料源');
 }
 
-/** EMA 交叉單的保本／追蹤參數（存在部位上，updateTrailingStops 照這個搬停損） */
-function emaCrossManagement(env) {
+/** EMA 交叉單的保本／追蹤參數（存在部位上，updateTrailingStops 照這個搬停損）；HMA 翻轉用自己的參數 */
+function emaCrossManagement(env, strategy) {
+  if (strategy === 'hma') {
+    const be = Number(cfg(env, 'HMA_FLIP_BE_R'));
+    return {
+      breakevenAtR: be > 0 ? be : 1e9, // 0＝不移到成本（1e9 永遠到不了；不用 Infinity，存進 KV 會變 null）
+      breakevenOffsetR: DEFAULT_MANAGEMENT.breakevenOffsetR,
+      trailFromR: Number(cfg(env, 'HMA_FLIP_TRAIL_FROM_R')),
+      trailGapR: Number(cfg(env, 'HMA_FLIP_TRAIL_GAP_R')),
+    };
+  }
   return {
     breakevenAtR: Number(cfg(env, 'EMA_CROSS_BE_R')),
     breakevenOffsetR: DEFAULT_MANAGEMENT.breakevenOffsetR,
@@ -2120,9 +2140,9 @@ async function runBreakoutInterval(env, interval, { dry, use, budget }) {
     if (mz) found.push({ symbol, strategy: 'macd', ...mz });
     const fo = use.fakeout && fakeoutSignal(closed);
     if (fo) found.push({ symbol, strategy: 'fakeout', ...fo });
-    if (use.vol || use.st || use.gc || use.rsi) {
+    if (use.vol || use.st || use.gc || use.rsi || use.hma) {
       const pre = trendExtraIndicators(closed);
-      for (const s of ['vol', 'st', 'gc', 'rsi']) {
+      for (const s of ['vol', 'st', 'gc', 'rsi', 'hma']) {
         const t = use[s] && trendExtraSignal(s, closed, closed.length - 1, pre);
         if (t) found.push({ symbol, strategy: s, ...t });
       }
@@ -2197,10 +2217,11 @@ async function breakoutOrder(env, sig, interval, barOpen) {
   if (!env.EXECUTOR_URL || !env.EXECUTOR_HMAC_SECRET) return { skipped: 'no-keys' };
   const tracked = await trackedPositions(env);
   if (tracked.some((p) => p.symbol === sig.symbol)) return { skipped: 'has-position' };
-  // 突破單跟 EMA 交叉單共用張數上限（回測的組合模擬就是這樣算的）；RSI 回歸是試跑，張數另外算、不佔 6 個順勢策略的名額
-  const isRsi = sig.strategy === 'rsi';
-  const alt = tracked.filter((p) => ALT_STRATEGIES.includes(p.strategy) && (p.strategy === 'rsi') === isRsi);
-  const maxOpen = Number(cfg(env, isRsi ? 'RSI_REVERT_MAX_OPEN' : 'BREAKOUT_MAX_OPEN'));
+  // 突破單跟 EMA 交叉單共用張數上限（回測的組合模擬就是這樣算的）；RSI 回歸、HMA 翻轉是試跑，各自的張數另外算、不佔 6 個順勢策略的名額
+  // （回測：HMA 翻轉擠進共用的 5 張，整體反而變差，因為名額被搶）
+  const pool = poolOf(sig.strategy);
+  const alt = tracked.filter((p) => ALT_STRATEGIES.includes(p.strategy) && poolOf(p.strategy) === pool);
+  const maxOpen = Number(cfg(env, SEPARATE_POOLS[sig.strategy] ?? 'BREAKOUT_MAX_OPEN'));
   if (maxOpen > 0 && alt.length >= maxOpen) return { skipped: 'max-open', open: alt.length, maxOpen };
   const maxSameDir = Number(cfg(env, 'BREAKOUT_MAX_SAME_DIR'));
   const sameDir = alt.filter((p) => p.dir === sig.dir).length;
@@ -2260,7 +2281,7 @@ async function breakoutOrder(env, sig, interval, barOpen) {
       symbol: sig.symbol, dir: sig.dir, entry, stop, initialStop: stop,
       targets: isEma ? [] : [{ name: 'TP1', price: tp, rr: tpR }], ladder, tickSize,
       maxFavorableR: 0, beMoved: false, trailing: false,
-      strategy: sig.strategy ?? 'breakout', management: isEma ? emaCrossManagement(env) : 'fixed', interval, bar: barOpen,
+      strategy: sig.strategy ?? 'breakout', management: isEma ? emaCrossManagement(env, sig.strategy) : 'fixed', interval, bar: barOpen,
       qty, riskAmount, leverage, openedAt: Date.now(), account,
     });
     return { orderId: trade.orderId, qty, riskAmount, leverage, entry, stop, tp, ladder, account };
@@ -2361,6 +2382,7 @@ function buildBreakoutEmbed(sig, res, interval, mode = null) {
     st: `超級趨勢翻${long ? '多' : '空'}`,
     gc: `SMA50 ${long ? '上穿' : '下穿'} SMA200（${long ? '黃金' : '死亡'}交叉）`,
     rsi: `RSI(14) ${long ? '從 30 以下回到 30 以上' : '從 70 以上跌回 70 以下'}、收在 EMA200 ${side}`,
+    hma: `Hull 均線 HMA(55) 轉${long ? '上' : '下'}、收在 EMA200 ${side}`,
   }[sig.strategy] ?? `EMA20 ${long ? '上穿' : '下穿'} EMA50、收在 EMA200 ${side}`;
   const stopAtr = TREND_EXTRA_STOP_ATR[sig.strategy] ?? 2;
   const tpR = res.tp != null && res.entry != null && res.stop != null ? Math.round(Math.abs(res.tp - res.entry) / Math.abs(res.entry - res.stop) * 10) / 10 : 1;
@@ -2375,7 +2397,9 @@ function buildBreakoutEmbed(sig, res, interval, mode = null) {
       description: !ok
         ? `有${name}訊號，但下單失敗：${res.error}`
         : isEma
-          ? `${why}，市價進場；停損 ${stopAtr} ATR，賺 1R 移到成本、1.5R 後追蹤停損，不設止盈。`
+          ? sig.strategy === 'hma'
+            ? `${why}，市價進場；停損 ${stopAtr} ATR，賺 1.5R 後停損跟著走（距離 1.5R），不移到成本、不設止盈。`
+            : `${why}，市價進場；停損 ${stopAtr} ATR，賺 1R 移到成本、1.5R 後追蹤停損，不設止盈。`
           : sig.strategy === 'fakeout' ? fakeoutWhy : fixedWhy,
       fields: ok ? [
         { name: '進場約', value: fmt(res.entry), inline: true },

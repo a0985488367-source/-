@@ -101,6 +101,12 @@ GOLDEN_CROSS_TF = "6h"
 RSI_REVERT_ENABLED = "true"
 RSI_REVERT_TF = "1h"
 RSI_REVERT_MAX_OPEN = "3"
+#   HMA 翻轉（2026-10-20 使用者選上 Demo 試跑，src/strategies/trend-extra.js）6h：Hull MA(55) 轉向＋EMA200 同側；
+#   停損 2 ATR、1.5R 後追蹤 1.5R（不移到成本、不設止盈）。回測（3 組 44 檔、5 分鐘精準版、150 天）前後半 12 格全賺、
+#   每筆平均 +0.24R、勝率 40～50%、最長連虧 12～31 筆。張數另外算（最多 3 張），不佔上面 6 個策略的 5 張；真錢不跑
+HMA_FLIP_ENABLED = "true"
+HMA_FLIP_TF = "6h"
+HMA_FLIP_MAX_OPEN = "3"
 # 2026-09-30 使用者要考自營商兩步挑戰：6 個策略「只推播、不下單」（ALT_SIGNAL_ONLY="true" 時完全不碰 Executor），
 # 推播附考試帳戶的建議數量。2026-10-01 使用者不考了：Executor 切回 Bybit Demo（正式網模擬資金），
 # 6 個策略恢復自動下單（每單 3%、最多 5 張），推播改回自動下單的結果

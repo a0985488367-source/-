@@ -8,12 +8,15 @@
  *   黃金交叉 GOLDEN_CROSS SMA50 上穿（下穿）SMA200；停損 3 ATR
  *   RSI 回歸 RSI_30_70   （2026-10-18 使用者選上 Demo 試跑）收在 EMA200 之上 RSI(14) 從 30 以下回到 30 以上做多，
  *                        之下從 70 以上跌回 70 以下做空；停損 2 ATR、1R 保本＋追蹤（1h，回測勝率 45～56%、+0.26R）
+ *   HMA 翻轉 HMA_FLIP    （2026-10-20 使用者選上 Demo 試跑）Hull MA(55) 斜率由下轉上、收在 EMA200 之上做多，
+ *                        由上轉下、收在 EMA200 之下做空；停損 2 ATR，賺 1.5R 後追蹤（距離 1.5R），不移到成本、不設止盈
+ *                        （6h，回測 3 組 44 檔、5 分鐘精準版前後半 12 格全賺，平均每筆 +0.24R；scripts/research/trend-zoo2.mjs）
  * 都是第 i 根收盤判斷、下一根開盤市價進場，只用第 i 根以前的資料。
  */
 
 import { ema, sma, atr, rsi } from '../core/indicators.js';
 
-export const TREND_EXTRA_STOP_ATR = { vol: 2, st: 2, gc: 3, rsi: 2 };
+export const TREND_EXTRA_STOP_ATR = { vol: 2, st: 2, gc: 3, rsi: 2, hma: 2 };
 
 const ok = (...v) => v.every((x) => x != null && Number.isFinite(x));
 const hh = (arr, i, n) => { let m = -Infinity; for (let j = i - n + 1; j <= i; j++) m = Math.max(m, arr[j]); return m; };
@@ -39,6 +42,24 @@ export function supertrendDir(c, a, mult = 3) {
   return dir;
 }
 
+function wma(values, n) {
+  const out = new Array(values.length).fill(null);
+  const den = (n * (n + 1)) / 2;
+  for (let i = n - 1; i < values.length; i++) {
+    let s = 0, bad = false;
+    for (let k = 0; k < n; k++) { const v = values[i - k]; if (v == null) { bad = true; break; } s += v * (n - k); }
+    if (!bad) out[i] = s / den;
+  }
+  return out;
+}
+
+/** Hull MA：WMA(2×WMA(n/2) − WMA(n), √n)；跟 scripts/research/trend-zoo2.mjs 同一個算法 */
+export function hullMa(values, n = 55) {
+  const half = wma(values, Math.round(n / 2)), full = wma(values, n);
+  const diff = values.map((_, i) => (half[i] == null || full[i] == null ? null : 2 * half[i] - full[i]));
+  return wma(diff, Math.round(Math.sqrt(n)));
+}
+
 /** 一次算好三個策略要用的指標（回測逐根判斷時避免重算） */
 export function trendExtraIndicators(candles) {
   const close = candles.map((k) => k.close);
@@ -55,6 +76,7 @@ export function trendExtraIndicators(candles) {
     a,
     st: supertrendDir(candles, a, 3),
     r14: rsi(candles, 14),
+    hma: hullMa(close, 55),
   };
 }
 
@@ -75,6 +97,15 @@ const RULES = {
     if (lvlDn(x.r14, 70, i) && x.close[i] < x.e200[i]) return 'short';
     return null;
   },
+  hma: (x, i) => {
+    const h = x.hma;
+    if (!ok(h[i], h[i - 1], h[i - 2], x.e200[i])) return null;
+    const now = Math.sign(h[i] - h[i - 1]), prev = Math.sign(h[i - 1] - h[i - 2]);
+    if (now === 0 || prev === 0 || now === prev) return null;
+    if (now > 0 && x.close[i] > x.e200[i]) return 'long';
+    if (now < 0 && x.close[i] < x.e200[i]) return 'short';
+    return null;
+  },
   gc: (x, i) => {
     const f = x.s50, s = x.s200;
     if (!ok(f[i], s[i], f[i - 1], s[i - 1])) return null;
@@ -85,7 +116,7 @@ const RULES = {
 };
 
 /**
- * 第 i 根收盤時 strategy（'vol'／'st'／'gc'／'rsi'）有沒有訊號。
+ * 第 i 根收盤時 strategy（'vol'／'st'／'gc'／'rsi'／'hma'）有沒有訊號。
  * 回傳 { dir, stopDistance, atr, close, time } 或 null；pre 可傳 trendExtraIndicators() 的結果。
  */
 export function trendExtraSignal(strategy, candles, i = candles.length - 1, pre = null) {
