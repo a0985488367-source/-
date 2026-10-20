@@ -26,6 +26,7 @@
   教練 App 的戰績（`/coach-live`）、盯這單（`/watch`）、交易日誌（`/journal`）後端在 `worker/coach-extras.js`；
   日誌經 Executor 的 `GET /journal` 讀使用者真實帳戶（唯讀金鑰 `BYBIT_READ_API_KEY/SECRET`，用 executor-deploy.yml 同步到 Fly）。
   2026-10-15 起有「教練自動下單」（`worker/coach-auto.js`＋Executor `/coach/*`）：App 開關 關／Demo／真錢（預設關），
+  2026-10-20 使用者決定**關掉教練自動下單**（Demo 方案 B 上線後 10 筆全虧 -9.1R，回測重跑同幾天也全虧，不是 bug，是規則沒優勢），教練只當輔助（App＋Discord 提醒）；關掉後還沒成交的教練掛單會自動撤。
   2026-10-17 起用方案 B（`plan: 'B'`，使用者看完回測選的）：只做 1h、停損至少 1.5 ATR、固定 1R 止盈（回測 `scripts/research/coach-improve2*.mjs`：勝率 55%、+0.06～0.08R，15m／30m 怎麼改都虧）；`plan: 'legacy'` 是原本的順 4h＋≥2R／寬鬆 ≥1.5R、每筆風險權益 9%、同時最多 5 筆、當天虧 5 筆停；真錢單走使用者自己的帳戶（COACH_LIVE），跟 6 個順勢策略的主帳戶分開。
   2026-10-15 起「超級趨勢」另外上真錢（`placeTrendLive`／`manageTrendLive`，Executor `/coach/market`、`/coach/set-stop`，orderLinkId `ct:`）：
   Demo 照跑，真錢每單風險 9%、最多 5 張、跟教練共用真錢帳戶，App／coach-auto.yml 可以關（KV `trendlive:cfg`）。

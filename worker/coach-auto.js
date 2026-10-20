@@ -151,6 +151,7 @@ export async function runCoachAuto(env, { candidates = [], executorCall, postDis
       if (o) {
         let why = null;
         if (now > t.validUntil) why = `${VALID_BARS} 根沒成交`;
+        else if (!accts.includes(t.account)) why = '自動下單已經關掉'; // 2026-10-20：關掉後還沒成交的掛單直接撤，不要再成交
         else {
           try {
             const rows = await fetchKlines(env, t.sym, t.iv, 4);
