@@ -60,3 +60,36 @@ export function ledgerByWindow({ executions, closedPnl, snapshots }) {
   }
   return out;
 }
+
+/**
+ * 資金流水（Executor GET /ledger 的 logs）依餘額快照分段，每段每種類型（TRADE、SETTLEMENT 資金費、TRANSFER_OUT…）×幣別加總，
+ * 再找「流水沒記到的餘額跳動」：同一個幣照時間排，上一筆餘額＋這筆變動 ≠ 這筆餘額，差額就是中間有沒記錄的變動
+ * （例如 Demo 調整模擬資金）。Bybit 回傳是新到舊，同一毫秒的照回傳順序倒過來排。
+ */
+export function summarizeTxLog(logs, snapshots, { gapMin = 5 } = {}) {
+  const sorted = logs.map((l, i) => ({ ...l, _i: i })).sort((a, b) => a.time - b.time || b._i - a._i);
+  const gaps = [];
+  const last = new Map();
+  for (const l of sorted) {
+    const prev = last.get(l.currency);
+    if (prev) {
+      const gap = l.cashBalance - (prev.cashBalance + l.change);
+      if (Math.abs(gap) >= gapMin) gaps.push({ currency: l.currency, from: prev.time, to: l.time, before: prev.cashBalance, after: l.cashBalance - l.change, gap });
+    }
+    last.set(l.currency, l);
+  }
+  const windows = [];
+  for (let i = 1; i < snapshots.length; i++) {
+    const from = snapshots[i - 1].time, to = snapshots[i].time;
+    const inWin = (t) => t > from && t <= to;
+    const byType = {};
+    for (const l of sorted) {
+      if (!inWin(l.time)) continue;
+      const k = `${l.type}${l.category ? '/' + l.category : ''} ${l.currency}`;
+      const r = (byType[k] ||= { n: 0, change: 0 });
+      r.n++; r.change += l.change;
+    }
+    windows.push({ from, to, byType, gaps: gaps.filter((g) => inWin(g.to)) });
+  }
+  return { windows, gaps, first: sorted[0] || null, last: sorted[sorted.length - 1] || null };
+}
