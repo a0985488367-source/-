@@ -84,6 +84,7 @@ function stubBybitFetch(bybit) {
       if (u.includes('/v5/order/history')) return j(0, 'OK', { list: bybit.orderHistory ?? [] });
       if (u.includes('/v5/order/cancel')) return bybit.cancelError ? j(bybit.cancelError.code, bybit.cancelError.msg, {}) : j(0, 'OK', {});
       if (u.includes('/v5/order/create')) {
+        bybit.onOrder?.(init?.body ? JSON.parse(init.body) : null);
         return bybit.orderError ? j(bybit.orderError.code, bybit.orderError.msg, {}) : j(0, 'OK', bybit.orderResult ?? { orderId: 'order-123' });
       }
       throw new Error('未預期的 Bybit 端點：' + u);
@@ -387,4 +388,61 @@ test('POST /coach/cancel 只取消 cc: 的單；GET /coach/state 只回 cc: 的�
     assert.equal(st.body.history[0].orderStatus, 'Filled');
     assert.equal(st.body.closedPnl[0].closedPnl, 1.5);
   } finally { globalThis.fetch = realFetch; await close(); }
+});
+
+test('POST /dc/adjust：沒部位 → 市價買到目標（照步進捨去）並設災難停損', async () => {
+  setEmergencyStop(false);
+  const bybit = { calls: [], positions: [] };
+  bybit.onOrder = (b) => { bybit.positions = [{ symbol: b.symbol, side: 'Buy', size: b.qty, avgPrice: '100' }]; };
+  stubBybitFetch(bybit);
+  const { baseUrl, close } = await startServer();
+  try {
+    const res = await call(baseUrl, 'POST', '/dc/adjust', { symbol: 'BTCUSDT', targetQty: 0.123, expectQty: 0, refPrice: 100, stopLoss: 90, leverage: 10, orderLinkId: 'dc:BTC:20261022' });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.ok, true);
+    assert.equal(res.body.ordered, 0.1);
+    assert.equal(res.body.after, 0.1);
+    assert.equal(res.body.stopLoss, 90);
+    const order = bybit.calls.find((c) => c.url.includes('order/create'));
+    assert.deepEqual([order.body.side, order.body.qty, order.body.orderLinkId, order.body.reduceOnly], ['Buy', '0.1', 'dc:BTC:20261022', undefined]);
+    assert.ok(bybit.calls.some((c) => c.url.includes('trading-stop') && c.body.stopLoss === '90'));
+  } finally { await close(); }
+});
+
+test('POST /dc/adjust：交易所部位跟唐奇安記的對不上（別人佔著）→ 不碰', async () => {
+  setEmergencyStop(false);
+  const bybit = { calls: [], positions: [{ symbol: 'ETHUSDT', side: 'Buy', size: '0.5', avgPrice: '100' }] };
+  stubBybitFetch(bybit);
+  const { baseUrl, close } = await startServer();
+  try {
+    const res = await call(baseUrl, 'POST', '/dc/adjust', { symbol: 'ETHUSDT', targetQty: 1, expectQty: 0, refPrice: 100, orderLinkId: 'dc:ETH:20261022' });
+    assert.equal(res.body.ok, false);
+    assert.equal(res.body.skipped, 'occupied');
+    assert.equal(bybit.calls.filter((c) => c.url.includes('order/create')).length, 0);
+  } finally { await close(); }
+});
+
+test('POST /dc/adjust：目標低於最小下單量 → reduce-only 全平', async () => {
+  setEmergencyStop(false);
+  const bybit = { calls: [], positions: [{ symbol: 'SOLUSDT', side: 'Buy', size: '0.5', avgPrice: '100' }] };
+  bybit.onOrder = () => { bybit.positions = []; };
+  stubBybitFetch(bybit);
+  const { baseUrl, close } = await startServer();
+  try {
+    const res = await call(baseUrl, 'POST', '/dc/adjust', { symbol: 'SOLUSDT', targetQty: 0.04, expectQty: 0.5, refPrice: 100, stopLoss: 90, orderLinkId: 'dc:SOL:20261022' });
+    assert.equal(res.body.ok, true);
+    assert.equal(res.body.after, 0);
+    const order = bybit.calls.find((c) => c.url.includes('order/create'));
+    assert.deepEqual([order.body.side, order.body.qty, order.body.reduceOnly], ['Sell', '0.5', true]);
+    assert.equal(bybit.calls.filter((c) => c.url.includes('trading-stop')).length, 0, '平光了就不用設停損');
+  } finally { await close(); }
+});
+
+test('POST /dc/adjust：orderLinkId 不是 dc: 開頭 → 400', async () => {
+  stubBybitFetch({ calls: [] });
+  const { baseUrl, close } = await startServer();
+  try {
+    const res = await call(baseUrl, 'POST', '/dc/adjust', { symbol: 'BTCUSDT', targetQty: 1, expectQty: 0, refPrice: 100, orderLinkId: 'bo:x' });
+    assert.equal(res.status, 400);
+  } finally { await close(); }
 });

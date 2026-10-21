@@ -204,6 +204,7 @@ import { runCoachAuto, handleCoachAuto, autoCandidate, placeTrendLive, manageTre
 import { sessionOf } from '../src/smc/sessions.js';
 import { coachCoins, handleCoachCoins } from './coach-coins.js';
 import { addReady, checkReady } from './coach-live5.js';
+import { runDonchian, donchianHeld, handleDonchianStatus } from './donchian.js';
 import { appTokenOk, loadCoachLive, saveCoachLive, trackCoachLive, coachLiveResponse, handleWatch, checkWatches, journalResponse, maybeDailyReport } from './coach-extras.js';
 
 const DEFAULTS = {
@@ -615,6 +616,8 @@ async function handleFetch(request, env, ctx) {
         hasKv: !!env.SMC_KV,
       });
     }
+    // 唐奇安通道組合：現在持有、上一次調倉；?preview=1 用最新資料算一次目標（不下單）
+    if (url.pathname === '/dc/status') return json(await handleDonchianStatus(env, url, { executorCall }), { headers: { 'cache-control': 'no-store' } });
     if (url.pathname === '/auto-trade/status') {
       const hasExecutor = !!(env.EXECUTOR_URL && env.EXECUTOR_HMAC_SECRET);
       // 多週期上線後訊號變多，同時間可能有更多部位在開——加上帳戶餘額跟
@@ -733,6 +736,8 @@ async function run(env, { dry = false } = {}) {
   const trailingStops = dry ? { checked: 0, moved: 0 } : await updateTrailingStops(env).catch(() => ({ checked: 0, moved: 0, error: true }));
   // 4 小時突破策略跟 SMC 訊號互相獨立（不看 market.json），每根 4h K 棒收盤後判斷一次
   const breakout = await runBreakout(env, { dry }).catch((e) => ({ error: e.message }));
+  // 唐奇安通道組合（Demo 試跑）：每天 UTC 00:20 之後調倉一次（worker/donchian.js）
+  const donchian = dry ? null : await runDonchian(env, { executorCall, getPrices, postDiscord, isAutoTradeEnabled, executorMode, trackedPositions }).catch((e) => ({ error: e.message }));
   // 教練提醒（SMC_PUSH_MODE=coach）：自己抓 K 棒判斷，跟 market.json 無關
   const coach = await runCoach(env, { dry }).catch((e) => ({ error: e.message }));
   // 教練自動下單（App 開關，預設關）：對帳、煞車、下新單
@@ -752,9 +757,9 @@ async function run(env, { dry = false } = {}) {
   const market = await getFreshMarket(env);
   const ageMin = (Date.now() - new Date(market.generatedAt).getTime()) / 60000;
   // 教練模式：照樣更新掃描結果（App 用），但不推原本的進場區到價提醒
-  if (cfg(env, 'SMC_PUSH_MODE') === 'coach') return { mode: 'coach', coach, coachAuto, trendFill, trendLive, live5, watches, daily, ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout };
+  if (cfg(env, 'SMC_PUSH_MODE') === 'coach') return { mode: 'coach', coach, coachAuto, trendFill, trendLive, live5, watches, daily, ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout, donchian };
   if (ageMin > Number(cfg(env, 'MAX_MARKET_AGE_MIN'))) {
-    return { skipped: 'market-too-old', ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout };
+    return { skipped: 'market-too-old', ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout, donchian };
   }
 
   const minScore = Number(cfg(env, 'MIN_SCORE'));
@@ -763,7 +768,7 @@ async function run(env, { dry = false } = {}) {
   const pushIvs = String(cfg(env, 'SMC_PUSH_INTERVALS')).split(',').map((x) => x.trim()).filter(Boolean);
   const watch = market.rows.filter((r) => r.valid && r.status === 'waiting' && r.score >= minScore && (!only.length || only.includes(r.symbol))
     && (!pushIvs.length || pushIvs.includes(r.interval)));
-  if (!watch.length) return { checked: 0, alerts: 0, ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout };
+  if (!watch.length) return { checked: 0, alerts: 0, ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout, donchian };
 
   const prices = await getPrices(watch.map((r) => r.symbol));
   const hits = [];
@@ -2217,6 +2222,8 @@ async function breakoutOrder(env, sig, interval, barOpen) {
   if (!env.EXECUTOR_URL || !env.EXECUTOR_HMAC_SECRET) return { skipped: 'no-keys' };
   const tracked = await trackedPositions(env);
   if (tracked.some((p) => p.symbol === sig.symbol)) return { skipped: 'has-position' };
+  // 唐奇安組合持有的幣不開（單向持倉模式下會跟它的部位疊在一起）
+  if ((await donchianHeld(env)).has(sig.symbol)) return { skipped: 'donchian-holds' };
   // 突破單跟 EMA 交叉單共用張數上限（回測的組合模擬就是這樣算的）；RSI 回歸、HMA 翻轉是試跑，各自的張數另外算、不佔 6 個順勢策略的名額
   // （回測：HMA 翻轉擠進共用的 5 張，整體反而變差，因為名額被搶）
   const pool = poolOf(sig.strategy);
