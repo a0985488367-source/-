@@ -11,9 +11,9 @@ on:
         description: '往前查幾天（最多 90）'
         default: '30'
       mode:
-        description: 'report＝成交報告；st-whatif＝超級趨勢如果沒手動平倉會怎樣'
+        description: 'report＝成交報告；ledger＝對帳（每週餘額掉多少、各策略／資金費／對不上的、現在持倉）；st-whatif＝超級趨勢如果沒手動平倉會怎樣'
         type: choice
-        options: [report, st-whatif]
+        options: [report, ledger, st-whatif]
         default: report
       strategy:
         description: '明細只列某個策略（st 超級趨勢、coach 教練、bo 突破…空白＝全部）'
@@ -34,4 +34,10 @@ jobs:
           EXECUTOR_HMAC_SECRET: ${{ secrets.EXECUTOR_HMAC_SECRET }}
           DAYS: ${{ inputs.days }}
           ONLY_STRATEGY: ${{ inputs.strategy }}
-        run: if [ "${{ inputs.mode }}" = "st-whatif" ]; then node scripts/research/st-whatif.mjs; else node scripts/demo-report.mjs; fi
+          WORKER_URL: ${{ vars.WORKER_URL || 'https://smc-signals.crypto-radar-guardian-24x7.workers.dev' }}
+        run: |
+          case "${{ inputs.mode }}" in
+            st-whatif) node scripts/research/st-whatif.mjs ;;
+            ledger) node scripts/demo-ledger.mjs ;;
+            *) node scripts/demo-report.mjs ;;
+          esac
