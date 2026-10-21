@@ -58,6 +58,17 @@ async function executorGet(path) {
     log(`  分策略：${parts || '無'}`);
   }
 
+  // 大筆的手動／不明單、強平（BustTrade）明細，和已平倉損益資料最新到哪
+  const cp = hist.closedPnl || [];
+  if (cp.length) log(`Bybit 已平倉損益 ${cp.length} 筆，最新一筆 ${day(Math.max(...cp.map((p) => p.updatedTime || p.createdTime)))}`);
+  const { attributeClosedPnl } = await import('./lib/demo-ledger.mjs');
+  for (const p of attributeClosedPnl(hist.executions, cp).filter((p) => ['manual', 'unknown'].includes(p.strategy) && Math.abs(p.closedPnl) >= 50).sort((a, b) => a.time - b.time)) {
+    log(`大筆 ${NAME[p.strategy]} ${day(p.time)} ${p.symbol} ${p.side === 'Buy' ? '平空' : '平多'} 數量${p.qty} 進${p.avgEntryPrice} 出${p.avgExitPrice} ${p.leverage}x ${u(p.closedPnl)}`);
+  }
+  for (const e of hist.executions.filter((e) => e.execType && e.execType !== 'Trade' && e.execType !== 'Funding')) {
+    log(`特殊成交 ${e.execType} ${day(e.execTime)} ${e.symbol} ${e.side} 數量${e.execQty} 價${e.execPrice} 手續費${e.execFee}`);
+  }
+
   // 整段加總（分策略）
   const total = {};
   for (const r of rows) for (const [k, v] of Object.entries(r.byStrategy)) total[k] = (total[k] || 0) + v;
