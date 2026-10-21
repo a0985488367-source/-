@@ -6,7 +6,7 @@ import { config } from './config.js';
 import {
   getBalance, getInstrument, getPositions, setLeverage, setStopLoss,
   cancelAllOrders, placeReduceOnlyLimit, placeMarketEntry, bybitCall,
-  getExecutions, getClosedPnl, getJournal,
+  getExecutions, getClosedPnl, getJournal, getTransactionLog, getWalletCoins,
 } from './bybit.js';
 
 const json = (res, status, obj) => {
@@ -230,6 +230,25 @@ export async function handleJournal(req, res, query) {
   } catch (e) {
     return json(res, 200, { configured: false, error: e.message });
   }
+}
+
+/**
+ * GET /ledger?days=30 —— 帳戶資金流水＋各幣餘額（唯讀），給對帳用：查餘額變動是交易、資金費、強平、轉帳還是現貨造成的。
+ * 兩個來源分開查，一個失敗不影響另一個。
+ */
+export async function handleLedger(req, res, query) {
+  const days = Math.min(90, Math.max(1, Math.round(Number(query.days) || 30)));
+  const out = { days, logs: [], wallet: null, errors: {} };
+  try {
+    out.logs = (await getTransactionLog(days)).map((l) => ({
+      id: l.id, time: Number(l.transactionTime), type: l.type, category: l.category, symbol: l.symbol, side: l.side,
+      currency: l.currency, change: Number(l.change || 0), cashFlow: Number(l.cashFlow || 0), funding: Number(l.funding || 0),
+      fee: Number(l.fee || 0), cashBalance: Number(l.cashBalance || 0), qty: Number(l.qty || 0), tradePrice: Number(l.tradePrice || 0),
+      orderLinkId: l.orderLinkId || '',
+    }));
+  } catch (e) { out.errors.logs = e.message; }
+  try { out.wallet = await getWalletCoins(); } catch (e) { out.errors.wallet = e.message; }
+  return json(res, 200, out);
 }
 
 /** GET /balance */

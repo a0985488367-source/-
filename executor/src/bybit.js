@@ -144,6 +144,43 @@ async function pagedHistory(path, days, acct = null) {
 export const getExecutions = (days) => pagedHistory('/v5/execution/list', days);
 export const getClosedPnl = (days) => pagedHistory('/v5/position/closed-pnl', days);
 
+/**
+ * 帳戶資金流水（統一帳戶每一筆餘額變動：交易、資金費、強平、轉帳、現貨…，不分產品），唯讀。
+ * Bybit 一次最多查 7 天、一頁最多 50 筆，所以一週一週往前查、每週再翻頁。
+ */
+export async function getTransactionLog(days) {
+  const DAY = 86_400_000;
+  const now = Date.now();
+  const from = now - days * DAY;
+  const out = [];
+  for (let end = now; end > from; end -= 7 * DAY) {
+    const start = Math.max(end - 7 * DAY + 1, from);
+    let cursor;
+    for (let page = 0; page < 200; page++) {
+      const r = await bybitCall('GET', '/v5/account/transaction-log', {
+        accountType: 'UNIFIED', startTime: String(start), endTime: String(end), limit: '50', cursor,
+      }, { retries: 1 });
+      out.push(...(r?.list ?? []));
+      cursor = r?.nextPageCursor;
+      if (!cursor || !(r?.list ?? []).length) break;
+    }
+  }
+  return out;
+}
+
+/** 錢包裡每個幣的餘額（USDT 以外有沒有別的幣、有沒有借款） */
+export async function getWalletCoins() {
+  const w = await bybitCall('GET', '/v5/account/wallet-balance', { accountType: 'UNIFIED' }, { retries: 1 });
+  const a = w?.list?.[0] ?? {};
+  return {
+    totalWalletBalance: Number(a.totalWalletBalance ?? 0),
+    totalEquity: Number(a.totalEquity ?? 0),
+    coins: (a.coin ?? [])
+      .filter((c) => Number(c.walletBalance) !== 0 || Number(c.equity) !== 0 || Number(c.borrowAmount) > 0)
+      .map((c) => ({ coin: c.coin, walletBalance: Number(c.walletBalance), equity: Number(c.equity), usdValue: Number(c.usdValue), borrowAmount: Number(c.borrowAmount || 0) })),
+  };
+}
+
 /** 交易日誌帳戶（使用者手動下單的真實帳戶，唯讀金鑰）；沒設定就回 null */
 export function journalAccount() {
   if (!config.journalApiKey || !config.journalApiSecret) return null;

@@ -73,6 +73,12 @@ function stubBybitFetch(bybit) {
         if (cursor === 'p2') return j(0, 'OK', { list: [{ symbol: 'BTCUSDT', side: 'Sell', orderLinkId: '', execPrice: '110', execQty: '1', execFee: '0.05', execTime: '2', execType: 'Trade', closedSize: '1' }], nextPageCursor: '' });
         return j(0, 'OK', { list: [], nextPageCursor: '' });
       }
+      if (u.includes('/v5/account/transaction-log')) {
+        bybit.txCalls = (bybit.txCalls || 0) + 1;
+        if (bybit.txServed) return j(0, 'OK', { list: [], nextPageCursor: '' });
+        bybit.txServed = true;
+        return j(0, 'OK', { list: [{ transactionTime: '5', type: 'TRANSFER_OUT', currency: 'USDT', change: '-2000', cashBalance: '1500', category: '', symbol: '' }], nextPageCursor: '' });
+      }
       if (u.includes('/v5/position/closed-pnl')) return bybit.closedPnl ? j(0, 'OK', { list: bybit.closedPnl }) : j(10016, 'service unavailable', {});
       if (u.includes('/v5/order/realtime')) return j(0, 'OK', { list: bybit.openOrders ?? [] });
       if (u.includes('/v5/order/history')) return j(0, 'OK', { list: bybit.orderHistory ?? [] });
@@ -286,6 +292,31 @@ test('GET /history：一週一週往前查、每週翻頁；已平倉損益失�
       const q = new URL(w.url).searchParams;
       assert.ok(Number(q.get('endTime')) - Number(q.get('startTime')) < 7 * 86_400_000);
     }
+  } finally { await close(); }
+});
+
+test('GET /ledger：資金流水不分產品、一週一週查，附各幣餘額', async () => {
+  const bybit = { calls: [], wallet: { list: [{ totalWalletBalance: '1500', totalEquity: '1490', coin: [{ coin: 'USDT', walletBalance: '1500', equity: '1490', usdValue: '1490' }, { coin: 'BTC', walletBalance: '0', equity: '0' }] }] } };
+  stubBybitFetch(bybit);
+  const { baseUrl, close } = await startServer();
+  try {
+    const res = await call(baseUrl, 'GET', '/ledger?days=10');
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.body.logs.map((l) => [l.type, l.change, l.cashBalance]), [['TRANSFER_OUT', -2000, 1500]]);
+    assert.deepEqual(res.body.wallet.coins.map((c) => c.coin), ['USDT']);
+    const tx = bybit.calls.filter((c) => c.url.includes('/v5/account/transaction-log'));
+    assert.equal(tx.length, 2, '10 天 = 2 段');
+    assert.ok(tx.every((c) => new URL(c.url).searchParams.get('accountType') === 'UNIFIED' && !new URL(c.url).searchParams.get('category')));
+    assert.equal(tx.filter((c) => c.method !== 'GET').length, 0);
+  } finally { await close(); }
+});
+
+test('GET /ledger：沒有簽章 → 401', async () => {
+  stubBybitFetch({ calls: [] });
+  const { baseUrl, close } = await startServer();
+  try {
+    const res = await fetch(`${baseUrl}/ledger`);
+    assert.equal(res.status, 401);
   } finally { await close(); }
 });
 
