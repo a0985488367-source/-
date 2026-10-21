@@ -17,6 +17,7 @@
  */
 
 import { klines, opt } from './lib.mjs';
+import { DC_LOOKBACKS, createDonchianState, stepDonchian, donchianWeights, applyBand } from '../../src/strategies/donchian-ensemble.js';
 
 const args = process.argv.slice(2);
 const FEE = Number(opt(args, 'side-fee', '0.0006'));
@@ -152,47 +153,16 @@ function runWeights({ days, closes }, weightsAt, fee = FEE) {
 
 // ───────────────────────── A 唐奇安通道組合 ─────────────────────────
 
-function donchianEnsemble(D, { lbs = [5, 10, 20, 30, 60, 90, 150, 250, 360], volTarget = 0.25, cap = 2, band = 0, only = null, fee = FEE } = {}) {
+function donchianEnsemble(D, { lbs = DC_LOOKBACKS, volTarget = 0.25, cap = 2, band = 0, only = null, fee = FEE, mult = 1 } = {}) {
+  // 規則跟線上共用 src/strategies/donchian-ensemble.js
   const syms = only || Object.keys(D.closes);
-  const state = Object.fromEntries(syms.map((s) => [s, lbs.map(() => ({ on: false, stop: 0 }))]));
-  const hist = Object.fromEntries(syms.map((s) => [s, 0]));
+  const states = Object.fromEntries(syms.map((s) => [s, createDonchianState(lbs)]));
+  const closes = Object.fromEntries(syms.map((s) => [s, D.closes[s]]));
   return runWeights(D, (t, prev) => {
-    const elig = [];
-    for (const s of syms) {
-      const c = D.closes[s];
-      if (!Number.isFinite(c[t])) { state[s].forEach((x) => { x.on = false; }); hist[s] = 0; continue; }
-      hist[s]++;
-      lbs.forEach((L, j) => {
-        const x = state[s][j];
-        if (t < L) return;
-        let hi = -Infinity, lo = Infinity, hi2 = -Infinity, lo2 = Infinity;
-        for (let k = t - L; k < t; k++) { if (Number.isFinite(c[k])) { hi = Math.max(hi, c[k]); lo = Math.min(lo, c[k]); } }
-        for (let k = t - L + 1; k <= t; k++) { if (Number.isFinite(c[k])) { hi2 = Math.max(hi2, c[k]); lo2 = Math.min(lo2, c[k]); } }
-        const mid = (hi2 + lo2) / 2;
-        if (x.on) {
-          if (c[t] < x.stop) x.on = false;
-          else x.stop = Math.max(x.stop, mid);
-        } else if (Number.isFinite(hi) && c[t] > hi) { x.on = true; x.stop = mid; }
-      });
-      if (hist[s] >= 365) elig.push(s);
-    }
-    if (!elig.length) return {};
-    const w = {};
-    for (const s of elig) {
-      const sig = state[s].filter((x) => x.on).length / lbs.length;
-      if (!sig) continue;
-      const c = D.closes[s];
-      const lr = [];
-      for (let k = t - 89; k <= t; k++) { const g = Math.log(c[k] / c[k - 1]); if (Number.isFinite(g)) lr.push(g); }
-      if (lr.length < 60) continue;
-      const m = lr.reduce((a, b) => a + b, 0) / lr.length;
-      const sd = Math.sqrt(lr.reduce((a, b) => a + (b - m) ** 2, 0) / lr.length) * Math.sqrt(365);
-      let x = (sig * Math.min(volTarget / sd, cap)) / elig.length;
-      const p = prev[s] || 0;
-      if (band && p && x && Math.abs(x - p) < band * Math.max(Math.abs(x), Math.abs(p))) x = p;
-      w[s] = x;
-    }
-    return w;
+    for (const s of syms) stepDonchian(states[s], closes[s], t);
+    const { weights } = donchianWeights(states, closes, t, { volTarget, cap });
+    for (const s of Object.keys(weights)) weights[s] = applyBand(weights[s] * mult, prev[s] || 0, band);
+    return weights;
   }, fee);
 }
 
@@ -356,6 +326,10 @@ function utBot(c, { a = 1, atrLen = 10, longOnly = false, fee = FEE, hours = 1 }
       rows.push(row(`${g} 唐奇安組合`, a.rets, `年換手 ${(a.turnover / (a.rets.length / 365)).toFixed(0)} 倍`));
       const b = donchianEnsemble(D, { band: 0.3 });
       rows.push(row(`${g} 唐奇安組合（少換倉）`, b.rets, `年換手 ${(b.turnover / (b.rets.length / 365)).toFixed(0)} 倍`));
+      for (const mult of [2, 3]) {
+        const m = donchianEnsemble(D, { band: 0.3, mult });
+        rows.push(row(`${g} 唐奇安組合 ×${mult}（少換倉）`, m.rets, mult === 3 ? "線上 Demo 用這個" : ""));
+      }
     }
     rows.push(row('只做 BTC 唐奇安組合', donchianEnsemble(D1, { only: ['BTC'] }).rets));
     rows.push(row('只做 BTC（不扣手續費）', donchianEnsemble(D1, { only: ['BTC'], fee: 0 }).rets, '對照'));
