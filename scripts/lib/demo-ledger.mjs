@@ -22,7 +22,7 @@ export function attributeClosedPnl(executions, closedPnl) {
   }
   for (const xs of opens.values()) xs.sort((a, b) => a.execTime - b.execTime);
   return closedPnl.map((p) => {
-    const t = p.createdTime || p.updatedTime;
+    const t = p.updatedTime || p.createdTime; // updatedTime＝真正平倉的時間（createdTime 可能是停損單掛出去的時間）
     const xs = opens.get(p.symbol) || [];
     let hit = null;
     for (const e of xs) { if (e.execTime <= t) hit = e; else break; }

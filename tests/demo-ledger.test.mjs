@@ -12,9 +12,9 @@ test('已平倉損益依同幣最近一次開倉的 orderLinkId 分策略，找�
     ex({ symbol: 'BTCUSDT', execTime: 400, closedSize: 1 }),
   ];
   const closed = [
-    { symbol: 'BTCUSDT', createdTime: 200, closedPnl: 10 },
-    { symbol: 'BTCUSDT', createdTime: 400, closedPnl: -5 },
-    { symbol: 'ETHUSDT', createdTime: 400, closedPnl: -7 },
+    { symbol: 'BTCUSDT', updatedTime: 200, closedPnl: 10 },
+    { symbol: 'BTCUSDT', updatedTime: 400, closedPnl: -5 },
+    { symbol: 'ETHUSDT', updatedTime: 400, closedPnl: -7 },
   ];
   assert.deepEqual(attributeClosedPnl(executions, closed).map((p) => p.strategy), ['st', 'manual', 'unknown']);
 });
@@ -25,7 +25,7 @@ test('每段餘額變化拆成已平倉＋資金費＋對不上', () => {
     { symbol: 'ETHUSDT', execType: 'Funding', execTime: 160, execFee: 2, execQty: 0 },
     { symbol: 'ETHUSDT', execType: 'BustTrade', execTime: 170, execFee: 0, execQty: 1 },
   ];
-  const closedPnl = [{ symbol: 'ETHUSDT', createdTime: 180, closedPnl: -30 }];
+  const closedPnl = [{ symbol: 'ETHUSDT', createdTime: 90, updatedTime: 180, closedPnl: -30 }];
   const [r] = ledgerByWindow({ executions, closedPnl, snapshots: [{ time: 100, balance: 1000 }, { time: 200, balance: 900 }] });
   assert.equal(r.change, -100);
   assert.equal(r.closed, -30);
