@@ -446,3 +446,28 @@ test('POST /dc/adjust：orderLinkId 不是 dc: 開頭 → 400', async () => {
     assert.equal(res.status, 400);
   } finally { await close(); }
 });
+
+test('POST /dc/adjust：目標名目低於交易所最小名目價值（5U）→ 當 0，不下單', async () => {
+  setEmergencyStop(false);
+  const bybit = { calls: [], positions: [], instrument: { list: [{ lotSizeFilter: { qtyStep: '1', minOrderQty: '1', minNotionalValue: '5' }, priceFilter: { tickSize: '0.0001' }, leverageFilter: { maxLeverage: '25' } }] } };
+  stubBybitFetch(bybit);
+  const { baseUrl, close } = await startServer();
+  try {
+    const res = await call(baseUrl, 'POST', '/dc/adjust', { symbol: 'ADAUSDT', targetQty: 19.4, expectQty: 0, refPrice: 0.22, orderLinkId: 'dc:ADA:20261022' });
+    assert.equal(res.body.ok, true);
+    assert.equal(res.body.ordered, 0);
+    assert.equal(bybit.calls.filter((c) => c.url.includes('order/create')).length, 0);
+  } finally { await close(); }
+});
+
+test('POST /dc/adjust：數量四捨五入到最接近的單位', async () => {
+  setEmergencyStop(false);
+  const bybit = { calls: [], positions: [] };
+  bybit.onOrder = (b) => { bybit.positions = [{ symbol: b.symbol, side: 'Buy', size: b.qty, avgPrice: '100' }]; };
+  stubBybitFetch(bybit);
+  const { baseUrl, close } = await startServer();
+  try {
+    const res = await call(baseUrl, 'POST', '/dc/adjust', { symbol: 'ETHUSDT', targetQty: 0.17, expectQty: 0, refPrice: 100, orderLinkId: 'dc:ETH:20261022' });
+    assert.equal(res.body.ordered, 0.2);
+  } finally { await close(); }
+});

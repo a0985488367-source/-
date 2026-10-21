@@ -114,6 +114,7 @@ export async function getInstrument(symbol) {
     minQty: Number(it.lotSizeFilter?.minOrderQty ?? 0),
     tickSize: Number(it.priceFilter?.tickSize ?? 0.01),
     maxLeverage: Number(it.leverageFilter?.maxLeverage ?? 10),
+    minNotional: Number(it.lotSizeFilter?.minNotionalValue ?? 0), // 每筆最少名目價值（USDT 合約通常 5）
   };
 }
 

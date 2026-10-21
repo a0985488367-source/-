@@ -5,7 +5,7 @@
  *   - 只在 Demo 跑：Executor 接真錢帳戶時一律不動（skipped: 'live-account'）
  *   - 先核對交易所上這個幣的部位＝Worker 記的唐奇安數量（expectQty）；對不上代表有別的單（其他策略或手動）
  *     佔著這個幣，不碰（skipped: 'occupied'），避免單向持倉模式下跟別人的部位混在一起
- *   - 目標比現在多就市價買、少就 reduce-only 市價賣；目標低於最小下單量當 0（全平）
+ *   - 目標比現在多就市價買、少就 reduce-only 市價賣；目標四捨五入到交易所的數量單位，低於最小數量／最小名目價值（通常 5U）當 0（全平）
  *   - 還有部位就把整個部位的停損設成 stopLoss（災難停損；正常出場是 Worker 每天收盤判斷）
  */
 
@@ -16,7 +16,7 @@ import { logger } from './logger.js';
 
 const json = (res, status, obj) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
 const maxNotional = () => Number(process.env.DC_MAX_NOTIONAL || 3000);
-function roundDown(v, step) { const d = decimalsOf(step); return Number((Math.floor(v / step + 1e-9) * step).toFixed(d)); }
+function roundNear(v, step) { const d = decimalsOf(step); return Number((Math.round(v / step) * step).toFixed(d)); }
 function roundTick(v, tick) { const d = decimalsOf(tick); return Number((Math.round(v / tick) * tick).toFixed(d)); }
 
 export async function handleDcAdjust(req, res, b) {
@@ -30,22 +30,23 @@ export async function handleDcAdjust(req, res, b) {
   if (!(want >= 0) || !(expect >= 0) || !(ref > 0) || !(lev >= 1)) return json(res, 400, { error: '數量／參考價／槓桿不對' });
   if (sl && !(sl < ref)) return json(res, 400, { error: '停損要在現價下面' });
   try {
-    const { qtyStep, minQty, tickSize, maxLeverage } = await getInstrument(symbol);
+    const { qtyStep, minQty, tickSize, maxLeverage, minNotional } = await getInstrument(symbol);
     const before = await getPositions(symbol);
     if (before.some((p) => p.side === 'Sell')) return json(res, 200, { ok: false, skipped: 'occupied', reason: '這個幣有空單' });
     const cur = Number(before.find((p) => p.side === 'Buy')?.size || 0);
     if (Math.abs(cur - expect) > qtyStep / 2) return json(res, 200, { ok: false, skipped: 'occupied', current: cur, expect });
-    let target = roundDown(want, qtyStep);
-    if (target < minQty) target = 0;
+    // 四捨五入到最接近的單位（無條件捨去會讓小倉位系統性偏小）；低於最小數量或最小名目價值就當 0
+    let target = roundNear(want, qtyStep);
+    if (target < minQty || target * ref < minNotional) target = 0;
     if (target * ref > maxNotional()) return json(res, 400, { error: `名目價值 ${(target * ref).toFixed(0)}U 超過上限 ${maxNotional()}U` });
     const diff = Number((target - cur).toFixed(decimalsOf(qtyStep)));
     let order = null, side = null;
     try {
-      if (diff > 0 && diff >= minQty) {
+      if (diff > 0 && diff >= minQty && diff * ref >= minNotional) {
         side = 'Buy';
         await setLeverage(symbol, Math.max(1, Math.min(lev, maxLeverage)));
         order = await bybitCall('POST', '/v5/order/create', { category: 'linear', symbol, side, orderType: 'Market', qty: String(diff), timeInForce: 'IOC', orderLinkId: link });
-      } else if (diff < 0 && (target === 0 || -diff >= minQty)) {
+      } else if (diff < 0 && (target === 0 || (-diff >= minQty && -diff * ref >= minNotional))) {
         side = 'Sell';
         order = await bybitCall('POST', '/v5/order/create', { category: 'linear', symbol, side, orderType: 'Market', qty: String(-diff), timeInForce: 'IOC', reduceOnly: true, orderLinkId: link });
       }

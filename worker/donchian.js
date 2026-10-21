@@ -177,6 +177,8 @@ export function buildDonchianEmbed(report, prices, c) {
     else if (r.error) lines.push(`⚠️ ${base(r.sym)}：${String(r.error).slice(0, 80)}`);
     if (r.stopError) lines.push(`⚠️ ${base(r.sym)} 災難停損沒設成：${String(r.stopError).slice(0, 60)}`);
   }
+  const tooSmall = report.rows.filter((r) => r.weight > 0 && !(r.after > 0) && !r.skipped && !r.error).map((r) => base(r.sym));
+  if (tooSmall.length) lines.push(`➖ 目標低於交易所最小下單量，先不買：${tooSmall.join('、')}`);
   if (!lines.length) lines.push('今天不用調倉');
   const holds = report.rows.filter((r) => r.after > 0).map((r) => `${base(r.sym)} ${sig(r.signal)}`).join('、') || '無';
   return {
