@@ -95,6 +95,22 @@ function donchian(x, i, n) {
  */
 const BTC_TREND = new Map(); // 週期 → Map(K 棒時間 → 1 在 EMA200 之上／-1 之下)
 const TF_MIN = { '1h': 60, '2h': 120, '4h': 240, '6h': 360, '12h': 720, '1d': 1440 };
+/**
+ * --btc-filters=d50,d200,st4h（2026-10-22 使用者問「趨勢來了應該方向一致才對」）：組合回測裡每個訊號都看 BTC 大方向，
+ * 只留跟大方向同邊的，跟不過濾（none）並排比較。判斷用訊號那根收盤時「已經收盤」的 BTC K 棒，不偷看未來：
+ *   d50／d200  BTC 日線收盤在 EMA50／EMA200 之上＝多，之下＝空
+ *   st4h       BTC 4h 超級趨勢（ATR14、3 倍）方向
+ */
+const BTC_FILTERS = opt('btc-filters', '').split(',').map((x) => x.trim()).filter(Boolean);
+const BTC_REGIME = new Map(); // 模式 → { close: [收盤時間…], dir: [1／-1／0…] }
+function regimeAt(mode, t) {
+  const r = BTC_REGIME.get(mode);
+  if (!r) return 0;
+  let lo = 0, hi = r.close.length - 1, k = -1;
+  while (lo <= hi) { const m = (lo + hi) >> 1; if (r.close[m] <= t) { k = m; lo = m + 1; } else hi = m - 1; }
+  return k < 0 ? 0 : r.dir[k];
+}
+const alignedWithBtc = (mode) => (sg) => mode === 'none' || regimeAt(mode, sg.time + (TF_MIN[sg.interval] ?? 240) * 60_000) === (sg.dir === 'long' ? 1 : -1);
 const withFilter = (test) => (x, i) => {
   const s = donchian(x, i, 55);
   return s && test(x, i, s, s.dir === 'long' ? 1 : -1) ? s : null;
@@ -263,6 +279,80 @@ const COMBO = ONLY.filter((x) => x.includes(':')).map((x) => {
   if (!EXITS_ALL[exitName]) throw new Error(`沒有這個出場：${exitName}`);
   return { name, exitName, interval: iv || INTERVALS[0] };
 });
+
+/**
+ * BTC 大方向過濾比較（--btc-filters 配 --only 的「策略@週期:出場」）：每種過濾各跑一次，
+ * 印每個策略每筆平均 R（原週期／5M 前後半）跟帳戶模擬；共用張數的策略（不含 --separate 列的）另外合起來跑一次。
+ */
+function runBtcCompare(candlesBy, mid, netR) {
+  const DAY = 86_400_000;
+  const risk = Number(opt('btc-risk', '3'));
+  const sharedCap = Number(opt('btc-cap', '5'));
+  const SEPARATE = opt('separate', 'RSI_30_70,HMA_FLIP').split(',').filter(Boolean);
+  const sepCap = Number(opt('separate-cap', '3'));
+  const modes = ['none', ...BTC_FILTERS.filter((m) => BTC_REGIME.has(m))];
+  const NAME = { none: '不過濾（現在）', d50: 'BTC 日線 EMA50', d200: 'BTC 日線 EMA200', st4h: 'BTC 4h 超級趨勢' };
+  const build = (mode) => COMBO.map(({ name, exitName, interval }) => {
+    const fn = STRATEGIES[name] ?? ZOO[name];
+    STRATEGIES[name] = fn;
+    const { tpR, cfg } = EXITS_ALL[exitName];
+    const sigs = SYMBOLS.flatMap((sym) => {
+      const c = candlesBy.get(`${sym}|${interval}`);
+      return c ? buildSignals(sym, interval, c, name) : [];
+    }).filter(alignedWithBtc(mode));
+    const s = withTargets(sigs, tpR);
+    const label = `${name}@${interval}`;
+    const tag = (t) => ({ ...t, r: netR(t), beTime: null, label });
+    return { name, label, coarse: runSet(s, candlesBy, cfg).map(tag), fine: SUB ? runSet(s, candlesBy, { ...cfg, subBars: true }).map(tag) : [] };
+  });
+  const byMode = Object.fromEntries(modes.map((m) => [m, build(m)]));
+  const avg = (xs) => (xs.length ? xs.reduce((a, t) => a + t.r, 0) / xs.length : NaN);
+  const cellR = (xs) => (xs.length ? `${r2(avg(xs))}（${xs.length}）` : '-');
+  const groupsOf = (per) => [
+    ...per.map((p) => ({ name: p.label, ps: [p], cap: SEPARATE.includes(p.name) ? sepCap : sharedCap })),
+    { name: `共用 ${sharedCap} 張的 ${per.filter((p) => !SEPARATE.includes(p.name)).length} 個策略合起來`, ps: per.filter((p) => !SEPARATE.includes(p.name)), cap: sharedCap },
+  ];
+  const json = [];
+  const groupNames = groupsOf(byMode.none).map((g) => g.name);
+  for (let gi = 0; gi < groupNames.length; gi++) {
+    const rows = [];
+    for (const mode of modes) {
+      const g = groupsOf(byMode[mode])[gi];
+      const coarseAll0 = g.ps.flatMap((p) => p.coarse);
+      if (!coarseAll0.length) { rows.push([NAME[mode] ?? mode, ...Array(11).fill('-')]); continue; }
+      // 時間窗用「不過濾」那組決定，每種過濾比的是同一段時間
+      const base = groupsOf(byMode.none)[gi].ps.filter((p) => p.coarse.length);
+      const cStart = Math.max(...base.map((p) => Math.min(...p.coarse.map((t) => t.filledTime))));
+      const cEnd = Math.max(...base.flatMap((p) => p.coarse.map((t) => t.closedTime)));
+      const cMid = (cStart + cEnd) / 2;
+      const coarseAll = coarseAll0.filter((t) => t.filledTime >= cStart);
+      const fine = g.ps.flatMap((p) => p.fine);
+      const periods = [
+        coarseAll.filter((t) => t.filledTime < cMid), coarseAll.filter((t) => t.filledTime >= cMid),
+        fine.filter((t) => t.filledTime < mid), fine.filter((t) => t.filledTime >= mid), coarseAll,
+      ].map((xs) => [...xs].sort((a, b) => a.filledTime - b.filledTime));
+      const sims = periods.map((xs) => {
+        const x = simulatePortfolio(xs, { riskPct: risk, maxAtRisk: g.cap, oneBySymbol: true });
+        const days = xs.length ? (Math.max(...xs.map((t) => t.closedTime)) - xs[0].filledTime) / DAY : 0;
+        return { ...x, monthly: days > 0 ? (x.multiple ** (30 / days) - 1) * 100 : 0 };
+      });
+      const longs = coarseAll.filter((t) => t.dir === 'long').length;
+      rows.push([
+        NAME[mode] ?? mode,
+        ...periods.slice(0, 4).map(cellR),
+        ...sims.map((x) => `${x.multiple.toFixed(2)}x／${x.maxDdPct.toFixed(0)}%`),
+        `${sims[4].monthly.toFixed(1)}%`,
+        `${coarseAll.length ? Math.round((longs / coarseAll.length) * 100) : 0}%`,
+      ]);
+      json.push({ g: groupNames[gi], mode, r: periods.slice(0, 4).map((xs) => Math.round(avg(xs) * 1000) / 1000), n: periods.map((xs) => xs.length),
+        m: sims.map((x) => Math.round(x.multiple * 1000) / 1000), dd: sims.map((x) => Math.round(x.maxDdPct)), mo: Math.round(sims[4].monthly * 10) / 10 });
+    }
+    const cap = groupsOf(byMode.none)[gi].cap;
+    log(`\n■ ${groupNames[gi]}（每單 ${risk}%、最多同時 ${cap} 張；${SYMBOLS.length} 檔）`);
+    printTable(log, ['BTC 大方向', '每筆R 原週期前半', '原週期後半', '5M前半', '5M後半', '帳戶 原週期前半', '原週期後半', '5M前半', '5M後半', '原週期全段', '每月（全段）', '多單比例'], rows);
+  }
+  log('\nBTC_FILTER_JSON ' + JSON.stringify(json));
+}
 
 function runCombo(candlesBy, mid, netR) {
   const DAY = 86_400_000;
@@ -512,6 +602,23 @@ const withTargets = (sigs, tpR) => sigs.map((s) => ({
   const cell = (xs) => (xs.length ? `${r2(xs.reduce((a, t) => a + netR(t), 0) / xs.length)}（${xs.length}）` : '-');
   const weeks = SUB_DAYS / 7;
 
+  if (BTC_FILTERS.length) {
+    const DAYMS = 86_400_000;
+    const d1 = await klines('BTCUSDT', '1d', 3000).catch(() => null);
+    if (d1) for (const n of [50, 200]) {
+      const e = ema(d1.map((k) => k.close), n);
+      BTC_REGIME.set(`d${n}`, { close: d1.map((k) => k.time + DAYMS), dir: d1.map((k, j) => (e[j] == null ? 0 : k.close > e[j] ? 1 : -1)) });
+    }
+    // 4h 要蓋到最長週期的整段歷史（6h 抓 5000 根＝7500 根 4h），不然前面那段會因為沒有方向全部被濾掉
+    const need4h = Math.ceil((LIMIT * Math.max(...INTERVALS.map((iv) => TF_MIN[iv] ?? 240))) / 240) + 300;
+    const h4 = await klines('BTCUSDT', '4h', need4h).catch(() => null);
+    if (h4) {
+      const x = prepare(h4);
+      BTC_REGIME.set('st4h', { close: h4.map((k) => k.time + 4 * 3_600_000), dir: h4.map((_, j) => x.st[j] ?? 0) });
+    }
+    log(`  BTC 大方向資料：${[...BTC_REGIME.keys()].join('、') || '都抓不到'}`);
+  }
+  if (COMBO.length && BTC_FILTERS.length) { runBtcCompare(candlesBy, mid, netR); return; }
   if (COMBO.length) { runCombo(candlesBy, mid, netR); return; }
 
   const details = [];

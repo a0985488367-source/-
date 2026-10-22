@@ -5,12 +5,33 @@ export const opt = (args, n, d) => (args.find((a) => a.startsWith(`--${n}=`)) ||
 
 /** 抓最近 limit 根 K 線；交易所單次最多給 1000 根，超過就用 endTime 往前一段一段補 */
 export async function klines(symbol, interval, limit) {
+  if (process.env.RESEARCH_FAKE === '1') return fakeKlines(symbol, interval, limit);
   let err;
   for (const id of ['binance', 'okx', 'bybit']) {
     try { return await pagedKlines(PROVIDERS[id], symbol, interval, limit); }
     catch (e) { err = e; }
   }
   throw err;
+}
+
+/** RESEARCH_FAKE=1：隨機漫步假資料（同一個幣、同一個時間點每個週期都一樣），只用來在本機確認回測程式跑得動 */
+const FAKE_MS = { '1m': 60e3, '5m': 300e3, '15m': 900e3, '30m': 1800e3, '1h': 3600e3, '2h': 7200e3, '4h': 14400e3, '6h': 21600e3, '12h': 43200e3, '1d': 86400e3 };
+function fakeKlines(symbol, interval, limit) {
+  const step = FAKE_MS[interval] ?? 3600e3;
+  const end = Math.floor(Date.now() / step) * step;
+  const price = (t) => {
+    // 用時間算價格：每 5 分鐘一個隨機步，週期不同也對得上
+    const k = Math.floor(t / 300e3);
+    let p = 100 + ([...symbol].reduce((a, c) => a + c.charCodeAt(0), 0) % 50);
+    return p * Math.exp(0.15 * Math.sin(k / 997) + 0.08 * Math.sin(k / 211 + symbol.length) + 0.03 * Math.sin(k / 37));
+  };
+  const out = [];
+  for (let i = limit - 1; i >= 0; i--) {
+    const t = end - i * step;
+    const o = price(t), c = price(t + step - 1);
+    out.push({ time: t, open: o, high: Math.max(o, c) * 1.003, low: Math.min(o, c) * 0.997, close: c, volume: 1000 + (i % 7) * 100 });
+  }
+  return out;
 }
 
 export async function pagedKlines(provider, symbol, interval, limit) {
