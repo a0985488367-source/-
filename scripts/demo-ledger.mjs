@@ -93,6 +93,9 @@ async function executorGet(path) {
 
   // 現在持倉（含手動單）
   const tracked = new Map((status?.positions || []).map((p) => [`${p.symbol}:${p.dir === 'long' ? 'Buy' : 'Sell'}`, p]));
+  // 唐奇安組合的持倉記在 Worker 的 dc:state（不在上面的追蹤清單裡）
+  const dc = WORKER ? await fetch(`${WORKER}/dc/status`).then((r) => r.json()).catch(() => null) : null;
+  for (const s of Object.keys(dc?.state?.pos || {})) if (!tracked.has(`${s}:Buy`)) tracked.set(`${s}:Buy`, { strategy: 'dc' });
   let upl = 0;
   const posLines = (pos.positions || []).map((p) => {
     upl += p.unrealisedPnl;
