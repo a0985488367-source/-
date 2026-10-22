@@ -11,9 +11,9 @@ on:
         description: '往前查幾天（最多 90）'
         default: '30'
       mode:
-        description: 'report＝成交報告；ledger＝對帳（每週餘額掉多少、各策略／資金費／對不上的、現在持倉）；st-whatif＝超級趨勢如果沒手動平倉會怎樣'
+        description: 'report＝成交報告；ledger＝對帳（每週餘額掉多少、各策略／資金費／對不上的、現在持倉）；st-whatif＝超級趨勢如果沒手動平倉會怎樣；rcheck＝自動策略每筆換算 R（跟回測比）'
         type: choice
-        options: [report, ledger, st-whatif]
+        options: [report, ledger, st-whatif, rcheck]
         default: report
       strategy:
         description: '明細只列某個策略（st 超級趨勢、coach 教練、bo 突破…空白＝全部）'
@@ -39,5 +39,6 @@ jobs:
           case "${{ inputs.mode }}" in
             st-whatif) node scripts/research/st-whatif.mjs ;;
             ledger) node scripts/demo-ledger.mjs ;;
+            rcheck) node scripts/demo-rcheck.mjs ;;
             *) node scripts/demo-report.mjs ;;
           esac
