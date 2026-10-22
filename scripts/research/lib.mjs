@@ -127,6 +127,14 @@ export function runSignals(signals, candlesBy, cfg) {
     for (let j = start; j < candles.length; j++) {
       if (stepTrade(t, candles[j], stepCfg)) break;
     }
+    if (t.status === 'active' && cfg.markOpen && candles.length) {
+      // 資料結束還沒出場：用最後一根收盤價結算（markOpen），不然短期回測只會留下很快打停損的單、低估順勢策略
+      const last = candles[candles.length - 1];
+      const risk = Math.abs(t.entry - (t.initialStop ?? t.stop)) || 1;
+      const r = (t.dir === 'long' ? last.close - t.entry : t.entry - last.close) / risk;
+      t.r = (Number.isFinite(t.realizedR) ? t.realizedR : 0) + r * (t.remaining ?? 1);
+      t.status = 'expired'; t.exitReason = 'mtm'; t.exitPrice = last.close; t.closedTime = last.time;
+    }
     if (t.status === 'pending' || t.status === 'active') continue;
     closed.push(t);
   }

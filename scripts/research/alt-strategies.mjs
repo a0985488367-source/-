@@ -559,8 +559,11 @@ function feeOf(t) {
 }
 
 /** 跑一組訊號：沒成交（限價單等太久）的不算；同一個幣同時只抱一張 */
+// --mark-open：資料結束還沒出場的單用最後收盤價結算（看最近 30 天這種短區間時要開，不然會只剩打停損的單）
+const MARK_OPEN = opt('mark-open', '') !== '';
 function runSet(sigs, candlesBy, cfg, en) {
-  const c = en && en.name !== 'market' ? { ...cfg, entryWindowBars: en.bars, fillBarPath: true } : cfg;
+  const c0 = MARK_OPEN ? { ...cfg, markOpen: true } : cfg;
+  const c = en && en.name !== 'market' ? { ...c0, entryWindowBars: en.bars, fillBarPath: true } : c0;
   return onePerSymbol(runSignals(sigs, candlesBy, c).filter((t) => !(t.status === 'expired' && t.exitReason === 'timeout')));
 }
 
