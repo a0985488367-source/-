@@ -20,7 +20,7 @@
 - `tradingview/smc-plan.pine` 是 `src/smc/` 的 TradingView 逐行改寫版（使用者在 TV 上看 SMC 計畫用）：
   改了 `src/smc/` 的規則要同步改 Pine 版，`tests/tradingview-parity.test.mjs` 會比對兩邊結果。
 - `coach/` 是獨立的「SMC 教練」手機 App（掃描板＋圖表教練＋時段），直接 import `src/smc/coach.js`、`src/smc/sessions.js`，
-  規則只有一份；`dojo/` 是 SMC 道場學習 App。兩個都靠 GitHub Pages（pages.yml）上線。
+  規則只有一份；`dojo/` 是 SMC 道場學習 App（2026-10-24 整個重做成 2.0：`dojo/js/`，題目全部從 `dojo/mdata` 真實 K 線用 `src/smc/coach.js` 自動出題判題；闖關／排位／劇情三種玩法＋卡牌間隔重考、每日任務、連續天數、圖鑑褪色，存檔在 localStorage `smc-dojo-v2`；網址加 `?debug` 可用 `window.__answer(ok)` 自動作答測流程）。兩個都靠 GitHub Pages（pages.yml）上線。
   2026-10-15 起教練看的幣＝Bybit 成交額前 50（`COACH_TOP`）＋`SMC_SYMBOLS`＋App 搜尋後自己加的（`worker/coach-coins.js`、`/coach-coins`），
   App 掃描板、Discord 教練提醒、教練自動下單共用同一份名單。
   5/5（到位）劇本即時追蹤：App 用 Bybit WebSocket 現價即時更新卡片；Discord 推了「到位」後 Worker 每分鐘用 1 分 K 追蹤
