@@ -110,3 +110,19 @@ test('日 K 分頁往前補', async () => {
   assert.equal(xs.length, 1500);
   assert.ok(xs.every((k, i) => !i || k.time - xs[i - 1].time === DAY));
 });
+
+test('停用後：還記著的持倉全部平掉、清掉紀錄，平完就不再動', async () => {
+  const e = { ...env(), DONCHIAN_ENABLED: 'false' };
+  const d = deps({ getPrices: async () => ({ AAAUSDT: 10, BBBUSDT: 5 }) });
+  await e.SMC_KV.put(DC_STATE_KEY, JSON.stringify({ pos: { AAAUSDT: { qty: 2 }, BBBUSDT: { qty: 3 } } }));
+  d.ex.positions = { AAAUSDT: 2, BBBUSDT: 0 }; // BBB 已經被手動平掉
+  const r = await runDonchian(e, d, { now: Date.UTC(2026, 9, 25, 18, 0) });
+  assert.equal(r.closed, 2);
+  const adj = d.calls.filter((c) => c.path === '/dc/adjust');
+  assert.ok(adj.every((c) => c.body.targetQty === 0));
+  assert.deepEqual(JSON.parse(e.SMC_KV.store.get(DC_STATE_KEY)).pos, {});
+  assert.deepEqual([...(await donchianHeld(e))], []);
+  assert.match(d.msgs[0].embeds[0].title, /停用/);
+  const again = await runDonchian(e, d, { now: Date.UTC(2026, 9, 25, 18, 2) });
+  assert.deepEqual(again, { enabled: false });
+});

@@ -90,8 +90,45 @@ export async function computeDonchian(env, { now = Date.now(), fetchImpl = fetch
  * 排程進入點（run() 每 2 分鐘叫一次；一天只真的跑一次）。
  * deps：executorCall、getPrices、postDiscord、isAutoTradeEnabled、executorMode、trackedPositions
  */
+/**
+ * 停用後收尾（2026-10-25 使用者停掉唐奇安：上線三天虧約 12U）：KV 裡還記著的持倉全部 reduce-only 市價平掉、清掉紀錄，
+ * 這樣其他策略也可以開這些幣。沒平成的留著，下一次排程再試；Discord 只在有平掉東西、或每小時第一次失敗時推。
+ */
+async function closeAllDonchian(env, deps, { now }) {
+  const state = JSON.parse((await env.SMC_KV.get(DC_STATE_KEY)) ?? 'null');
+  const held = Object.entries(state?.pos ?? {}).filter(([, p]) => p.qty > 0);
+  if (!held.length) return { enabled: false };
+  if ((await deps.executorMode(env)) !== 'demo') return { enabled: false, skipped: 'not-demo' };
+  const prices = await deps.getPrices(held.map(([s]) => s)).catch(() => ({}));
+  const tag = `x${Math.floor(now / 60000) % 1e6}`;
+  const closed = [], left = [];
+  for (const [sym, p] of held) {
+    const price = Number(prices[sym]);
+    if (!(price > 0)) { left.push(`${sym}：沒有價格`); continue; }
+    const body = { symbol: sym, targetQty: 0, expectQty: p.qty, refPrice: price, orderLinkId: `dc:${sym.replace(/USDT$/, '')}:${tag}` };
+    const res = await deps.executorCall(env, 'POST', '/dc/adjust', { body }).catch((e) => ({ ok: false, error: e.message }));
+    if (res.ok || (res.skipped === 'occupied' && res.current === 0)) {
+      delete state.pos[sym];
+      closed.push({ sym, qty: res.ok ? res.before : 0 });
+    } else left.push(`${sym}：${res.skipped === 'occupied' ? `交易所數量 ${res.current} 跟紀錄 ${p.qty} 對不上，沒動` : String(res.error || res.skipped).slice(0, 60)}`);
+  }
+  state.stoppedAt = state.stoppedAt ?? now;
+  await env.SMC_KV.put(DC_STATE_KEY, JSON.stringify(state));
+  const failKey = `dc:closefail:${Math.floor(now / 3_600_000)}`;
+  const notifyFail = left.length && !closed.length && !(await env.SMC_KV.get(failKey));
+  if (notifyFail) await env.SMC_KV.put(failKey, '1', { expirationTtl: 7200 });
+  if (closed.length || notifyFail) {
+    const base = (s) => s.replace(/USDT$/, '');
+    const lines = [];
+    if (closed.length) lines.push(`平掉 ${closed.length} 檔：${closed.map((c) => base(c.sym)).join('、')}`);
+    if (left.length) lines.push(`⚠️ 還沒平成（之後再試）：${left.join('；')}`.slice(0, 1500));
+    await deps.postDiscord(env, { embeds: [{ title: '📐 唐奇安組合已停用', color: 0x777777, description: lines.join('\n') }] }).catch(() => {});
+  }
+  return { enabled: false, closed: closed.length, left: left.length };
+}
+
 export async function runDonchian(env, deps, { now = Date.now(), force = false } = {}) {
-  if (dcfg(env, 'DONCHIAN_ENABLED') !== 'true') return { enabled: false };
+  if (dcfg(env, 'DONCHIAN_ENABLED') !== 'true') return env.SMC_KV ? closeAllDonchian(env, deps, { now }) : { enabled: false };
   if (!env.SMC_KV) return { skipped: 'no-kv' };
   const today = ymd(now);
   const minOfDay = (now % DAY) / 60000;

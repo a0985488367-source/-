@@ -112,7 +112,8 @@ HMA_FLIP_MAX_OPEN = "3"
 #   每個幣用 90 天波動調到年化 25%（最多 2 倍）÷ 幣數，再 × DONCHIAN_MULT。回測（scripts/research/wild-zoo.mjs 的 A，
 #   2019 起、扣手續費、1 倍）年化 +13%、最大回撤 -11%、Sharpe 1.42，兩組幣前後半都賺。使用者選 3 倍。
 #   張數不佔其他策略名額；它持有的幣其他策略不開，別人佔著的幣它也不碰。Executor 接真錢時一律不下單
-DONCHIAN_ENABLED = "true"
+# 2026-10-25 使用者停掉唐奇安組合（上線三天虧約 12U，跌勢裡只做多）：關掉後 Worker 會把它還記著的持倉全部平掉、清掉紀錄
+DONCHIAN_ENABLED = "false"
 # BTC 大方向（2026-10-25 使用者決定「現在趨勢在哪就用哪一邊」，worker/regime.js）：BTC 4h 超級趨勢（ATR14、3 倍）翻多就只開多單、
 # 翻空就只開空單，套用 6 個順勢策略＋RSI 回歸＋HMA 翻轉（唐奇安不套用）；DIRECTION_FLIP_CLOSE＝跟大方向相反的單直接市價平掉。
 # 回測（alt-strategies --btc-filters=st4h，只過濾新單）：每筆平均 R 大多變好，但帳戶一組 11.2 倍→2.1 倍、另一組 3.4 倍→17.4 倍，不穩定；
