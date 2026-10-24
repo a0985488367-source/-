@@ -51,6 +51,8 @@ async function executorGet(path) {
 
   log(`## Demo 帳戶對帳（最近 ${DAYS} 天，台灣時間）`);
   log(`現在錢包餘額 ${bal.totalWalletBalance.toFixed(2)}U，可用 ${bal.totalAvailableBalance.toFixed(2)}U`);
+  const rg = status?.regime;
+  if (rg) log(`BTC 大方向（4h 超級趨勢）：${rg.dir === 1 ? '多' : rg.dir === -1 ? '空' : '不明'}｜依據 ${day(rg.bar)} 那根 4h｜上一根 ${rg.prevDir === 1 ? '多' : rg.prevDir === -1 ? '空' : '-'}`);
   for (const r of rows) {
     const parts = Object.entries(r.byStrategy).sort((a, b) => a[1] - b[1]).map(([k, v]) => `${NAME[k] || k} ${u(v)}`).join('、');
     const sp = Object.entries(r.special).map(([k, v]) => `${k}×${v}`).join('、');
