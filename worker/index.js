@@ -205,6 +205,7 @@ import { sessionOf } from '../src/smc/sessions.js';
 import { coachCoins, handleCoachCoins } from './coach-coins.js';
 import { addReady, checkReady } from './coach-live5.js';
 import { runDonchian, donchianHeld, handleDonchianStatus } from './donchian.js';
+import { btcRegime, regimeAllows, enforceRegime, REGIME_KEY } from './regime.js';
 import { appTokenOk, loadCoachLive, saveCoachLive, trackCoachLive, coachLiveResponse, handleWatch, checkWatches, journalResponse, maybeDailyReport } from './coach-extras.js';
 
 const DEFAULTS = {
@@ -689,6 +690,7 @@ async function handleFetch(request, env, ctx) {
           ? Number(((openRiskAmount(await trackedPositions(env)) / wallet.totalWalletBalance) * 100).toFixed(2))
           : null,
         wallet,
+        regime: env.SMC_KV ? JSON.parse((await env.SMC_KV.get(REGIME_KEY)) ?? 'null') : null,
         trackedOpenPositions: openPositions.length,
         openPositions,
         ...(detail ? { positions } : {}),
@@ -735,7 +737,10 @@ async function run(env, { dry = false } = {}) {
   const closedPositions = dry ? { checked: 0, closed: 0 } : await checkClosedPositions(env).catch(() => ({ checked: 0, closed: 0, error: true }));
   const trailingStops = dry ? { checked: 0, moved: 0 } : await updateTrailingStops(env).catch(() => ({ checked: 0, moved: 0, error: true }));
   // 4 小時突破策略跟 SMC 訊號互相獨立（不看 market.json），每根 4h K 棒收盤後判斷一次
-  const breakout = await runBreakout(env, { dry }).catch((e) => ({ error: e.message }));
+  // BTC 大方向（worker/regime.js，2026-10-25 使用者決定）：8 個策略只開跟 BTC 4h 超級趨勢同邊的新單，反方向的單直接平掉
+  const regime = await btcRegime(env, { fetchKlines: fetchKlinesAny }).catch(() => null);
+  const regimeEnforce = dry ? null : await enforceRegime(env, regime, { trackedPositions, executorCall, postDiscord }).catch((e) => ({ error: e.message }));
+  const breakout = await runBreakout(env, { dry, regime }).catch((e) => ({ error: e.message }));
   // 唐奇安通道組合（Demo 試跑）：每天 UTC 00:20 之後調倉一次（worker/donchian.js）
   const donchian = dry ? null : await runDonchian(env, { executorCall, getPrices, postDiscord, isAutoTradeEnabled, executorMode, trackedPositions }).catch((e) => ({ error: e.message }));
   // 教練提醒（SMC_PUSH_MODE=coach）：自己抓 K 棒判斷，跟 market.json 無關
@@ -757,9 +762,9 @@ async function run(env, { dry = false } = {}) {
   const market = await getFreshMarket(env);
   const ageMin = (Date.now() - new Date(market.generatedAt).getTime()) / 60000;
   // 教練模式：照樣更新掃描結果（App 用），但不推原本的進場區到價提醒
-  if (cfg(env, 'SMC_PUSH_MODE') === 'coach') return { mode: 'coach', coach, coachAuto, trendFill, trendLive, live5, watches, daily, ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout, donchian };
+  if (cfg(env, 'SMC_PUSH_MODE') === 'coach') return { mode: 'coach', coach, coachAuto, trendFill, trendLive, live5, watches, daily, ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout, donchian, regime: regime ? { dir: regime.dir, bar: new Date(regime.bar).toISOString(), stale: regime.stale } : null, regimeEnforce };
   if (ageMin > Number(cfg(env, 'MAX_MARKET_AGE_MIN'))) {
-    return { skipped: 'market-too-old', ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout, donchian };
+    return { skipped: 'market-too-old', ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout, donchian, regime: regime ? { dir: regime.dir, bar: new Date(regime.bar).toISOString(), stale: regime.stale } : null, regimeEnforce };
   }
 
   const minScore = Number(cfg(env, 'MIN_SCORE'));
@@ -768,7 +773,7 @@ async function run(env, { dry = false } = {}) {
   const pushIvs = String(cfg(env, 'SMC_PUSH_INTERVALS')).split(',').map((x) => x.trim()).filter(Boolean);
   const watch = market.rows.filter((r) => r.valid && r.status === 'waiting' && r.score >= minScore && (!only.length || only.includes(r.symbol))
     && (!pushIvs.length || pushIvs.includes(r.interval)));
-  if (!watch.length) return { checked: 0, alerts: 0, ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout, donchian };
+  if (!watch.length) return { checked: 0, alerts: 0, ageMinutes: Math.round(ageMin), closedPositions, trailingStops, breakout, donchian, regime: regime ? { dir: regime.dir, bar: new Date(regime.bar).toISOString(), stale: regime.stale } : null, regimeEnforce };
 
   const prices = await getPrices(watch.map((r) => r.symbol));
   const hits = [];
@@ -2078,7 +2083,7 @@ function emaCrossManagement(env, strategy) {
  * 同一根 K 棒只判斷一次（KV breakout:done:<週期>），同一個幣已經有部位（不管是
  * SMC 還是突破單）就不開，突破單最多同時 BREAKOUT_MAX_OPEN 張。
  */
-async function runBreakout(env, { dry = false } = {}) {
+async function runBreakout(env, { dry = false, regime = null } = {}) {
   const enabled = Object.keys(STRATEGY_CFG).filter((s) => cfg(env, `${STRATEGY_CFG[s]}_ENABLED`) === 'true');
   if (!enabled.length) return { enabled: false };
   if (!env.SMC_KV) return { skipped: 'no-kv' };
@@ -2089,7 +2094,7 @@ async function runBreakout(env, { dry = false } = {}) {
   const results = {};
   for (const interval of intervals) {
     const use = Object.fromEntries(enabled.map((s) => [s, strategyRunsOn(env, s, interval)]));
-    const r = await runBreakoutInterval(env, interval, { dry, use, budget });
+    const r = await runBreakoutInterval(env, interval, { dry, use, budget, regime });
     budget -= r.used ?? 0;
     delete r.used;
     results[interval] = r;
@@ -2102,7 +2107,7 @@ async function runBreakout(env, { dry = false } = {}) {
   };
 }
 
-async function runBreakoutInterval(env, interval, { dry, use, budget }) {
+async function runBreakoutInterval(env, interval, { dry, use, budget, regime = null }) {
   const ms = INTERVAL_MS[interval];
   if (!ms) return { error: `不支援的週期 ${interval}` };
 
@@ -2166,7 +2171,10 @@ async function runBreakoutInterval(env, interval, { dry, use, budget }) {
   });
   state.pending = [...state.pending.slice(batch.length), ...retry];
   state.gaveUp = [...(state.gaveUp ?? []), ...failed];
-  const signals = scanned.flatMap((x) => x?.found ?? []).filter((x) => dirs.includes(x.dir));
+  const found = scanned.flatMap((x) => x?.found ?? []).filter((x) => dirs.includes(x.dir));
+  // BTC 大方向：跟 BTC 4h 超級趨勢反方向的訊號不開（worker/regime.js）
+  const signals = found.filter((x) => regimeAllows(env, regime, x));
+  const blockedByRegime = found.filter((x) => !signals.includes(x)).map((x) => `${x.symbol} ${x.strategy} ${x.dir}`);
   // 先記下進度再下單：中途出錯也不會在下一次 tick 重複進場（Executor 另有 signal_id 冪等）
   if (!dry) {
     if (state.pending.length) await env.SMC_KV.put(pendingKey, JSON.stringify(state), { expirationTtl: 86400 });
@@ -2213,6 +2221,7 @@ async function runBreakoutInterval(env, interval, { dry, use, budget }) {
     remaining: state.pending.length,
     ...(state.gaveUp.length ? { gaveUp: state.gaveUp.slice(0, 20) } : {}),
     signals: signals.length,
+    ...(blockedByRegime.length ? { blockedByRegime } : {}),
     orders,
     used: batch.length,
   };
