@@ -110,7 +110,35 @@ function regimeAt(mode, t) {
   while (lo <= hi) { const m = (lo + hi) >> 1; if (r.close[m] <= t) { k = m; lo = m + 1; } else hi = m - 1; }
   return k < 0 ? 0 : r.dir[k];
 }
-const alignedWithBtc = (mode) => (sg) => mode === 'none' || regimeAt(mode, sg.time + (TF_MIN[sg.interval] ?? 240) * 60_000) === (sg.dir === 'long' ? 1 : -1);
+const regimeMode = (mode) => mode.replace(/-close$/, '');
+const alignedWithBtc = (mode) => (sg) => mode === 'none' || regimeAt(regimeMode(mode), sg.time + (TF_MIN[sg.interval] ?? 240) * 60_000) === (sg.dir === 'long' ? 1 : -1);
+
+/**
+ * 「<模式>-close」（例如 st4h-close，2026-10-25 線上 DIRECTION_FLIP_CLOSE）：BTC 大方向在這張單出場前翻成反方向，
+ * 就在翻轉那根 BTC K 棒收盤時用這個幣同一時間的 4h 收盤價平掉（R 用原本的進場價、停損距離算）。
+ */
+function flipClose(trades, mode, candlesBy) {
+  const r = BTC_REGIME.get(regimeMode(mode));
+  if (!r) return trades;
+  const priceAt = new Map();
+  const closeOf = (sym, t) => {
+    if (!priceAt.has(sym)) priceAt.set(sym, new Map((candlesBy.get(`${sym}|4h`) ?? []).map((k) => [k.time + 4 * 3_600_000, k.close])));
+    return priceAt.get(sym).get(t);
+  };
+  return trades.map((t) => {
+    const d = t.dir === 'long' ? 1 : -1;
+    let lo = 0, hi = r.close.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (r.close[m] <= t.filledTime) lo = m + 1; else hi = m; }
+    for (let k = lo; k < r.close.length && r.close[k] < t.closedTime; k++) {
+      if (r.dir[k] !== -d) continue;
+      const px = closeOf(t.symbol, r.close[k]);
+      if (!(px > 0)) continue;
+      const risk = t.entry * t.stopPct;
+      return { ...t, r: ((px - t.entry) * d) / risk, closedTime: r.close[k], exitReason: 'regime-flip', status: 'regime' };
+    }
+    return t;
+  });
+}
 const withFilter = (test) => (x, i) => {
   const s = donchian(x, i, 55);
   return s && test(x, i, s, s.dir === 'long' ? 1 : -1) ? s : null;
@@ -290,8 +318,8 @@ function runBtcCompare(candlesBy, mid, netR) {
   const sharedCap = Number(opt('btc-cap', '5'));
   const SEPARATE = opt('separate', 'RSI_30_70,HMA_FLIP').split(',').filter(Boolean);
   const sepCap = Number(opt('separate-cap', '3'));
-  const modes = ['none', ...BTC_FILTERS.filter((m) => BTC_REGIME.has(m))];
-  const NAME = { none: '不過濾（現在）', d50: 'BTC 日線 EMA50', d200: 'BTC 日線 EMA200', st4h: 'BTC 4h 超級趨勢' };
+  const modes = ['none', ...BTC_FILTERS.filter((m) => BTC_REGIME.has(regimeMode(m)))];
+  const NAME = { none: '不過濾', d50: 'BTC 日線 EMA50', d200: 'BTC 日線 EMA200', st4h: 'BTC 4h 超級趨勢（只管新單）', 'st4h-close': 'BTC 4h 超級趨勢＋翻轉平倉（線上）', 'd50-close': 'BTC 日線 EMA50＋翻轉平倉' };
   const build = (mode) => COMBO.map(({ name, exitName, interval }) => {
     const fn = STRATEGIES[name] ?? ZOO[name];
     STRATEGIES[name] = fn;
@@ -303,7 +331,8 @@ function runBtcCompare(candlesBy, mid, netR) {
     const s = withTargets(sigs, tpR);
     const label = `${name}@${interval}`;
     const tag = (t) => ({ ...t, r: netR(t), beTime: null, label });
-    return { name, label, coarse: runSet(s, candlesBy, cfg).map(tag), fine: SUB ? runSet(s, candlesBy, { ...cfg, subBars: true }).map(tag) : [] };
+    const post = (xs) => (mode.endsWith('-close') ? flipClose(xs, mode, candlesBy) : xs);
+    return { name, label, coarse: post(runSet(s, candlesBy, cfg)).map(tag), fine: SUB ? post(runSet(s, candlesBy, { ...cfg, subBars: true })).map(tag) : [] };
   });
   const byMode = Object.fromEntries(modes.map((m) => [m, build(m)]));
   const avg = (xs) => (xs.length ? xs.reduce((a, t) => a + t.r, 0) / xs.length : NaN);
