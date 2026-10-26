@@ -527,7 +527,7 @@ async function handleFetch(request, env, ctx) {
       return json(r.body, { status: r.status, headers: { 'cache-control': 'no-store' } });
     }
     // 每日戰報預覽（不推播）：/daily-report
-    if (url.pathname === '/digest') return json(await runDigest(env, { executorCall, postDiscord, force: true, dry: url.searchParams.get('send') !== '1' }), { headers: { 'cache-control': 'no-store' } });
+    if (url.pathname === '/digest') return json(await runDigest(env, { executorCall, postDiscord, force: true, dry: true }), { headers: { 'cache-control': 'no-store' } });
     if (url.pathname === '/daily-report') return json(await maybeDailyReport(env, { executorCall, postDiscord, dry: true, force: true }), { headers: { 'cache-control': 'no-store' } });
     if (url.pathname === '/watch' || url.pathname === '/journal' || url.pathname === '/coach-auto') {
       if (!appTokenOk(request, env)) return json({ error: '密碼不對：用你設定過的 AI_TOKEN、AUTO_TRADE_TOKEN 或 APP_TOKEN 其中一個' }, { status: 401 });

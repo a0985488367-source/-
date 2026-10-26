@@ -119,3 +119,8 @@ jobs:
         run: |
           if [ -n "$WEBHOOK" ]; then echo "::add-mask::$WEBHOOK"; C=$(curl -s -o /dev/null -w '%{http_code}' "$WEBHOOK"); echo "::notice title=webhook 檢查::GitHub 上的 webhook GET 回 $C（200＝webhook 還在）"; fi
           curl -sS -m 30 "$WORKER/discord-log" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);const tpe=(ms)=>new Date(ms+8*3600e3).toISOString().slice(5,19).replace("T"," ");const L=[`Worker 有 webhook：${j.webhook}`,...(j.log||[]).slice(0,40).map(x=>`${tpe(x.at)} ${x.result}｜${x.text}`)];const enc=(x)=>x.replace(/%/g,"%25").replace(/\n/g,"%0A");for(let k=0;k<L.length;k+=25)console.log(`::notice title=Discord 紀錄 ${k/25+1}::${enc(L.slice(k,k+25).join("\n"))}`)})'
+      - name: 兩天報告預覽（安靜模式）
+        env:
+          WORKER: ${{ vars.WORKER_URL || 'https://smc-signals.crypto-radar-guardian-24x7.workers.dev' }}
+        run: |
+          curl -sS -m 60 "$WORKER/digest" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let j;try{j=JSON.parse(s)}catch{console.log(`::notice title=兩天報告預覽::讀不到：${s.slice(0,200)}`);return}const r=j.report||{};const L=[`權益 ${j.eqNow}`,`緊急：${(j.alerts||[]).join("；")||"沒有"}`,r.title||"",r.description||"",j.error||""];const enc=(x)=>x.replace(/%/g,"%25").replace(/\n/g,"%0A");console.log(`::notice title=兩天報告預覽::${enc(L.join("\n"))}`)})'
