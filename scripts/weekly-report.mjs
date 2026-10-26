@@ -31,11 +31,15 @@ const { embed, snapshot } = buildWeeklyReport({ status, closed: journal.closed |
 console.log(JSON.stringify(embed, null, 2));
 if (DRY) process.exit(0);
 
-const res = await fetch(process.env.DISCORD_WEBHOOK_URL, {
-  method: 'POST',
-  headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({ embeds: [embed] }),
-});
-if (!res.ok) throw new Error(`Discord 推播失敗：HTTP ${res.status} ${await res.text()}`);
+// 安靜模式（2026-10-26 使用者嫌吵）：不推週報，只留 Worker 的兩天報告；週報快照照常存
+if (process.env.DISCORD_QUIET === 'true') console.log('安靜模式：不推 Discord');
+else {
+  const res = await fetch(process.env.DISCORD_WEBHOOK_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ embeds: [embed] }),
+  });
+  if (!res.ok) throw new Error(`Discord 推播失敗：HTTP ${res.status} ${await res.text()}`);
+}
 
 if (snapshot) await writeFile(HISTORY, JSON.stringify([...history, snapshot], null, 2) + '\n');

@@ -432,6 +432,8 @@ function buildMarketEmbed(sig, cfg, stats) {
 
 /** 模擬單狀態變化 → Discord 訊息 */
 async function postDiscord(payload) {
+  // 2026-10-26 使用者嫌吵：安靜模式只留 Worker 的兩天報告和緊急警報，這裡的推播全部不送（帳本照常更新）
+  if (process.env.DISCORD_QUIET === 'true') { log('  安靜模式：不推 Discord'); return true; }
   assertWebhookLooksValid();
   for (let attempt = 0; attempt < 3; attempt++) {
     const res = await fetch(WEBHOOK, {

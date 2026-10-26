@@ -102,6 +102,7 @@ export async function getBalance() {
   return {
     totalAvailableBalance: Number(w?.list?.[0]?.totalAvailableBalance ?? 0),
     totalWalletBalance: Number(w?.list?.[0]?.totalWalletBalance ?? 0),
+    totalEquity: Number(w?.list?.[0]?.totalEquity ?? 0),
   };
 }
 

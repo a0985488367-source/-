@@ -70,7 +70,7 @@ export async function enforceRegime(env, regime, deps) {
       const key = `regime:close:${p.symbol}:${regime.bar}`;
       if (env.SMC_KV && await env.SMC_KV.get(key)) continue;
       if (env.SMC_KV) await env.SMC_KV.put(key, '1', { expirationTtl: 86400 });
-      const r = await deps.executorCall(env, 'POST', '/close', { body: { symbol: p.symbol } }).catch((e) => ({ error: e.message }));
+      const r = await deps.executorCall(env, 'POST', '/close', { body: { symbol: p.symbol, quiet: true } }).catch((e) => ({ error: e.message }));
       (r?.error ? failed : closed).push({ symbol: p.symbol, dir: p.dir, strategy: p.strategy, error: r?.error });
     }
   }
@@ -81,7 +81,7 @@ export async function enforceRegime(env, regime, deps) {
     if (first) lines.push(`開始照 BTC 4h 超級趨勢的方向開單，現在是${dirLabel(regime.dir)}：${names.length} 個策略只開${dirLabel(regime.dir)}單`);
     if (closed.length) lines.push(`平掉反方向的單：${closed.map((c) => `${base(c.symbol)} ${c.dir === 'long' ? '多' : '空'}`).join('、')}`);
     if (failed.length) lines.push(`⚠️ 沒平成（下一根 4h 再試）：${failed.map((c) => `${base(c.symbol)}（${String(c.error).slice(0, 60)}）`).join('、')}`);
-    await deps.postDiscord(env, { embeds: [{ title: `🧭 大方向：${dirLabel(regime.dir)}`, color: regime.dir === 1 ? 0x0a7a3b : 0xc0392b, description: lines.join('\n').slice(0, 3800) }] }).catch(() => {});
+    await deps.postDiscord(env, { urgent: failed.length > 0, embeds: [{ title: `🧭 大方向：${dirLabel(regime.dir)}`, color: regime.dir === 1 ? 0x0a7a3b : 0xc0392b, description: lines.join('\n').slice(0, 3800) }] }).catch(() => {});
   }
   return { dir: regime.dir, flipped, closed: closed.length, failed: failed.length };
 }

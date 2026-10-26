@@ -204,6 +204,7 @@ import { runCoachAuto, handleCoachAuto, autoCandidate, placeTrendLive, manageTre
 import { sessionOf } from '../src/smc/sessions.js';
 import { coachCoins, handleCoachCoins } from './coach-coins.js';
 import { addReady, checkReady } from './coach-live5.js';
+import { gate as notifyGate, runDigest } from './notify.js';
 import { runDonchian, donchianHeld, handleDonchianStatus } from './donchian.js';
 import { btcRegime, regimeAllows, enforceRegime, REGIME_KEY } from './regime.js';
 import { appTokenOk, loadCoachLive, saveCoachLive, trackCoachLive, coachLiveResponse, handleWatch, checkWatches, journalResponse, maybeDailyReport } from './coach-extras.js';
@@ -526,6 +527,7 @@ async function handleFetch(request, env, ctx) {
       return json(r.body, { status: r.status, headers: { 'cache-control': 'no-store' } });
     }
     // 每日戰報預覽（不推播）：/daily-report
+    if (url.pathname === '/digest') return json(await runDigest(env, { executorCall, postDiscord, force: true, dry: url.searchParams.get('send') !== '1' }), { headers: { 'cache-control': 'no-store' } });
     if (url.pathname === '/daily-report') return json(await maybeDailyReport(env, { executorCall, postDiscord, dry: true, force: true }), { headers: { 'cache-control': 'no-store' } });
     if (url.pathname === '/watch' || url.pathname === '/journal' || url.pathname === '/coach-auto') {
       if (!appTokenOk(request, env)) return json({ error: '密碼不對：用你設定過的 AI_TOKEN、AUTO_TRADE_TOKEN 或 APP_TOKEN 其中一個' }, { status: 401 });
@@ -756,8 +758,10 @@ async function run(env, { dry = false } = {}) {
   const live5 = dry ? null : await checkReady(env, { fetchKlines: fetchKlinesAny, postDiscord }).catch((e) => ({ error: e.message }));
   // App 的「盯這單」：每次排程都看一次
   const watches = await checkWatches(env, { fetchKlines: fetchKlinesAny, postDiscord, intervalToMs, dry }).catch((e) => ({ error: e.message }));
-  // 每日戰報：台灣時間每天早上 8 點（UTC 00:00～00:30 之間第一次排程）推一次
+  // 每日戰報：台灣時間每天早上 8 點（UTC 00:00～00:30 之間第一次排程）推一次（安靜模式下不推）
   const daily = await maybeDailyReport(env, { executorCall, postDiscord, dry }).catch((e) => ({ error: e.message }));
+  // 兩天報告＋緊急警報（worker/notify.js）：權益快照每小時一筆、緊急檢查 10 分鐘一次
+  if (!dry) await runDigest(env, { executorCall, postDiscord }).catch(() => {});
 
   const market = await getFreshMarket(env);
   const ageMin = (Date.now() - new Date(market.generatedAt).getTime()) / 60000;
@@ -1329,6 +1333,12 @@ function autoTradeText(t) {
 }
 
 async function postDiscord(env, payload, tries = 0) {
+  // 安靜模式（worker/notify.js）：只放行兩天報告和緊急警報；重試時已經過濾過
+  if (tries === 0) {
+    const g = notifyGate(env, payload);
+    if (!g.send) { discordLog(env, payload, 'muted'); return; }
+    payload = g.payload;
+  }
   if (!env.DISCORD_WEBHOOK_URL) { discordLog(env, payload, 'no-webhook'); throw new Error('缺少 DISCORD_WEBHOOK_URL'); }
   let res;
   try {
@@ -2200,7 +2210,7 @@ async function runBreakoutInterval(env, interval, { dry, use, budget, regime = n
     if (dry) { orders.push({ symbol: sig.symbol, strategy: sig.strategy, dir: sig.dir, dry: true }); continue; }
     const res = await breakoutOrder(env, sig, interval, barOpen);
     orders.push({ symbol: sig.symbol, strategy: sig.strategy, dir: sig.dir, ...res });
-    if (res.orderId || res.error) await postDiscord(env, buildBreakoutEmbed(sig, res, interval, res.account ?? await executorMode(env))).catch(() => {});
+    if (res.orderId || res.error) await postDiscord(env, { ...buildBreakoutEmbed(sig, res, interval, res.account ?? await executorMode(env)), urgent: !res.orderId }).catch(() => {});
     // 超級趨勢另外在使用者的真錢帳戶下一張（跟 Demo 那張無關，各下各的）
     if (sig.strategy === 'st') {
       try {

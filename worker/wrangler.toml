@@ -132,6 +132,14 @@ PROP_MAX_LEVERAGE = "5"
 # 假突破反手（src/strategies/fakeout.js）：組合模擬最近 75 天虧，2026-09-28 關掉
 FAKEOUT_ENABLED = "false"
 # 1h 只給 RSI 回歸用；放最後，4h／6h 同時收盤時先掃順勢策略
+# 2026-10-26 使用者嫌 Discord 太吵：安靜模式只推「兩天報告（Demo，台灣每隔一天早上 9 點）」和緊急警報
+# （下單失敗、離強平價不到 3%、兩天內權益掉超過 10%），其他通知全部不推（worker/notify.js）。要恢復改成 "all"
+DISCORD_MODE = "quiet"
+REPORT_EVERY_DAYS = "2"
+REPORT_HOUR_TPE = "9"
+REPORT_ANCHOR = "2026-10-27"
+DRAWDOWN_ALERT_PCT = "10"
+NEAR_LIQ_PCT = "3"
 BREAKOUT_INTERVALS = "4h,6h,1h"
 # 上面所有策略加起來同時最多 5 張，不限方向（使用者選的；3 張回撤小一半但慢一些）
 BREAKOUT_MAX_OPEN = "5"
