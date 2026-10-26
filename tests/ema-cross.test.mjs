@@ -167,6 +167,26 @@ test('Worker EMA 交叉：市價進場、停損 2 ATR、不掛止盈、每單 3%
   assert.ok(discord.some((d) => d.embeds?.[0]?.title.includes('EMA 交叉做多')));
 });
 
+test('Discord 安靜模式：照常下單但不推開倉通知；下單失敗才推（緊急）', async () => {
+  const discord = [];
+  const executor = { calls: [] };
+  stub({ discord, executor });
+  const env = makeEnv({}, { DISCORD_MODE: 'quiet' });
+  const out = await runWorker(env);
+  assert.equal(out.breakout.orders[0]?.orderId, 'ema-order', JSON.stringify(out.breakout));
+  assert.equal(discord.length, 0, '開倉通知不推');
+
+  const discord2 = [];
+  const executor2 = { calls: [] };
+  stub({ discord: discord2, executor: executor2 });
+  const orig = globalThis.fetch;
+  globalThis.fetch = async (url, init) => (String(url).endsWith('/trade') ? new Response(JSON.stringify({ error: '餘額不足' }), { status: 200 }) : orig(url, init));
+  await runWorker(makeEnv({}, { DISCORD_MODE: 'quiet' }));
+  assert.equal(discord2.length, 1, '下單失敗要推');
+  assert.match(JSON.stringify(discord2[0]), /下單失敗/);
+  assert.equal(discord2[0].urgent, undefined, '內部旗標不送給 Discord');
+});
+
 test('ALT_SIGNAL_ONLY：自動下單關著也推訊號到 Discord，附考試帳戶建議數量，完全不碰 Executor', async () => {
   const discord = [];
   const executor = { calls: [] };
