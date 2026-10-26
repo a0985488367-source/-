@@ -18,7 +18,7 @@ export const NOTIFY_DEFAULTS = {
   NEAR_LIQ_PCT: '3',
 };
 const ncfg = (env, k) => env[k] ?? NOTIFY_DEFAULTS[k];
-const EQ_KEY = 'digest:eq', SENT_KEY = 'digest:sent:', ALERT_KEY = 'digest:alert:', CHECK_KEY = 'digest:check';
+const EQ_KEY = 'digest:eq', SENT_KEY = 'digest:sent:', ALERT_KEY = 'digest:alert:';
 const HOUR = 3_600_000, DAY = 24 * HOUR;
 const tpeDate = (ms) => new Date(ms + 8 * HOUR).toISOString().slice(0, 10);
 const u = (v) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(1)}U`;
@@ -104,9 +104,8 @@ export async function runDigest(env, { executorCall, postDiscord, now = Date.now
   if (!env.EXECUTOR_URL || !env.EXECUTOR_HMAC_SECRET) return { skipped: 'no-executor' };
   if (!quietMode(env) && !force) return { skipped: 'not-quiet' }; // 一般模式本來就每筆都推，不另外做報告
   const due = force || reportDue(env, now);
-  const last = Number((env.SMC_KV && (await env.SMC_KV.get(CHECK_KEY))) || 0);
-  if (!due && now - last < 10 * 60_000) return { skipped: 'recent' };
-  if (env.SMC_KV && !dry) await env.SMC_KV.put(CHECK_KEY, String(now));
+  // 每 10 分鐘檢查一次（看分鐘數，不寫 KV，省 KV 寫入額度）；排程每 2 分鐘一次，所以每個 10 分鐘區間只會中一次
+  if (!due && new Date(now).getUTCMinutes() % 10 >= 2) return { skipped: 'not-this-minute' };
   const [bal, pos] = await Promise.all([
     executorCall(env, 'GET', '/balance').catch((e) => ({ error: e.message })),
     executorCall(env, 'GET', '/position').catch((e) => ({ error: e.message })),
