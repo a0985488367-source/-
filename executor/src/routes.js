@@ -163,7 +163,8 @@ export async function handleClose(req, res, body) {
       });
       closed.push({ side: pos.side, qty: pos.size, orderId: order?.orderId });
     }
-    await alertDiscord(`⚠️ **手動平倉**：${body.symbol} 已用市價全部平掉（${closed.map((c) => `${c.side} ${c.qty}`).join('、')}）`);
+    // quiet：Worker 的大方向翻轉平倉自己會整理通知，不用每個幣再推一則
+    if (!body.quiet) await alertDiscord(`⚠️ **手動平倉**：${body.symbol} 已用市價全部平掉（${closed.map((c) => `${c.side} ${c.qty}`).join('、')}）`);
     return json(res, 200, { ok: true, closed });
   } catch (e) {
     return json(res, 200, { error: e.message });
@@ -178,6 +179,7 @@ export async function handlePosition(req, res, query) {
       positions: positions.map((p) => ({
         symbol: p.symbol, side: p.side, size: Number(p.size),
         avgPrice: Number(p.avgPrice), unrealisedPnl: Number(p.unrealisedPnl ?? 0),
+        liqPrice: Number(p.liqPrice) || null, markPrice: Number(p.markPrice) || null, leverage: Number(p.leverage) || null,
       })),
     });
   } catch (e) {

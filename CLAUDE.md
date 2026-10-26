@@ -10,6 +10,7 @@
   2026-10-20 起 Demo 另外試跑「6h HMA 翻轉」（`HMA_FLIP_*`，signal_id `hma:`，Hull MA(55) 轉向＋EMA200 同側，停損 2 ATR、1.5R 後追蹤 1.5R、不移到成本，張數另算最多 3 張；回測 `scripts/research/trend-zoo2.mjs`，3 組 44 檔 12 格全賺 +0.24R；擠進共用 5 張整體反而變差，所以另外算）；
   2026-10-21 起 Demo 另外試跑「唐奇安通道組合」（`DONCHIAN_*`、`worker/donchian.js`、規則共用 `src/strategies/donchian-ensemble.js`，orderLinkId `dc:`，Executor `POST /dc/adjust`）：20 檔大幣只做多、每天 UTC 00:20 調倉，倉位 × 3（使用者選的），持倉數量記在 KV `dc:state`；回測 `scripts/research/wild-zoo.mjs` 的 A（網路上找的論文策略，1 倍年化 +13%、回撤 -11%）；**2026-10-25 使用者停掉**（三天虧約 12U），`DONCHIAN_ENABLED=false` 時 Worker 會把 KV 還記著的持倉平掉、清掉紀錄；
   2026-10-25 起「BTC 大方向」（`worker/regime.js`、`DIRECTION_FILTER=btc-st4h`、`DIRECTION_FLIP_CLOSE=true`，使用者看完回測仍決定上）：BTC 4h 超級趨勢翻多就只開多單、翻空只開空單，套用 6 個順勢＋RSI 回歸＋HMA 翻轉（唐奇安不套用），跟大方向相反的單直接市價平掉（翻轉平倉沒回測過）；方向記在 KV `regime:btc4h`；
+  2026-10-26 起 Discord **安靜模式**（`DISCORD_MODE=quiet`，`worker/notify.js`，使用者嫌吵）：一般通知全部不推，只推「兩天報告」（只算 Demo，台灣每隔一天早上 9 點，`REPORT_ANCHOR` 2026-10-27 起）和緊急警報（下單失敗、離強平價不到 3%、兩天內權益掉超過 10%）；新加的 Discord 通知要想清楚是不是緊急（`urgent: true`），GitHub 那邊的 signals／weekly-report 用 `DISCORD_QUIET` 一起靜音；
   SMC 不自動下單，只盯市值前 10 大（`SMC_SYMBOLS`）、15m～1d 七個週期、只推播到 Discord，2026-10-13 起只推 15m／30m／1h（`SMC_PUSH_INTERVALS`，2h 以上只當方向）、上面兩層週期結構同向才推、同幣多週期合併成一則（`SMC_MTF_FILTER`）（SMC 條件組合回測 smc-mix、
   多週期版 mtf-smc 都沒有穩定優勢，真錢一晚連虧）。使用者自己也會手動下單，平倉紀錄裡沒有 signal_id 的就是手動單。
 

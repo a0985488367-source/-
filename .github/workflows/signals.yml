@@ -98,6 +98,8 @@ jobs:
         if: ${{ steps.mode.outputs.mode != 'probe' && steps.check.outputs.configured == 'true' }}
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL || secrets.SMC }}
+          # 安靜模式（2026-10-26）：預設不推；要恢復就在 repo variables 設 DISCORD_QUIET=false
+          DISCORD_QUIET: ${{ vars.DISCORD_QUIET || 'true' }}
         run: |
           case "${{ steps.mode.outputs.mode }}" in
             test)    node scripts/discord-notify.mjs --test ;;

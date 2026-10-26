@@ -36,6 +36,7 @@ jobs:
           # workers.dev 網址本來就是公開的；換了子網域可以在 repo Variables 設 WORKER_URL 覆蓋
           WORKER_URL: ${{ vars.WORKER_URL || 'https://smc-signals.crypto-radar-guardian-24x7.workers.dev' }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL || secrets.SMC }}
+          DISCORD_QUIET: ${{ vars.DISCORD_QUIET || 'true' }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           if [ "$DRY_RUN" = "true" ]; then

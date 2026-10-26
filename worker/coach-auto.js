@@ -188,7 +188,7 @@ export async function runCoachAuto(env, { candidates = [], executorCall, postDis
       t.liqFix = (t.liqFix || 0) + 1; dirty = true;
       let r; try { r = await executorCall(env, 'POST', '/coach/leverage', { body: { account: t.account, symbol: t.sym, leverage: lev, addMargin: Math.round(addMargin * 100 + 50) / 100 } }); } catch (e) { r = { ok: false, error: e.message }; }
       if (r.ok && !r.unchanged) { t.lev = r.leverage; t.margin = notional / r.leverage; await say(`🛟 ${tag}：強平價 ${fmtP(op.liqPrice)} 太靠近停損 ${fmtP(t.sl)}，槓桿 ${op.leverage}x → ${r.leverage}x${r.liqPrice ? `，強平價移到 ${fmtP(r.liqPrice)}` : ''}（${r.how === 'add-margin' ? `補了約 ${addMargin.toFixed(1)}U 保證金` : '交易所自動補保證金'}）`); }
-      else if (!r.ok) { out.errors.push(`${t.id} 降槓桿失敗：${r.error}`); if (t.liqFix >= 3) await say(`⚠️ ${tag}：強平價 ${fmtP(op.liqPrice)} 在停損 ${fmtP(t.sl)} 附近，自動降槓桿失敗（${r.error}），請手動補保證金或降槓桿`); }
+      else if (!r.ok) { out.errors.push(`${t.id} 降槓桿失敗：${r.error}`); if (t.liqFix >= 3) await postDiscord(env, { urgent: true, content: `⚠️ ${tag}：強平價 ${fmtP(op.liqPrice)} 在停損 ${fmtP(t.sl)} 附近，自動降槓桿失敗（${r.error}），請手動補保證金或降槓桿` }).catch(() => {}); }
     }
     // open：持倉不見了＝停損或目標打到了（或使用者手動平倉）
     if (!op) {
