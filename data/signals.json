@@ -17941,7 +17941,7 @@
       "r": 0.6806000443139926
     }
   ],
-  "updatedAt": "2026-10-28T08:49:57.212Z",
+  "updatedAt": "2026-10-28T15:42:10.685Z",
   "stats": {
     "count": 251,
     "expired": 49,
@@ -18594,105 +18594,6 @@
   },
   "bests": [
     {
-      "time": 1793110500000,
-      "symbol": "BTCUSDT",
-      "interval": "15m",
-      "score": 60,
-      "grade": "B",
-      "dir": "short",
-      "rr": 3
-    },
-    {
-      "time": 1793106000000,
-      "symbol": "BTCUSDT",
-      "interval": "1h",
-      "score": 54,
-      "grade": "C",
-      "dir": "short",
-      "rr": 3
-    },
-    {
-      "time": 1793106000000,
-      "symbol": "ETHUSDT",
-      "interval": "1h",
-      "score": 59,
-      "grade": "B",
-      "dir": "long",
-      "rr": 3
-    },
-    {
-      "time": 1793110500000,
-      "symbol": "SOLUSDT",
-      "interval": "15m",
-      "score": 49,
-      "grade": "C",
-      "dir": "short",
-      "rr": 3.9225276115392833
-    },
-    {
-      "time": 1793106000000,
-      "symbol": "SOLUSDT",
-      "interval": "1h",
-      "score": 63,
-      "grade": "B",
-      "dir": "long",
-      "rr": 2.3656225540640548
-    },
-    {
-      "time": 1793110500000,
-      "symbol": "BNBUSDT",
-      "interval": "15m",
-      "score": 63,
-      "grade": "B",
-      "dir": "long",
-      "rr": 2.079508705516789
-    },
-    {
-      "time": 1793106000000,
-      "symbol": "BNBUSDT",
-      "interval": "1h",
-      "score": 73,
-      "grade": "A",
-      "dir": "short",
-      "rr": 3
-    },
-    {
-      "time": 1793110500000,
-      "symbol": "XRPUSDT",
-      "interval": "15m",
-      "score": 43,
-      "grade": "C",
-      "dir": "long",
-      "rr": 4.205983311502382
-    },
-    {
-      "time": 1793106000000,
-      "symbol": "XRPUSDT",
-      "interval": "1h",
-      "score": 52,
-      "grade": "C",
-      "dir": "long",
-      "rr": 3
-    },
-    {
-      "time": 1793110500000,
-      "symbol": "DOGEUSDT",
-      "interval": "15m",
-      "score": 52,
-      "grade": "C",
-      "dir": "long",
-      "rr": 3.523112744396293
-    },
-    {
-      "time": 1793106000000,
-      "symbol": "DOGEUSDT",
-      "interval": "1h",
-      "score": 69,
-      "grade": "A",
-      "dir": "short",
-      "rr": 3
-    },
-    {
       "time": 1793124000000,
       "symbol": "BTCUSDT",
       "interval": "1h",
@@ -19177,6 +19078,114 @@
       "grade": "A",
       "dir": "short",
       "rr": 3.635184842367146
+    },
+    {
+      "time": 1793200500000,
+      "symbol": "BTCUSDT",
+      "interval": "15m",
+      "score": 74,
+      "grade": "A",
+      "dir": "short",
+      "rr": 2.5383052129288792
+    },
+    {
+      "time": 1793196000000,
+      "symbol": "BTCUSDT",
+      "interval": "1h",
+      "score": 63,
+      "grade": "B",
+      "dir": "short",
+      "rr": 3.2048632949795794
+    },
+    {
+      "time": 1793200500000,
+      "symbol": "ETHUSDT",
+      "interval": "15m",
+      "score": 74,
+      "grade": "A",
+      "dir": "short",
+      "rr": 2.5828657332665568
+    },
+    {
+      "time": 1793196000000,
+      "symbol": "ETHUSDT",
+      "interval": "1h",
+      "score": 49,
+      "grade": "C",
+      "dir": "long",
+      "rr": 4.317103841789071
+    },
+    {
+      "time": 1793200500000,
+      "symbol": "SOLUSDT",
+      "interval": "15m",
+      "score": 49,
+      "grade": "C",
+      "dir": "short",
+      "rr": 3
+    },
+    {
+      "time": 1793196000000,
+      "symbol": "SOLUSDT",
+      "interval": "1h",
+      "score": 60,
+      "grade": "B",
+      "dir": "long",
+      "rr": 6.498282675818985
+    },
+    {
+      "time": 1793200500000,
+      "symbol": "BNBUSDT",
+      "interval": "15m",
+      "score": 75,
+      "grade": "A",
+      "dir": "long",
+      "rr": 9.890117093709941
+    },
+    {
+      "time": 1793196000000,
+      "symbol": "BNBUSDT",
+      "interval": "1h",
+      "score": 63,
+      "grade": "B",
+      "dir": "long",
+      "rr": 3
+    },
+    {
+      "time": 1793200500000,
+      "symbol": "XRPUSDT",
+      "interval": "15m",
+      "score": 58,
+      "grade": "B",
+      "dir": "short",
+      "rr": 4.070438774085968
+    },
+    {
+      "time": 1793196000000,
+      "symbol": "XRPUSDT",
+      "interval": "1h",
+      "score": 63,
+      "grade": "B",
+      "dir": "short",
+      "rr": 3
+    },
+    {
+      "time": 1793200500000,
+      "symbol": "DOGEUSDT",
+      "interval": "15m",
+      "score": 85,
+      "grade": "A+",
+      "dir": "short",
+      "rr": 2.373834174896484
+    },
+    {
+      "time": 1793196000000,
+      "symbol": "DOGEUSDT",
+      "interval": "1h",
+      "score": 71,
+      "grade": "A",
+      "dir": "short",
+      "rr": 3
     }
   ]
 }
