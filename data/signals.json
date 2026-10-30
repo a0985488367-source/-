@@ -17941,7 +17941,7 @@
       "r": 0.6806000443139926
     }
   ],
-  "updatedAt": "2026-10-30T20:21:38.699Z",
+  "updatedAt": "2026-10-30T23:56:36.297Z",
   "stats": {
     "count": 251,
     "expired": 49,
@@ -18594,114 +18594,6 @@
   },
   "bests": [
     {
-      "time": 1793313900000,
-      "symbol": "BTCUSDT",
-      "interval": "15m",
-      "score": 74,
-      "grade": "A",
-      "dir": "short",
-      "rr": 3
-    },
-    {
-      "time": 1793311200000,
-      "symbol": "BTCUSDT",
-      "interval": "1h",
-      "score": 69,
-      "grade": "A",
-      "dir": "short",
-      "rr": 3
-    },
-    {
-      "time": 1793313900000,
-      "symbol": "ETHUSDT",
-      "interval": "15m",
-      "score": 63,
-      "grade": "B",
-      "dir": "short",
-      "rr": 3
-    },
-    {
-      "time": 1793311200000,
-      "symbol": "ETHUSDT",
-      "interval": "1h",
-      "score": 60,
-      "grade": "B",
-      "dir": "short",
-      "rr": 3
-    },
-    {
-      "time": 1793313900000,
-      "symbol": "SOLUSDT",
-      "interval": "15m",
-      "score": 38,
-      "grade": "D",
-      "dir": "short",
-      "rr": 3
-    },
-    {
-      "time": 1793311200000,
-      "symbol": "SOLUSDT",
-      "interval": "1h",
-      "score": 60,
-      "grade": "B",
-      "dir": "short",
-      "rr": 3
-    },
-    {
-      "time": 1793313900000,
-      "symbol": "BNBUSDT",
-      "interval": "15m",
-      "score": 58,
-      "grade": "B",
-      "dir": "short",
-      "rr": 7.758726589471362
-    },
-    {
-      "time": 1793311200000,
-      "symbol": "BNBUSDT",
-      "interval": "1h",
-      "score": 47,
-      "grade": "C",
-      "dir": "short",
-      "rr": 3
-    },
-    {
-      "time": 1793313900000,
-      "symbol": "XRPUSDT",
-      "interval": "15m",
-      "score": 47,
-      "grade": "C",
-      "dir": "short",
-      "rr": 4.500427018998445
-    },
-    {
-      "time": 1793311200000,
-      "symbol": "XRPUSDT",
-      "interval": "1h",
-      "score": 38,
-      "grade": "D",
-      "dir": "short",
-      "rr": 3
-    },
-    {
-      "time": 1793313900000,
-      "symbol": "DOGEUSDT",
-      "interval": "15m",
-      "score": 63,
-      "grade": "B",
-      "dir": "short",
-      "rr": 3
-    },
-    {
-      "time": 1793311200000,
-      "symbol": "DOGEUSDT",
-      "interval": "1h",
-      "score": 74,
-      "grade": "A",
-      "dir": "short",
-      "rr": 3
-    },
-    {
       "time": 1793326500000,
       "symbol": "BTCUSDT",
       "interval": "15m",
@@ -19240,6 +19132,114 @@
       "grade": "A+",
       "dir": "short",
       "rr": 3.6906185904847386
+    },
+    {
+      "time": 1793403000000,
+      "symbol": "BTCUSDT",
+      "interval": "15m",
+      "score": 55,
+      "grade": "B",
+      "dir": "short",
+      "rr": 3.4804375360494193
+    },
+    {
+      "time": 1793397600000,
+      "symbol": "BTCUSDT",
+      "interval": "1h",
+      "score": 54,
+      "grade": "C",
+      "dir": "short",
+      "rr": 3
+    },
+    {
+      "time": 1793403000000,
+      "symbol": "ETHUSDT",
+      "interval": "15m",
+      "score": 66,
+      "grade": "B",
+      "dir": "short",
+      "rr": 9.951908765783072
+    },
+    {
+      "time": 1793397600000,
+      "symbol": "ETHUSDT",
+      "interval": "1h",
+      "score": 87,
+      "grade": "A+",
+      "dir": "short",
+      "rr": 2.537927505433581
+    },
+    {
+      "time": 1793403000000,
+      "symbol": "SOLUSDT",
+      "interval": "15m",
+      "score": 75,
+      "grade": "A",
+      "dir": "short",
+      "rr": 5.32390108963711
+    },
+    {
+      "time": 1793397600000,
+      "symbol": "SOLUSDT",
+      "interval": "1h",
+      "score": 65,
+      "grade": "B",
+      "dir": "short",
+      "rr": 3
+    },
+    {
+      "time": 1793403000000,
+      "symbol": "BNBUSDT",
+      "interval": "15m",
+      "score": 66,
+      "grade": "B",
+      "dir": "short",
+      "rr": 3.445683425104349
+    },
+    {
+      "time": 1793397600000,
+      "symbol": "BNBUSDT",
+      "interval": "1h",
+      "score": 63,
+      "grade": "B",
+      "dir": "short",
+      "rr": 3
+    },
+    {
+      "time": 1793403000000,
+      "symbol": "XRPUSDT",
+      "interval": "15m",
+      "score": 66,
+      "grade": "B",
+      "dir": "short",
+      "rr": 3.5163292521405443
+    },
+    {
+      "time": 1793397600000,
+      "symbol": "XRPUSDT",
+      "interval": "1h",
+      "score": 65,
+      "grade": "B",
+      "dir": "short",
+      "rr": 3
+    },
+    {
+      "time": 1793403000000,
+      "symbol": "DOGEUSDT",
+      "interval": "15m",
+      "score": 64,
+      "grade": "B",
+      "dir": "short",
+      "rr": 3.7302868562572016
+    },
+    {
+      "time": 1793397600000,
+      "symbol": "DOGEUSDT",
+      "interval": "1h",
+      "score": 74,
+      "grade": "A",
+      "dir": "short",
+      "rr": 3
     }
   ]
 }
