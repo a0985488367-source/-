@@ -1,0 +1,94 @@
+# Demo 帳戶快照：每 6 小時把對帳（各策略損益、持倉、權益）和最近成交寫進 data/demo-report.md，
+# 讓 ChatGPT 之類的工具直接讀公開網址就能拿到最新資料，不用給它任何金鑰：
+# https://raw.githubusercontent.com/a0985488367-source/-/main/data/demo-report.md
+# 注意：repo 是公開的，這個檔案任何人都看得到。
+name: Demo 帳戶快照
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'   # 每 6 小時（UTC 00:17、06:17…＝台灣 08:17、14:17、20:17、02:17）
+  workflow_dispatch:
+    inputs:
+      days:
+        description: '往前查幾天（最多 90）'
+        default: '21'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: demo-snapshot
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 產生快照
+        env:
+          EXECUTOR_URL: ${{ secrets.EXECUTOR_URL }}
+          EXECUTOR_HMAC_SECRET: ${{ secrets.EXECUTOR_HMAC_SECRET }}
+          DAYS: ${{ inputs.days || '21' }}
+          ONLY_STRATEGY: ''
+          WORKER_URL: ${{ vars.WORKER_URL || 'https://smc-signals.crypto-radar-guardian-24x7.workers.dev' }}
+        run: |
+          set -eo pipefail
+          node scripts/demo-ledger.mjs > /tmp/ledger.txt
+          node scripts/demo-report.mjs > /tmp/report.txt
+          NOW=$(TZ=Asia/Taipei date '+%Y-%m-%d %H:%M')
+          {
+            echo "# Demo 帳戶快照"
+            echo
+            echo "更新時間：${NOW}（台灣時間），每 6 小時自動更新。查詢範圍：最近 ${DAYS} 天。"
+            echo
+            echo "說明："
+            echo "- 金額單位 USDT，已平倉損益已扣手續費。"
+            echo "- 「對帳」是每週餘額變化拆成各策略、資金費、對不上的部分，最後是現在的持倉和權益（權益＝錢包＋未實現）。"
+            echo "- 「不明」是查詢範圍開始前就開著的單。"
+            echo "- 策略方向統一跟 BTC 4h 超級趨勢走。"
+            echo
+            echo "## 對帳"
+            echo
+            echo '```'
+            cat /tmp/ledger.txt
+            echo '```'
+            echo
+            echo "## 最近成交"
+            echo
+            echo '```'
+            cat /tmp/report.txt
+            echo '```'
+          } > data/demo-report.md
+          # 保險：檔案會公開，絕不能帶到私密網址或金鑰
+          for s in "$EXECUTOR_URL" "$EXECUTOR_HMAC_SECRET"; do
+            if [ -n "$s" ] && grep -qF "$s" data/demo-report.md; then
+              echo "::error::快照裡出現私密設定，不提交"
+              git checkout -- data/demo-report.md 2>/dev/null || rm -f data/demo-report.md
+              exit 1
+            fi
+          done
+
+      - name: 存回倉庫
+        run: |
+          if [ -z "$(git status --porcelain data/demo-report.md)" ]; then
+            echo "沒有變化"
+            exit 0
+          fi
+          git config user.name "smc-signals[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/demo-report.md
+          git commit -m "chore(data): 更新 Demo 帳戶快照 [skip ci]"
+          BRANCH="${GITHUB_REF_NAME}"
+          for i in 1 2 3; do
+            git push origin "HEAD:$BRANCH" && exit 0
+            # 別的排程可能剛推過；這個檔只有這裡會寫，直接合併不會衝突
+            git pull --no-rebase --no-edit origin "$BRANCH" || true
+            sleep 3
+          done
+          echo "::warning::快照推送失敗，下次執行會再試"
